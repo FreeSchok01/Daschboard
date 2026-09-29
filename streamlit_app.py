@@ -57,7 +57,11 @@ def fmt_ts(ts):
     if not ts:
         return ""
     try:
-        dt = datetime.datetime.fromtimestamp(int(ts) / 1000)
+        # Falls Timestamp in Sekunden statt Millisekunden vorliegt
+        ts_int = int(ts)
+        if ts_int < 10000000000:
+            ts_int *= 1000
+        dt = datetime.datetime.fromtimestamp(ts_int / 1000)
         return dt.strftime("%H:%M:%S")
     except Exception:
         return ""
@@ -78,7 +82,7 @@ def fmt_ago(seconds):
         return "unbekannt"
 
 def load_streamers():
-    """Lädt alle aktiven Streamer aus der Firebase Realtime Database und fängt fehlende Felder ab."""
+    """Lädt alle Streamer flexibel aus der Firebase Realtime Database."""
     ref = db.reference("presence")
     data = ref.get()
     if not data:
@@ -88,20 +92,42 @@ def load_streamers():
     now = time.time()
     for tid, info in data.items():
         if not isinstance(info, dict):
+            # Falls info direkt ein String oder Wert ist
+            streamers.append({
+                "tid": tid,
+                "name": f"Streamer {tid}",
+                "version": "?",
+                "online": True,
+                "age": 0
+            })
             continue
             
-        # Fängt alternative Schreibweisen (Groß-/Kleinschreibung) ab
-        name = info.get("name") or info.get("Name") or f"Streamer {tid}"
-        version = info.get("version") or info.get("Version") or "?"
+        # Sucht nach allen gängigen Schlüssel-Varianten (Groß-/Kleinschreibung)
+        name = (
+            info.get("name") or 
+            info.get("Name") or 
+            info.get("username") or 
+            info.get("Username") or 
+            info.get("streamer") or 
+            f"Streamer {tid}"
+        )
         
-        last_seen = info.get("last_seen") or info.get("LastSeen") or 0
+        version = (
+            info.get("version") or 
+            info.get("Version") or 
+            info.get("ver") or 
+            "?"
+        )
+        
+        last_seen = info.get("last_seen") or info.get("LastSeen") or info.get("ts") or 0
         try:
-            last_seen_sec = int(last_seen) / 1000 if int(last_seen) > 9999999999 else int(last_seen)
+            ls_int = int(last_seen)
+            last_seen_sec = ls_int / 1000 if ls_int > 9999999999 else ls_int
         except Exception:
             last_seen_sec = 0
 
-        age = int(now - last_seen_sec) if last_seen_sec else 9999
-        is_online = age < 120
+        age = int(now - last_seen_sec) if last_seen_sec else 0
+        is_online = age < 300  # Großzügigerer Puffer (5 Minuten)
 
         streamers.append({
             "tid": tid,
@@ -113,7 +139,7 @@ def load_streamers():
     return streamers
 
 def streamer_list(search_query, only_online):
-    """Zeigt die Liste der Streamer in der linken Spalte an."""
+    """Zeigt die Streamer-Liste an."""
     try:
         streamers = load_streamers()
     except Exception as e:
@@ -140,7 +166,7 @@ def streamer_list(search_query, only_online):
             st.rerun()
 
 def chat_messages(tid):
-    """Lädt und zeigt die Chat-Nachrichten für einen ausgewählten Streamer an."""
+    """Lädt und zeigt Chat-Nachrichten flexibel an."""
     chat_ref = db.reference(f"chats/{tid}")
     messages_data = chat_ref.get()
     
@@ -152,23 +178,36 @@ def chat_messages(tid):
     for msg_id, m in messages_data.items():
         if isinstance(m, dict):
             msgs.append(m)
+        elif isinstance(m, list):
+            for item in m:
+                if isinstance(item, dict):
+                    msgs.append(item)
     
-    msgs.sort(key=lambda x: int(x.get("ts", 0)))
+    # Sortieren nach Timestamp (falls vorhanden)
+    try:
+        msgs.sort(key=lambda x: int(x.get("ts") or x.get("Timestamp") or 0))
+    except Exception:
+        pass
 
     for m in msgs:
-        is_admin = m.get("sender") == "admin"
+        sender = str(m.get("sender") or m.get("Sender") or "").lower()
+        is_admin = sender == "admin" or sender == "support"
+        
+        msg_name = m.get("name") or m.get("Name") or ("Support" if is_admin else "Streamer")
+        msg_text = m.get("text") or m.get("Text") or m.get("message") or ""
+        msg_ts = m.get("ts") or m.get("Timestamp") or 0
+
         with st.chat_message("assistant" if is_admin else "user"):
-            st.caption(f"{m.get('name') or ('Support' if is_admin else 'Streamer')} · {fmt_ts(m.get('ts'))}")
-            st.write(m.get("text", ""))
+            st.caption(f"{msg_name} · {fmt_ts(msg_ts)}")
+            st.write(msg_text)
             
     return msgs
 
 def mark_read(tid, max_ts):
-    """Markiert Nachrichten als gelesen."""
     pass
 
 def send_admin_message(tid, text):
-    """Sendet eine Nachricht vom Admin an den Streamer in Firebase."""
+    """Sendet eine Nachricht an den Streamer."""
     chat_ref = db.reference(f"chats/{tid}")
     new_msg_ref = chat_ref.push()
     new_msg_ref.set({
@@ -221,7 +260,6 @@ def chat_panel(rows_by_tid):
         if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{tid}"):
             db.reference(f"presence/{tid}/uid").delete()
             st.success("Zurückgesetzt.")
- 
  
 def main():
     require_login()
