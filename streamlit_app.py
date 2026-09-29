@@ -17,7 +17,6 @@ def init_firebase():
     """Initialisiert Firebase mit den Anmeldedaten aus den Streamlit Secrets."""
     if not firebase_admin._apps:
         try:
-            # Versuche, Firebase über st.secrets zu initialisieren
             firebase_config = {
                 "type": st.secrets["firebase"]["type"],
                 "project_id": st.secrets["firebase"]["project_id"],
@@ -32,7 +31,7 @@ def init_firebase():
             }
             cred = credentials.Certificate(firebase_config)
             firebase_admin.initialize_app(cred, {
-                'databaseURL': st.secrets["firebase"]["database_url"]
+                'databaseURL': st.secrets["firebase_db"]["database_url"]
             })
         except Exception as e:
             st.error(f"Fehler bei der Firebase-Initialisierung: {e}")
@@ -46,8 +45,8 @@ def require_login():
         st.title("🔐 TwitchHub Admin Login")
         password = st.text_input("Admin-Passwort", type="password")
         if st.button("Anmelden"):
-            # Prüft gegen secrets.toml (admin_password)
-            if "admin_password" in st.secrets and password == st.secrets["admin_password"]:
+            # Korrigiert auf deine Struktur: [admin] -> password
+            if "admin" in st.secrets and password == st.secrets["admin"]["password"]:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
@@ -55,29 +54,29 @@ def require_login():
         st.stop()
 
 def fmt_ts(ts):
-  """Formatiert einen Unix-Timestamp in eine lesbare Uhrzeit."""
-  if not ts:
-    return ""
-  try:
-    dt = datetime.datetime.fromtimestamp(int(ts) / 1000)
-    return dt.strftime("%H:%M:%S")
-  except Exception:
-    return ""
+    """Formatiert einen Unix-Timestamp in eine lesbare Uhrzeit."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.datetime.fromtimestamp(int(ts) / 1000)
+        return dt.strftime("%H:%M:%S")
+    except Exception:
+        return ""
 
 def fmt_ago(seconds):
-  """Formatiert Sekunden in eine 'vor X Minuten'-Anzeige."""
-  if seconds is None:
-    return "unbekannt"
-  try:
-    sec = int(seconds)
-    if sec < 60:
-      return f"vor {sec}s"
-    elif sec < 3600:
-      return f"vor {sec // 60}m"
-    else:
-      return f"vor {sec // 3600}h"
-  except Exception:
-    return "unbekannt"
+    """Formatiert Sekunden in eine 'vor X Minuten'-Anzeige."""
+    if seconds is None:
+        return "unbekannt"
+    try:
+        sec = int(seconds)
+        if sec < 60:
+            return f"vor {sec}s"
+        elif sec < 3600:
+            return f"vor {sec // 60}m"
+        else:
+            return f"vor {sec // 3600}h"
+    except Exception:
+        return "unbekannt"
 
 def load_streamers():
     """Lädt alle aktiven Streamer aus der Firebase Realtime Database."""
@@ -90,7 +89,6 @@ def load_streamers():
     now = time.time()
     for tid, info in data.items():
         last_seen = info.get("last_seen", 0)
-        # Beispielhafter Online-Status (wenn innerhalb der letzten 2 Minuten aktiv)
         age = int(now - (last_seen / 1000)) if last_seen else 9999
         is_online = age < 120
 
@@ -111,7 +109,6 @@ def streamer_list(search_query, only_online):
         st.error(f"Fehler beim Laden der Streamer: {e}")
         return
 
-    # Filter anwenden
     filtered = []
     for s in streamers:
         if only_online and not s["online"]:
@@ -145,7 +142,6 @@ def chat_messages(tid):
         if isinstance(m, dict):
             msgs.append(m)
     
-    # Nach Timestamp sortieren
     msgs.sort(key=lambda x: int(x.get("ts", 0)))
 
     for m in msgs:
@@ -157,8 +153,7 @@ def chat_messages(tid):
     return msgs
 
 def mark_read(tid, max_ts):
-    """Markiert Nachrichten als gelesen (optional anpassbar)."""
-    # Hier kann Firebase-Logik zum Aktualisieren des Lesestatus implementiert werden
+    """Markiert Nachrichten als gelesen."""
     pass
 
 def send_admin_message(tid, text):
