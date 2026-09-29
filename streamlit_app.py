@@ -55,7 +55,25 @@ def init_firebase():
     try:
         return firebase_admin.get_app()
     except ValueError:
-        cred = credentials.Certificate(dict(st.secrets["firebase"]))
+        info = dict(st.secrets["firebase"])
+        pk = str(info.get("private_key", "")).strip().strip('"').strip("'")
+        pk = pk.replace("\\n", "\n").replace("\r\n", "\n")   # doppelt escapte \n und Windows-Zeilenenden reparieren
+        info["private_key"] = pk + "\n" if not pk.endswith("\n") else pk
+        if not (pk.startswith("-----BEGIN PRIVATE KEY-----") and "-----END PRIVATE KEY-----" in pk):
+            st.error(
+                "Der `private_key` in den Secrets ist unvollständig oder beschädigt "
+                f"(Länge {len(pk)} Zeichen, sollte ca. 1600-1700 haben). "
+                "Bitte den kompletten Wert aus der JSON-Datei neu kopieren."
+            )
+            st.stop()
+        try:
+            cred = credentials.Certificate(info)
+        except ValueError:
+            st.error(
+                "Der `private_key` konnte nicht gelesen werden. Meist fehlt ein Stück oder es wurde "
+                "ein Zeichen verändert. Neuen Schlüssel in Firebase generieren und komplett neu einfügen."
+            )
+            st.stop()
         return firebase_admin.initialize_app(cred, {"databaseURL": st.secrets["firebase_db"]["database_url"]})
 
 
