@@ -57,7 +57,6 @@ def fmt_ts(ts):
     if not ts:
         return ""
     try:
-        # Falls Timestamp in Sekunden statt Millisekunden vorliegt
         ts_int = int(ts)
         if ts_int < 10000000000:
             ts_int *= 1000
@@ -92,7 +91,6 @@ def load_streamers():
     now = time.time()
     for tid, info in data.items():
         if not isinstance(info, dict):
-            # Falls info direkt ein String oder Wert ist
             streamers.append({
                 "tid": tid,
                 "name": f"Streamer {tid}",
@@ -127,7 +125,7 @@ def load_streamers():
             last_seen_sec = 0
 
         age = int(now - last_seen_sec) if last_seen_sec else 0
-        is_online = age < 300  # Großzügigerer Puffer (5 Minuten)
+        is_online = age < 300  # 5 Minuten Puffer
 
         streamers.append({
             "tid": tid,
@@ -139,7 +137,7 @@ def load_streamers():
     return streamers
 
 def streamer_list(search_query, only_online):
-    """Zeigt die Streamer-Liste an."""
+    """Zeigt die Streamer-Liste in der linken Spalte an."""
     try:
         streamers = load_streamers()
     except Exception as e:
@@ -183,7 +181,6 @@ def chat_messages(tid):
                 if isinstance(item, dict):
                     msgs.append(item)
     
-    # Sortieren nach Timestamp (falls vorhanden)
     try:
         msgs.sort(key=lambda x: int(x.get("ts") or x.get("Timestamp") or 0))
     except Exception:
@@ -207,7 +204,7 @@ def mark_read(tid, max_ts):
     pass
 
 def send_admin_message(tid, text):
-    """Sendet eine Nachricht an den Streamer."""
+    """Sendet eine Nachricht vom Admin an den Streamer."""
     chat_ref = db.reference(f"chats/{tid}")
     new_msg_ref = chat_ref.push()
     new_msg_ref.set({
