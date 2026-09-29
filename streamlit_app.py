@@ -1,220 +1,205 @@
-import datetime
+"""TwitchHub Admin-Dashboard (Streamlit Community Cloud)
+
+Links: alle registrierten Streamer (Online/Offline, Version, letzte Aktivität)
+Rechts: Live-Support-Chat mit dem ausgewählten Streamer
+
+Firebase-Zugriff per Service-Account (nur hier, nie in der EXE) aus st.secrets.
+"""
+import hmac
+import json
 import time
-import streamlit as st
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import firebase_admin
+import streamlit as st
 from firebase_admin import credentials, db
 
-# Seiten-Konfiguration
-st.set_page_config(
-    page_title="TwitchHub Admin Dashboard",
-    page_icon="🛟",
-    layout="wide"
-)
+st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
 
-# --- Hilfsfunktionen & Firebase Initialisierung ---
+TZ = ZoneInfo("Europe/Berlin")
+ONLINE_STALE_SECONDS = 150      # 60-s-Heartbeat: >2,5 Intervalle ohne Ping = gilt als offline (z.B. Absturz)
+LIST_REFRESH_SECONDS = 10
+CHAT_REFRESH_SECONDS = 4
+ADMIN_NAME = "Support"
+SERVER_TS = {".sv": "timestamp"}
 
-def init_firebase():
-    """Initialisiert Firebase mit den Anmeldedaten aus den Streamlit Secrets."""
-    if not firebase_admin._apps:
-        try:
-            firebase_config = {
-                "type": st.secrets["firebase"]["type"],
-                "project_id": st.secrets["firebase"]["project_id"],
-                "private_key_id": st.secrets["firebase"]["private_key_id"],
-                "private_key": st.secrets["firebase"]["private_key"].replace('\\n', '\n'),
-                "client_email": st.secrets["firebase"]["client_email"],
-                "client_id": st.secrets["firebase"]["client_id"],
-                "auth_uri": st.secrets["firebase"]["auth_uri"],
-                "token_uri": st.secrets["firebase"]["token_uri"],
-                "auth_provider_x509_cert_url": st.secrets["firebase"]["auth_provider_x509_cert_url"],
-                "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"],
-            }
-            cred = credentials.Certificate(firebase_config)
-            firebase_admin.initialize_app(cred, {
-                'databaseURL': st.secrets["firebase_db"]["database_url"]
-            })
-        except Exception as e:
-            st.error(f"Fehler bei der Firebase-Initialisierung: {e}")
 
+# ----------------------------------------------------------------------------
+# Zugang: Passwort-Schutz (Streamlit-Community-Cloud-Apps sind sonst per URL erreichbar)
+# ----------------------------------------------------------------------------
 def require_login():
-    """Einfache passwortbasierte Authentifizierung über Streamlit Secrets."""
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if not st.session_state.authenticated:
-        st.title("🔐 TwitchHub Admin Login")
-        password = st.text_input("Admin-Passwort", type="password")
-        if st.button("Anmelden"):
-            if "admin" in st.secrets and password == st.secrets["admin"]["password"]:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Falsches Passwort.")
-        st.stop()
-
-def fmt_ts(ts):
-    """Formatiert einen Unix-Timestamp in eine lesbare Uhrzeit."""
-    if not ts:
-        return ""
+    if st.session_state.get("auth_ok"):
+        return
     try:
-        ts_int = int(ts)
-        if ts_int < 10000000000:
-            ts_int *= 1000
-        dt = datetime.datetime.fromtimestamp(ts_int / 1000)
-        return dt.strftime("%H:%M:%S")
+        expected = st.secrets["admin"]["password"]
     except Exception:
-        return ""
+        st.error("`[admin] password` fehlt in den Secrets.")
+        st.stop()
+    st.title("🛟 TwitchHub Admin")
+    with st.form("login"):
+        pw = st.text_input("Passwort", type="password")
+        if st.form_submit_button("Anmelden"):
+            if hmac.compare_digest(pw.encode(), str(expected).encode()):
+                st.session_state["auth_ok"] = True
+                st.rerun()
+            time.sleep(1.0)
+            st.error("Falsches Passwort.")
+    st.stop()
+
+
+# ----------------------------------------------------------------------------
+# Firebase
+# ----------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def init_firebase():
+    try:
+        return firebase_admin.get_app()
+    except ValueError:
+        if "firebase_json" in st.secrets:
+            # Empfohlen: komplette JSON-Datei unverändert als ein Text-Block in den Secrets
+            try:
+                info = json.loads(st.secrets["firebase_json"])
+            except Exception:
+                st.error("`firebase_json` in den Secrets ist kein gültiges JSON. Den Dateiinhalt komplett und unverändert einfügen.")
+                st.stop()
+        else:
+            info = dict(st.secrets["firebase"])
+        pk = str(info.get("private_key", "")).strip().strip('"').strip("'")
+        pk = pk.replace("\\n", "\n").replace("\r\n", "\n")   # doppelt escapte \n und Windows-Zeilenenden reparieren
+        info["private_key"] = pk + "\n" if not pk.endswith("\n") else pk
+        if not (pk.startswith("-----BEGIN PRIVATE KEY-----") and "-----END PRIVATE KEY-----" in pk):
+            st.error(
+                "Der `private_key` in den Secrets ist unvollständig oder beschädigt "
+                f"(Länge {len(pk)} Zeichen, sollte ca. 1600-1700 haben). "
+                "Bitte den kompletten Wert aus der JSON-Datei neu kopieren."
+            )
+            st.stop()
+        try:
+            cred = credentials.Certificate(info)
+        except ValueError:
+            st.error(
+                "Der `private_key` konnte nicht gelesen werden. Meist fehlt ein Stück oder es wurde "
+                "ein Zeichen verändert. Neuen Schlüssel in Firebase generieren und komplett neu einfügen."
+            )
+            st.stop()
+        return firebase_admin.initialize_app(cred, {"databaseURL": st.secrets["firebase_db"]["database_url"]})
+
 
 def fmt_ago(seconds):
-    """Formatiert Sekunden in eine 'vor X Minuten'-Anzeige."""
     if seconds is None:
-        return "unbekannt"
+        return "nie"
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"vor {seconds} s"
+    if seconds < 3600:
+        return f"vor {seconds // 60} min"
+    if seconds < 86400:
+        return f"vor {seconds // 3600} h"
+    return f"vor {seconds // 86400} d"
+
+
+def fmt_ts(ms):
     try:
-        sec = int(seconds)
-        if sec < 60:
-            return f"vor {sec}s"
-        elif sec < 3600:
-            return f"vor {sec // 60}m"
-        else:
-            return f"vor {sec // 3600}h"
+        return datetime.fromtimestamp(int(ms) / 1000, TZ).strftime("%d.%m.%Y %H:%M")
     except Exception:
-        return "unbekannt"
+        return ""
+
 
 def load_streamers():
-    """Lädt alle Streamer flexibel aus der Firebase Realtime Database."""
-    ref = db.reference("presence")
-    data = ref.get()
-    if not data:
-        return []
-    
-    streamers = []
-    now = time.time()
-    for tid, info in data.items():
-        if not isinstance(info, dict):
-            streamers.append({
-                "tid": tid,
-                "name": f"Streamer {tid}",
-                "version": "?",
-                "online": True,
-                "age": 0
-            })
+    presence = db.reference("presence").get() or {}
+    meta = db.reference("chat_meta").get() or {}
+    read = db.reference("admin_state/read").get() or {}
+    now_ms = int(time.time() * 1000)
+    rows = []
+    for tid, p in presence.items():
+        if not isinstance(p, dict):
             continue
-            
-        # Sucht nach allen gängigen Schlüssel-Varianten (Groß-/Kleinschreibung)
-        name = (
-            info.get("name") or 
-            info.get("Name") or 
-            info.get("username") or 
-            info.get("Username") or 
-            info.get("streamer") or 
-            f"Streamer {tid}"
-        )
-        
-        version = (
-            info.get("version") or 
-            info.get("Version") or 
-            info.get("ver") or 
-            "?"
-        )
-        
-        last_seen = info.get("last_seen") or info.get("LastSeen") or info.get("ts") or 0
-        try:
-            ls_int = int(last_seen)
-            last_seen_sec = ls_int / 1000 if ls_int > 9999999999 else ls_int
-        except Exception:
-            last_seen_sec = 0
-
-        age = int(now - last_seen_sec) if last_seen_sec else 0
-        is_online = age < 300  # 5 Minuten Puffer
-
-        streamers.append({
+        last_seen = int(p.get("last_seen") or 0)
+        age = (now_ms - last_seen) / 1000 if last_seen else None
+        online = p.get("status") == "online" and age is not None and age <= ONLINE_STALE_SECONDS
+        m = meta.get(tid) if isinstance(meta.get(tid), dict) else {}
+        last_msg_ts = int(m.get("last_ts") or 0)
+        unread = m.get("last_sender") == "streamer" and last_msg_ts > int(read.get(tid) or 0)
+        rows.append({
             "tid": tid,
-            "name": name,
-            "version": version,
-            "online": is_online,
-            "age": age
+            "name": p.get("twitch_username") or tid,
+            "version": p.get("app_version") or "?",
+            "online": online,
+            "age": age,
+            "last_seen": last_seen,
+            "unread": unread,
+            "preview": m.get("last_text", ""),
         })
-    return streamers
+    rows.sort(key=lambda r: (not r["unread"], not r["online"], -r["last_seen"]))
+    return rows
 
-def streamer_list(search_query, only_online):
-    """Zeigt die Streamer-Liste in der linken Spalte an."""
-    try:
-        streamers = load_streamers()
-    except Exception as e:
-        st.error(f"Fehler beim Laden der Streamer: {e}")
-        return
 
-    filtered = []
-    for s in streamers:
-        if only_online and not s["online"]:
-            continue
-        if search_query and search_query.lower() not in s["name"].lower() and search_query.lower() not in s["tid"].lower():
-            continue
-        filtered.append(s)
-
-    if not filtered:
-        st.info("Keine Streamer gefunden.")
-        return
-
-    for s in filtered:
-        status_icon = "🟢" if s["online"] else "⚪"
-        label = f"{status_icon} {s['name']} (`{s['tid']}`)"
-        if st.button(label, key=f"btn_{s['tid']}", use_container_width=True):
-            st.session_state["selected_tid"] = s["tid"]
-            st.rerun()
-
-def chat_messages(tid):
-    """Lädt und zeigt Chat-Nachrichten flexibel an."""
-    chat_ref = db.reference(f"chats/{tid}")
-    messages_data = chat_ref.get()
-    
-    if not messages_data:
-        st.info("Noch keine Nachrichten in diesem Chat.")
-        return []
-
-    msgs = []
-    for msg_id, m in messages_data.items():
-        if isinstance(m, dict):
-            msgs.append(m)
-        elif isinstance(m, list):
-            for item in m:
-                if isinstance(item, dict):
-                    msgs.append(item)
-    
-    try:
-        msgs.sort(key=lambda x: int(x.get("ts") or x.get("Timestamp") or 0))
-    except Exception:
-        pass
-
-    for m in msgs:
-        sender = str(m.get("sender") or m.get("Sender") or "").lower()
-        is_admin = sender == "admin" or sender == "support"
-        
-        msg_name = m.get("name") or m.get("Name") or ("Support" if is_admin else "Streamer")
-        msg_text = m.get("text") or m.get("Text") or m.get("message") or ""
-        msg_ts = m.get("ts") or m.get("Timestamp") or 0
-
-        with st.chat_message("assistant" if is_admin else "user"):
-            st.caption(f"{msg_name} · {fmt_ts(msg_ts)}")
-            st.write(msg_text)
-            
+def load_messages(tid):
+    data = db.reference(f"chats/{tid}/messages").order_by_child("ts").limit_to_last(300).get() or {}
+    msgs = [dict(v, id=k) for k, v in data.items() if isinstance(v, dict)]
+    msgs.sort(key=lambda m: (int(m.get("ts") or 0), m["id"]))
     return msgs
 
-def mark_read(tid, max_ts):
-    pass
 
 def send_admin_message(tid, text):
-    """Sendet eine Nachricht vom Admin an den Streamer."""
-    chat_ref = db.reference(f"chats/{tid}")
-    new_msg_ref = chat_ref.push()
-    new_msg_ref.set({
-        "sender": "admin",
-        "name": "Support",
-        "text": text,
-        "ts": int(time.time() * 1000)
-    })
+    text = text.strip()[:2000]
+    if not text:
+        return
+    db.reference(f"chats/{tid}/messages").push({"sender": "admin", "name": ADMIN_NAME, "text": text, "ts": SERVER_TS})
+    db.reference(f"chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "admin", "last_text": text[:100]})
 
-# --- Haupt-UI ---
+
+def mark_read(tid, up_to_ts):
+    if up_to_ts:
+        db.reference(f"admin_state/read/{tid}").set(int(up_to_ts))
+
+
+# ----------------------------------------------------------------------------
+# UI
+# ----------------------------------------------------------------------------
+@st.fragment(run_every=LIST_REFRESH_SECONDS)
+def streamer_list(search, only_online):
+    try:
+        rows = load_streamers()
+    except Exception as e:
+        st.error(f"Firebase-Fehler: {e}")
+        return
+    online_count = sum(1 for r in rows if r["online"])
+    st.caption(f"🟢 {online_count} online · {len(rows)} registriert")
+    q = (search or "").strip().lower()
+    shown = [r for r in rows if (not q or q in r["name"].lower()) and (r["online"] or not only_online)]
+    if not shown:
+        st.info("Keine Streamer gefunden.")
+    for r in shown:
+        icon = "🟢" if r["online"] else "⚪"
+        badge = " 🔴" if r["unread"] else ""
+        label = f"{icon} {r['name']}{badge} · {r['version']} · {fmt_ago(r['age'])}"
+        selected = st.session_state.get("selected_tid") == r["tid"]
+        if st.button(label, key=f"sel_{r['tid']}", use_container_width=True, type="primary" if selected else "secondary"):
+            st.session_state["selected_tid"] = r["tid"]
+            st.rerun(scope="app")
+
+
+@st.fragment(run_every=CHAT_REFRESH_SECONDS)
+def chat_messages(tid):
+    try:
+        msgs = load_messages(tid)
+    except Exception as e:
+        st.error(f"Chat konnte nicht geladen werden: {e}")
+        return
+    box = st.container(height=520, border=True)
+    with box:
+        if not msgs:
+            st.caption("Noch keine Nachrichten.")
+        for m in msgs:
+            is_admin = m.get("sender") == "admin"
+            with st.chat_message("assistant" if is_admin else "user"):
+                st.caption(f"{m.get('name') or ('Support' if is_admin else 'Streamer')} · {fmt_ts(m.get('ts'))}")
+                st.write(m.get("text", ""))
+    if msgs:
+        mark_read(tid, max(int(m.get("ts") or 0) for m in msgs))
+
 
 def chat_panel(rows_by_tid):
     tid = st.session_state.get("selected_tid")
@@ -228,26 +213,17 @@ def chat_panel(rows_by_tid):
         f"Twitch-ID `{tid}` · Version {info.get('version', '?')} · "
         f"{'🟢 online' if info.get('online') else '⚪ offline'} · zuletzt aktiv {fmt_ago(info.get('age'))}"
     )
- 
-    messages_area = st.container()
-    
-    with messages_area:
-        msgs = chat_messages(tid)
 
+    messages_area = st.container()
     prompt = st.chat_input(f"Antwort an {name} ...")
     if prompt:
         try:
             send_admin_message(tid, prompt)
-            st.rerun()
         except Exception as e:
             st.error(f"Senden fehlgeschlagen: {e}")
+    with messages_area:
+        chat_messages(tid)
 
-    if msgs:
-        try:
-            mark_read(tid, max(int(m.get("ts") or 0) for m in msgs))
-        except Exception:
-            pass
- 
     with st.expander("⚙️ Aktionen"):
         st.caption(
             "Setzt die Geräte-Bindung des Streamers zurück (z.B. nach Neuinstallation oder PC-Wechsel), "
@@ -257,30 +233,30 @@ def chat_panel(rows_by_tid):
         if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{tid}"):
             db.reference(f"presence/{tid}/uid").delete()
             st.success("Zurückgesetzt.")
- 
+
+
 def main():
     require_login()
     init_firebase()
- 
+
     top_l, top_r = st.columns([6, 1])
     top_l.title("🛟 TwitchHub Admin")
     if top_r.button("Abmelden"):
         st.session_state.clear()
         st.rerun()
- 
+
     left, right = st.columns([1, 2], gap="large")
     with left:
         st.subheader("Streamer")
         search = st.text_input("Suche", placeholder="Twitch-Name ...", label_visibility="collapsed")
         only_online = st.toggle("Nur online", value=False)
         streamer_list(search, only_online)
-        
     with right:
         try:
             rows_by_tid = {r["tid"]: r for r in load_streamers()}
         except Exception:
             rows_by_tid = {}
         chat_panel(rows_by_tid)
- 
-if __name__ == "__main__":
-    main()
+
+
+main()
