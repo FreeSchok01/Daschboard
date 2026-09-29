@@ -12,6 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import firebase_admin
+import pandas as st_pd
 import streamlit as st
 from firebase_admin import credentials, db
 
@@ -23,6 +24,16 @@ LIST_REFRESH_SECONDS = 10
 CHAT_REFRESH_SECONDS = 4
 ADMIN_NAME = "Support"
 SERVER_TS = {".sv": "timestamp"}
+
+# Game-Freigaben: Schlüssel müssen exakt den IDs in der EXE entsprechen. Standard: alle gesperrt.
+GAMES = {
+    "slotmachine": "🎰 Slot Machine",
+    "megaslot": "🎡 Mega Slot",
+    "angel": "🎣 Angeln",
+    "farm": "🌱 Farm",
+    "race": "🏎️ Rennen",
+    "arena": "⚔️ Arena",
+}
 
 
 # ----------------------------------------------------------------------------
@@ -155,6 +166,29 @@ def mark_read(tid, up_to_ts):
         db.reference(f"admin_state/read/{tid}").set(int(up_to_ts))
 
 
+def load_game_flags():
+    root = db.reference("game_flags").get() or {}
+    glob = root.get("global") if isinstance(root.get("global"), dict) else {}
+    per = root.get("streamers") if isinstance(root.get("streamers"), dict) else {}
+    return glob, per
+
+
+def save_global_flags(edited):
+    """edited: {game: (enabled, killswitch)}"""
+    upd = {}
+    for g, (enabled, kill) in edited.items():
+        upd[f"{g}/enabled"] = bool(enabled)
+        upd[f"{g}/killswitch"] = bool(kill)
+    db.reference("game_flags/global").update(upd)
+
+
+def save_streamer_flags(changes):
+    """changes: {(tid, game): bool}; False löscht den Eintrag (= Standard: gesperrt)."""
+    upd = {f"{tid}/{g}": (True if val else None) for (tid, g), val in changes.items()}
+    if upd:
+        db.reference("game_flags/streamers").update(upd)
+
+
 # ----------------------------------------------------------------------------
 # UI
 # ----------------------------------------------------------------------------
@@ -235,6 +269,82 @@ def chat_panel(rows_by_tid):
             st.success("Zurückgesetzt.")
 
 
+def game_flags_panel():
+    st.subheader("🎮 Game-Freigaben")
+    st.caption(
+        "Standard: alle Games gesperrt. Ein Game läuft bei einem Streamer, wenn der **Notaus aus** ist "
+        "und entweder **für alle freigegeben** oder für diesen Streamer freigegeben ist. "
+        "Die Apps übernehmen Änderungen beim nächsten Heartbeat (max. ca. 60 s)."
+    )
+    try:
+        glob, per = load_game_flags()
+        rows = load_streamers()
+    except Exception as e:
+        st.error(f"Firebase-Fehler: {e}")
+        return
+
+    # --- Global: pro Game "für alle" + Notaus ---
+    st.markdown("**Global pro Game**")
+    g_df = st_pd.DataFrame([
+        {
+            "Game": label,
+            "Für alle freigeben": bool((glob.get(g) or {}).get("enabled", False)),
+            "🛑 Notaus": bool((glob.get(g) or {}).get("killswitch", False)),
+        }
+        for g, label in GAMES.items()
+    ])
+    g_edit = st.data_editor(
+        g_df, hide_index=True, use_container_width=True, key="gf_global",
+        disabled=["Game"],
+    )
+    if st.button("💾 Globale Freigaben speichern", key="gf_save_global"):
+        try:
+            save_global_flags({
+                g: (bool(g_edit.iloc[i]["Für alle freigeben"]), bool(g_edit.iloc[i]["🛑 Notaus"]))
+                for i, g in enumerate(GAMES)
+            })
+            st.success("Gespeichert.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Speichern fehlgeschlagen: {e}")
+
+    st.divider()
+
+    # --- Pro Streamer ---
+    st.markdown("**Pro Streamer**")
+    q = st.text_input("Streamer suchen", placeholder="Twitch-Name ...", key="gf_search", label_visibility="collapsed")
+    ql = (q or "").strip().lower()
+    shown = [r for r in rows if not ql or ql in r["name"].lower()]
+    if not shown:
+        st.info("Keine Streamer gefunden.")
+        return
+    s_df = st_pd.DataFrame([
+        {"Streamer": r["name"], "ID": r["tid"], **{
+            label: bool((per.get(r["tid"]) or {}).get(g, False)) for g, label in GAMES.items()
+        }}
+        for r in shown
+    ])
+    s_edit = st.data_editor(
+        s_df, hide_index=True, use_container_width=True, key=f"gf_streamers_{ql}",
+        disabled=["Streamer", "ID"],
+    )
+    if st.button("💾 Streamer-Freigaben speichern", key="gf_save_streamers"):
+        changes = {}
+        for i, r in enumerate(shown):
+            for g, label in GAMES.items():
+                new = bool(s_edit.iloc[i][label])
+                old = bool(s_df.iloc[i][label])
+                if new != old:
+                    changes[(r["tid"], g)] = new
+        try:
+            save_streamer_flags(changes)
+            st.success(f"{len(changes)} Änderung(en) gespeichert." if changes else "Keine Änderungen.")
+            if changes:
+                st.rerun()
+        except Exception as e:
+            st.error(f"Speichern fehlgeschlagen: {e}")
+
+
 def main():
     require_login()
     init_firebase()
@@ -245,18 +355,22 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    left, right = st.columns([1, 2], gap="large")
-    with left:
-        st.subheader("Streamer")
-        search = st.text_input("Suche", placeholder="Twitch-Name ...", label_visibility="collapsed")
-        only_online = st.toggle("Nur online", value=False)
-        streamer_list(search, only_online)
-    with right:
-        try:
-            rows_by_tid = {r["tid"]: r for r in load_streamers()}
-        except Exception:
-            rows_by_tid = {}
-        chat_panel(rows_by_tid)
+    tab_support, tab_games = st.tabs(["💬 Support", "🎮 Game-Freigaben"])
+    with tab_support:
+        left, right = st.columns([1, 2], gap="large")
+        with left:
+            st.subheader("Streamer")
+            search = st.text_input("Suche", placeholder="Twitch-Name ...", label_visibility="collapsed")
+            only_online = st.toggle("Nur online", value=False)
+            streamer_list(search, only_online)
+        with right:
+            try:
+                rows_by_tid = {r["tid"]: r for r in load_streamers()}
+            except Exception:
+                rows_by_tid = {}
+            chat_panel(rows_by_tid)
 
+    with tab_games:
+        game_flags_panel()
 
 main()
