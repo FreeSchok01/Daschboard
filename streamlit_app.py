@@ -6,6 +6,7 @@ Rechts: Live-Support-Chat mit dem ausgewählten Streamer
 Firebase-Zugriff per Service-Account (nur hier, nie in der EXE) aus st.secrets.
 """
 import hmac
+import json
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -55,7 +56,15 @@ def init_firebase():
     try:
         return firebase_admin.get_app()
     except ValueError:
-        info = dict(st.secrets["firebase"])
+        if "firebase_json" in st.secrets:
+            # Empfohlen: komplette JSON-Datei unverändert als ein Text-Block in den Secrets
+            try:
+                info = json.loads(st.secrets["firebase_json"])
+            except Exception:
+                st.error("`firebase_json` in den Secrets ist kein gültiges JSON. Den Dateiinhalt komplett und unverändert einfügen.")
+                st.stop()
+        else:
+            info = dict(st.secrets["firebase"])
         pk = str(info.get("private_key", "")).strip().strip('"').strip("'")
         pk = pk.replace("\\n", "\n").replace("\r\n", "\n")   # doppelt escapte \n und Windows-Zeilenenden reparieren
         info["private_key"] = pk + "\n" if not pk.endswith("\n") else pk
