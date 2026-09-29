@@ -1,0 +1,8 @@
+# === CLIENT (app.py / PyInstaller-EXE) ===
+# Die neuen Firebase-Funktionen brauchen KEIN zusätzliches Paket (nur Standardbibliothek).
+customtkinter
+Pillow
+pygame
+websocket-client
+websockets
+pyinstaller
