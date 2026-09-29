@@ -45,7 +45,6 @@ def require_login():
         st.title("🔐 TwitchHub Admin Login")
         password = st.text_input("Admin-Passwort", type="password")
         if st.button("Anmelden"):
-            # Korrigiert auf deine Struktur: [admin] -> password
             if "admin" in st.secrets and password == st.secrets["admin"]["password"]:
                 st.session_state.authenticated = True
                 st.rerun()
@@ -79,7 +78,7 @@ def fmt_ago(seconds):
         return "unbekannt"
 
 def load_streamers():
-    """Lädt alle aktiven Streamer aus der Firebase Realtime Database."""
+    """Lädt alle aktiven Streamer aus der Firebase Realtime Database und fängt fehlende Felder ab."""
     ref = db.reference("presence")
     data = ref.get()
     if not data:
@@ -88,14 +87,26 @@ def load_streamers():
     streamers = []
     now = time.time()
     for tid, info in data.items():
-        last_seen = info.get("last_seen", 0)
-        age = int(now - (last_seen / 1000)) if last_seen else 9999
+        if not isinstance(info, dict):
+            continue
+            
+        # Fängt alternative Schreibweisen (Groß-/Kleinschreibung) ab
+        name = info.get("name") or info.get("Name") or f"Streamer {tid}"
+        version = info.get("version") or info.get("Version") or "?"
+        
+        last_seen = info.get("last_seen") or info.get("LastSeen") or 0
+        try:
+            last_seen_sec = int(last_seen) / 1000 if int(last_seen) > 9999999999 else int(last_seen)
+        except Exception:
+            last_seen_sec = 0
+
+        age = int(now - last_seen_sec) if last_seen_sec else 9999
         is_online = age < 120
 
         streamers.append({
             "tid": tid,
-            "name": info.get("name", tid),
-            "version": info.get("version", "?"),
+            "name": name,
+            "version": version,
             "online": is_online,
             "age": age
         })
