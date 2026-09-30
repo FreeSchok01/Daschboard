@@ -2,6 +2,7 @@
 Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nach ~60 s). Preise/Einstellungen: Admin-Tab 🛒 Shop."""
 import html
 import secrets
+from datetime import date
 from decimal import Decimal
 
 import pandas as pd
@@ -91,14 +92,37 @@ def cart_view(cart, items, have):
     return kept, total, max(Decimal(0), worth - total), covered
 
 
-def create_cart_order(tid, name, ids, items):
+def validate_coupon(code):
+    code = (code or "").strip().upper()
+    c = db.reference(f"shop/coupons/{code}").get() if code and code.replace("-", "").replace("_", "").isalnum() else None
+    if not isinstance(c, dict) or not c.get("active", True):
+        return False, None, "Code ungültig."
+    if c.get("expires") and str(c["expires"]) < date.today().isoformat():
+        return False, None, "Dieser Code ist abgelaufen."
+    if int(c.get("max_uses") or 0) and int(c.get("uses") or 0) >= int(c["max_uses"]):
+        return False, None, "Dieser Code wurde schon zu oft benutzt."
+    return True, dict(c, code=code), ""
+
+
+def apply_coupon(total, c):
+    if not c:
+        return total, Decimal(0)
+    final = max(Decimal("0.50"), (total * (Decimal(100) - Decimal(str(c["percent"]))) / 100).quantize(Decimal("0.01")))
+    return final, max(Decimal(0), total - final)
+
+
+def create_cart_order(tid, name, ids, items, coupon=""):
     code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
     games = sorted({g for i in ids for g in items[i].get("games", [])})
     total = sum(Decimal(_price(items[i]["price"])) for i in ids)
-    db.reference(f"shop/orders/{code}").set({
-        "tid": tid, "name": name, "item": "cart", "item_name": " + ".join(items[i]["name"] for i in ids)[:200],
-        "items": ids, "games": games, "price": _price(total), "status": "pending", "ts": {".sv": "timestamp"}})
-    return code, _price(total)
+    ok, c, _ = validate_coupon(coupon) if coupon else (False, None, "")   # serverseitig neu geprüft
+    final, disc = apply_coupon(total, c if ok else None)
+    order = {"tid": tid, "name": name, "item": "cart", "item_name": " + ".join(items[i]["name"] for i in ids)[:200],
+             "items": ids, "games": games, "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
+    if ok:
+        order.update(coupon=c["code"], partner=c.get("partner", ""), discount=_price(disc))
+    db.reference(f"shop/orders/{code}").set(order)
+    return code, _price(final)
 
 
 def _find_tip(code, price):
@@ -154,6 +178,12 @@ def fulfill(code, manual=False):
         return False, "Die Bestellung wird gerade verarbeitet oder ist schon verbucht."
     for g in order.get("games", []):
         db.reference(f"game_flags/streamers/{order['tid']}/{g}").set(True)
+    if order.get("coupon"):
+        try:
+            db.reference(f"shop/coupons/{order['coupon']}").transaction(
+                lambda c: dict(c, uses=int(c.get("uses") or 0) + 1, revenue=round(float(c.get("revenue") or 0) + float(order["price"]), 2)) if c else c)
+        except Exception:
+            pass
     return True, f"✅ Zahlung erhalten! **{order['item_name']}** ist für **{order['name']}** freigeschaltet (in der App nach ca. 1 Minute aktiv)."
 
 
@@ -237,10 +267,30 @@ def _cart_box(tid, name, items, have):
             a.markdown(f"{html.escape(items[i]['name'])}  \n**{_price(items[i]['price'])} €**")
             b.button("✕", key=f"x_{i}", on_click=_rm, args=(i,))
         st.divider()
-        st.markdown(f'<div class="price">Gesamt: {total} €</div>' + (f'<span class="badge save">Du sparst {save} €</span>' if save > 0 else ""), unsafe_allow_html=True)
+        cc = st.session_state.get("coupon")
+        ok, cp, _m = validate_coupon(cc) if cc else (False, None, "")
+        if cc and not ok:
+            st.session_state.pop("coupon", None)
+        if ok:
+            x, y = st.columns([4, 1])
+            x.markdown(f'🎟️ **{cp["code"]}** (−{cp["percent"]} %)')
+            y.button("✕", key="x_coupon", on_click=lambda: st.session_state.pop("coupon", None))
+        else:
+            x, y = st.columns([3, 2])
+            code_in = x.text_input("Code", key="coupon_in", label_visibility="collapsed", placeholder="Gutschein / Partner-Code")
+            if y.button("Einlösen", use_container_width=True):
+                good, _c, msg = validate_coupon(code_in)
+                if good:
+                    st.session_state["coupon"] = code_in.strip().upper()
+                    st.rerun()
+                else:
+                    st.error(msg)
+        final, disc = apply_coupon(total, cp if ok else None)
+        old = f'<span class="old">{total} €</span>' if disc > 0 else ""
+        st.markdown(f'<div class="price">Gesamt: {final} €{old}</div>' + (f'<span class="badge save">Du sparst {save + disc} €</span>' if save + disc > 0 else ""), unsafe_allow_html=True)
         agree = st.checkbox("Ich stimme zu, dass die Freischaltung sofort erfolgt und mein Widerrufsrecht damit erlischt.")
         if st.button("Bestellung anlegen", type="primary", disabled=not agree, use_container_width=True):
-            st.session_state["order"] = create_cart_order(tid, name, ids, items)
+            st.session_state["order"] = create_cart_order(tid, name, ids, items, cc if ok else "")
             st.session_state["cart"] = []
             st.rerun()
 
@@ -370,3 +420,120 @@ def admin_shop_panel(games):
     c1.metric("Umsatz (brutto, vor Gebühren)", f"{paid['price'].sum():.2f} €")
     c2.metric("Bezahlte Bestellungen", len(paid))
     st.dataframe(df[["ts", "name", "item_name", "price", "status", "order_id"]].sort_values("ts", ascending=False), hide_index=True, use_container_width=True)
+    with st.expander("🗑️ Bestellungen löschen"):
+        lab = {r.order_id: f"{r.order_id} · {r.name} · {str(r.item_name)[:40]} · {r.price:.2f} € · {r.status}" for r in df.itertuples()}
+        sel = st.multiselect("Bestellungen", list(lab), format_func=lab.get)
+        rv = st.checkbox("Bei bezahlten Bestellungen auch die Freischaltung entziehen (z. B. Rückerstattung)")
+        sure = st.checkbox("Ja, endgültig löschen")
+        if st.button("🗑️ Löschen", disabled=not (sel and sure)):
+            for code in sel:
+                o = orders.get(code) or {}
+                if rv and o.get("status") == "paid":
+                    for g in set(o.get("games", [])) - protected_games(o["tid"], exclude=set(sel)):
+                        db.reference(f"game_flags/streamers/{o['tid']}/{g}").delete()
+                db.reference(f"shop/orders/{code}").delete()
+            st.rerun()
+
+
+def protected_games(tid, exclude=()):
+    """Games, die ein Streamer durch andere bezahlte Bestellungen oder Beta-Status behalten muss."""
+    keep = set()
+    for k, o in (db.reference("shop/orders").get() or {}).items():
+        if isinstance(o, dict) and o.get("tid") == tid and o.get("status") == "paid" and k not in exclude:
+            keep |= set(o.get("games", []))
+    b = db.reference(f"shop/beta/{tid}").get()
+    return keep | set(b.get("games", [])) if isinstance(b, dict) else keep
+
+
+def set_beta(tid, name, games, scope, note):
+    old = db.reference(f"shop/beta/{tid}/games").get() or []
+    for g in games:
+        db.reference(f"game_flags/streamers/{tid}/{g}").set(True)
+    db.reference(f"shop/beta/{tid}").set({"name": name, "games": games, "scope": scope, "note": note, "ts": {".sv": "timestamp"}})
+    for g in set(old) - set(games) - protected_games(tid):
+        db.reference(f"game_flags/streamers/{tid}/{g}").delete()
+
+
+def remove_beta(tid):
+    old = db.reference(f"shop/beta/{tid}/games").get() or []
+    db.reference(f"shop/beta/{tid}").delete()
+    for g in set(old) - protected_games(tid):
+        db.reference(f"game_flags/streamers/{tid}/{g}").delete()
+
+
+def admin_beta_panel(games, rows):
+    st.subheader("🧪 Beta-Tester")
+    st.caption("Beta-Tester bekommen Games ohne Kauf freigeschaltet. Beim Entfernen verschwinden nur die Beta-Freigaben, Gekauftes bleibt. "
+               "„Alles“ gilt für die aktuell vorhandenen Games. Bei neuen Games den Status erneut setzen.")
+    names = {r["tid"]: r["name"] for r in rows}
+    with st.form("beta"):
+        sel = st.multiselect("Streamer (mehrere möglich)", list(names), format_func=names.get)
+        scope = st.radio("Umfang", ["Alles (alle Games)", "Nur ausgewählte Games"], horizontal=True)
+        gm = st.multiselect("Games (bei „Nur ausgewählte“)", list(games), format_func=lambda k: games[k])
+        note = st.text_input("Notiz (z. B. testet die neue Arena)")
+        if st.form_submit_button("🧪 Beta-Status setzen"):
+            allg = scope.startswith("Alles")
+            g = list(games) if allg else gm
+            if not sel or not g:
+                st.error("Bitte Streamer und (bei „Nur ausgewählte“) mindestens ein Game wählen.")
+            else:
+                for t in sel:
+                    set_beta(t, names[t], g, "all" if allg else "some", note.strip())
+                st.success(f"{len(sel)} Streamer als Beta-Tester gesetzt. Aktiv in der App nach ca. 1 Minute.")
+    beta = db.reference("shop/beta").get() or {}
+    if not beta:
+        return
+    st.dataframe(pd.DataFrame([{"Streamer": names.get(t, v.get("name", t)), "Umfang": "Alles" if v.get("scope") == "all" else ", ".join(games.get(g, g) for g in v.get("games", [])),
+                                "Notiz": v.get("note", "")} for t, v in beta.items() if isinstance(v, dict)]), hide_index=True, use_container_width=True)
+    rm = st.multiselect("Beta-Status entfernen bei", list(beta), format_func=lambda t: names.get(t, beta[t].get("name", t)))
+    if st.button("Beta-Status entfernen", disabled=not rm):
+        for t in rm:
+            remove_beta(t)
+        st.rerun()
+
+
+def admin_coupon_panel():
+    st.subheader("🎟️ Gutscheine & Partner-Codes")
+    st.caption("Jeder Code gibt X % Rabatt auf den Warenkorb. Mit einem Partner-Namen siehst du unten, wie viel jeder Partner einbringt.")
+    cps = {k: v for k, v in (db.reference("shop/coupons").get() or {}).items() if isinstance(v, dict)}
+    if cps:
+        cdf = pd.DataFrame([{"Code": k, "Partner": v.get("partner", ""), "Rabatt %": v.get("percent"), "Benutzt": int(v.get("uses") or 0),
+                             "Limit": int(v.get("max_uses") or 0) or "∞", "Läuft ab": v.get("expires") or "–",
+                             "Umsatz €": round(float(v.get("revenue") or 0), 2), "Aktiv": v.get("active", True)} for k, v in cps.items()])
+        st.dataframe(cdf, hide_index=True, use_container_width=True)
+        part = cdf[cdf["Partner"] != ""].groupby("Partner")[["Benutzt", "Umsatz €"]].sum()
+        if not part.empty:
+            st.markdown("**Partner-Übersicht**")
+            st.dataframe(part, use_container_width=True)
+    pick = st.selectbox("Code bearbeiten", ["➕ Neuer Code"] + list(cps))
+    new, cur = pick.startswith("➕"), cps.get(pick, {})
+    with st.form("coupon"):
+        code = st.text_input("Code (A-Z, 0-9, - _). Leer = automatisch", value="" if new else pick, disabled=not new)
+        partner = st.text_input("Partner (optional)", value=cur.get("partner", ""))
+        pc = st.number_input("Rabatt in %", 1, 90, int(cur.get("percent", 10)))
+        mx = st.number_input("Max. Benutzungen (0 = unbegrenzt)", 0, 100000, int(cur.get("max_uses") or 0))
+        exp = st.text_input("Läuft ab am (JJJJ-MM-TT, leer = nie)", value=cur.get("expires", ""))
+        act = st.checkbox("Aktiv", value=cur.get("active", True))
+        if st.form_submit_button("💾 Speichern"):
+            key = (code if new else pick).strip().upper()
+            if new and not key:
+                base = "".join(ch for ch in partner.upper() if ch.isalnum())[:8] or "SDX"
+                key = f"{base}{pc}"
+            try:
+                if exp.strip():
+                    date.fromisoformat(exp.strip())
+                bad = not key.replace("-", "").replace("_", "").isalnum()
+            except ValueError:
+                bad = True
+            if bad:
+                st.error("Code oder Datum ungültig (Datum: JJJJ-MM-TT).")
+            elif new and key in cps:
+                st.error(f"Den Code {key} gibt es schon.")
+            else:
+                db.reference(f"shop/coupons/{key}").update({"percent": int(pc), "partner": partner.strip(), "max_uses": int(mx), "expires": exp.strip(),
+                                                          "active": act, "uses": int(cur.get("uses") or 0), "revenue": float(cur.get("revenue") or 0)})
+                st.success(f"Gespeichert: {key}")
+                st.rerun()
+    if not new and st.button("🗑️ Code löschen"):
+        db.reference(f"shop/coupons/{pick}").delete()
+        st.rerun()
