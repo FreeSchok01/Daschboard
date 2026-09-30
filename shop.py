@@ -101,14 +101,36 @@ def validate_coupon(code):
         return False, None, "Dieser Code ist abgelaufen."
     if int(c.get("max_uses") or 0) and int(c.get("uses") or 0) >= int(c["max_uses"]):
         return False, None, "Dieser Code wurde schon zu oft benutzt."
+    if c.get("type") == "amount" and float(c.get("balance") or 0) <= 0:
+        return False, None, "Dieser Gutschein ist aufgebraucht."
     return True, dict(c, code=code), ""
 
 
 def apply_coupon(total, c):
+    """Prozent-Code: min. 0,50 € Restpreis. Wert-Gutschein: zieht Guthaben ab, darf bis 0 € gehen (dann kostenlos)."""
     if not c:
         return total, Decimal(0)
-    final = max(Decimal("0.50"), (total * (Decimal(100) - Decimal(str(c["percent"]))) / 100).quantize(Decimal("0.01")))
+    if c.get("type") == "amount":
+        d = min(Decimal(str(c.get("balance") or 0)).quantize(Decimal("0.01")), total)
+        return total - d, d
+    final = max(Decimal("0.50"), (total * (Decimal(100) - Decimal(str(c.get("percent", 0)))) / 100).quantize(Decimal("0.01")))
     return final, max(Decimal(0), total - final)
+
+
+def release_credit(o):
+    """Reserviertes Gutschein-Guthaben einer NICHT bezahlten Bestellung zurückbuchen."""
+    if o.get("coupon_type") == "amount" and o.get("status") != "paid" and o.get("coupon"):
+        d = float(o.get("discount") or 0)
+        if d > 0:
+            db.reference(f"shop/coupons/{o['coupon']}").transaction(
+                lambda c: dict(c, balance=round(float(c.get("balance") or 0) + d, 2)) if c else c)
+
+
+def cancel_order(code):
+    o = db.reference(f"shop/orders/{code}").get()
+    if isinstance(o, dict) and o.get("status") == "pending":
+        release_credit(o)
+        db.reference(f"shop/orders/{code}").delete()
 
 
 def create_cart_order(tid, name, ids, items, coupon=""):
@@ -117,10 +139,19 @@ def create_cart_order(tid, name, ids, items, coupon=""):
     total = sum(Decimal(_price(items[i]["price"])) for i in ids)
     ok, c, _ = validate_coupon(coupon) if coupon else (False, None, "")   # serverseitig neu geprüft
     final, disc = apply_coupon(total, c if ok else None)
+    if ok and c.get("type") == "amount" and disc > 0:                      # Guthaben reservieren (atomar)
+        def take(cur):
+            if not cur or Decimal(str(cur.get("balance") or 0)) < disc:
+                raise _Skip()
+            return dict(cur, balance=round(float(Decimal(str(cur["balance"])) - disc), 2))
+        try:
+            db.reference(f"shop/coupons/{c['code']}").transaction(take)
+        except _Skip:
+            raise ValueError("Das Guthaben dieses Gutscheins reicht nicht mehr.")
     order = {"tid": tid, "name": name, "item": "cart", "item_name": " + ".join(items[i]["name"] for i in ids)[:200],
              "items": ids, "games": games, "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
     if ok:
-        order.update(coupon=c["code"], partner=c.get("partner", ""), discount=_price(disc))
+        order.update(coupon=c["code"], coupon_type=c.get("type", "percent"), partner=c.get("partner", ""), discount=_price(disc))
     db.reference(f"shop/orders/{code}").set(order)
     return code, _price(final)
 
@@ -251,6 +282,7 @@ def _order_box():
             else:
                 st.warning(msg)
         if st.button("Abbrechen", use_container_width=True):
+            cancel_order(code)
             st.session_state.pop("order")
             st.rerun()
 
@@ -273,7 +305,7 @@ def _cart_box(tid, name, items, have):
             st.session_state.pop("coupon", None)
         if ok:
             x, y = st.columns([4, 1])
-            x.markdown(f'🎟️ **{cp["code"]}** (−{cp["percent"]} %)')
+            x.markdown(f'🎟️ **{cp["code"]}** · ' + (f'Guthaben {float(cp.get("balance") or 0):.2f} €' if cp.get("type") == "amount" else f'−{cp.get("percent")} %'))
             y.button("✕", key="x_coupon", on_click=lambda: st.session_state.pop("coupon", None))
         else:
             x, y = st.columns([3, 2])
@@ -289,10 +321,18 @@ def _cart_box(tid, name, items, have):
         old = f'<span class="old">{total} €</span>' if disc > 0 else ""
         st.markdown(f'<div class="price">Gesamt: {final} €{old}</div>' + (f'<span class="badge save">Du sparst {save + disc} €</span>' if save + disc > 0 else ""), unsafe_allow_html=True)
         agree = st.checkbox("Ich stimme zu, dass die Freischaltung sofort erfolgt und mein Widerrufsrecht damit erlischt.")
-        if st.button("Bestellung anlegen", type="primary", disabled=not agree, use_container_width=True):
-            st.session_state["order"] = create_cart_order(tid, name, ids, items, cc if ok else "")
-            st.session_state["cart"] = []
-            st.rerun()
+        if st.button("🎁 Kostenlos freischalten" if final == 0 else "Bestellung anlegen", type="primary", disabled=not agree, use_container_width=True):
+            try:
+                oc, op = create_cart_order(tid, name, ids, items, cc if ok else "")
+            except ValueError as e:
+                st.error(str(e))
+            else:
+                st.session_state["cart"] = []
+                if Decimal(op) == 0:
+                    st.session_state["flash"] = fulfill(oc, manual=True)[1]
+                else:
+                    st.session_state["order"] = (oc, op)
+                st.rerun()
 
 
 def render_shop(games):
@@ -300,6 +340,9 @@ def render_shop(games):
     st.markdown('<div class="hero"><h1>🛒 Streamdex Shop</h1><p>Schalte Chat-Games für deinen Twitch-Kanal frei: einzeln oder im Pack.</p>'
                 '<div class="steps"><span>1 · Twitch-Name eingeben</span><span>2 · Warenkorb füllen</span><span>3 · Per Tip bezahlen</span><span>4 · Nach ca. 1 Min. aktiv</span></div></div>',
                 unsafe_allow_html=True)
+    if st.session_state.get("flash"):
+        st.success(st.session_state.pop("flash"))
+        st.balloons()
     if not db.reference("shop/items").get():
         db.reference("shop/items").set(default_items(games))
     cfg = shop_settings()
@@ -431,6 +474,7 @@ def admin_shop_panel(games):
                 if rv and o.get("status") == "paid":
                     for g in set(o.get("games", [])) - protected_games(o["tid"], exclude=set(sel)):
                         db.reference(f"game_flags/streamers/{o['tid']}/{g}").delete()
+                release_credit(o)
                 db.reference(f"shop/orders/{code}").delete()
             st.rerun()
 
@@ -494,31 +538,41 @@ def admin_beta_panel(games, rows):
 
 def admin_coupon_panel():
     st.subheader("🎟️ Gutscheine & Partner-Codes")
-    st.caption("Jeder Code gibt X % Rabatt auf den Warenkorb. Mit einem Partner-Namen siehst du unten, wie viel jeder Partner einbringt.")
+    st.caption("**Prozent-Code**: X % Rabatt auf den Warenkorb (ideal für Partner). **Wert-Gutschein**: festes Guthaben, z. B. 19,99 €. "
+               "Deckt er den ganzen Warenkorb, wird ohne Tip direkt freigeschaltet. Restguthaben bleibt für den nächsten Kauf erhalten.")
     cps = {k: v for k, v in (db.reference("shop/coupons").get() or {}).items() if isinstance(v, dict)}
     if cps:
-        cdf = pd.DataFrame([{"Code": k, "Partner": v.get("partner", ""), "Rabatt %": v.get("percent"), "Benutzt": int(v.get("uses") or 0),
-                             "Limit": int(v.get("max_uses") or 0) or "∞", "Läuft ab": v.get("expires") or "–",
+        def wert(v):
+            return f"{float(v.get('amount') or 0):.2f} € (Rest {float(v.get('balance') or 0):.2f} €)" if v.get("type") == "amount" else f"{v.get('percent')} %"
+        cdf = pd.DataFrame([{"Code": k, "Typ": "Wert" if v.get("type") == "amount" else "Prozent", "Wert": wert(v), "Partner/Notiz": v.get("partner", ""),
+                             "Benutzt": int(v.get("uses") or 0), "Limit": int(v.get("max_uses") or 0) or "∞", "Läuft ab": v.get("expires") or "–",
                              "Umsatz €": round(float(v.get("revenue") or 0), 2), "Aktiv": v.get("active", True)} for k, v in cps.items()])
         st.dataframe(cdf, hide_index=True, use_container_width=True)
-        part = cdf[cdf["Partner"] != ""].groupby("Partner")[["Benutzt", "Umsatz €"]].sum()
+        part = cdf[cdf["Partner/Notiz"] != ""].groupby("Partner/Notiz")[["Benutzt", "Umsatz €"]].sum()
         if not part.empty:
             st.markdown("**Partner-Übersicht**")
             st.dataframe(part, use_container_width=True)
     pick = st.selectbox("Code bearbeiten", ["➕ Neuer Code"] + list(cps))
     new, cur = pick.startswith("➕"), cps.get(pick, {})
+    amt_mode = st.radio("Typ", ["Prozent-Rabatt", "Wert-Gutschein (€)"], index=1 if cur.get("type") == "amount" else 0,
+                        horizontal=True, key=f"ctype_{pick}") != "Prozent-Rabatt"
     with st.form("coupon"):
         code = st.text_input("Code (A-Z, 0-9, - _). Leer = automatisch", value="" if new else pick, disabled=not new)
-        partner = st.text_input("Partner (optional)", value=cur.get("partner", ""))
-        pc = st.number_input("Rabatt in %", 1, 90, int(cur.get("percent", 10)))
+        partner = st.text_input("Partner / Notiz (optional)", value=cur.get("partner", ""))
+        if amt_mode:
+            val = st.number_input("Wert in €", 0.5, 1000.0, float(cur.get("amount") or 19.99), 0.5)
+            bal = st.number_input("Restguthaben in €", 0.0, 1000.0, float(cur.get("balance", val) if not new else val), 0.5,
+                                  help="Bei neuen Gutscheinen = Wert. Bei bestehenden: aktueller Rest.")
+        else:
+            val = st.number_input("Rabatt in %", 1, 90, int(cur.get("percent") or 10))
         mx = st.number_input("Max. Benutzungen (0 = unbegrenzt)", 0, 100000, int(cur.get("max_uses") or 0))
         exp = st.text_input("Läuft ab am (JJJJ-MM-TT, leer = nie)", value=cur.get("expires", ""))
         act = st.checkbox("Aktiv", value=cur.get("active", True))
         if st.form_submit_button("💾 Speichern"):
             key = (code if new else pick).strip().upper()
             if new and not key:
-                base = "".join(ch for ch in partner.upper() if ch.isalnum())[:8] or "SDX"
-                key = f"{base}{pc}"
+                base = "".join(ch for ch in partner.upper() if ch.isalnum())[:8]
+                key = f"{base or ('GUT' if amt_mode else 'SDX')}{secrets.token_hex(2).upper()}" if amt_mode else f"{base or 'SDX'}{int(val)}"
             try:
                 if exp.strip():
                     date.fromisoformat(exp.strip())
@@ -530,8 +584,10 @@ def admin_coupon_panel():
             elif new and key in cps:
                 st.error(f"Den Code {key} gibt es schon.")
             else:
-                db.reference(f"shop/coupons/{key}").update({"percent": int(pc), "partner": partner.strip(), "max_uses": int(mx), "expires": exp.strip(),
-                                                          "active": act, "uses": int(cur.get("uses") or 0), "revenue": float(cur.get("revenue") or 0)})
+                d = {"type": "amount" if amt_mode else "percent", "partner": partner.strip(), "max_uses": int(mx), "expires": exp.strip(),
+                     "active": act, "uses": int(cur.get("uses") or 0), "revenue": float(cur.get("revenue") or 0)}
+                d.update({"amount": float(val), "balance": float(bal)} if amt_mode else {"percent": int(val)})
+                db.reference(f"shop/coupons/{key}").update(d)
                 st.success(f"Gespeichert: {key}")
                 st.rerun()
     if not new and st.button("🗑️ Code löschen"):
