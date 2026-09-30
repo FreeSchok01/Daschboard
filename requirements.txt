@@ -1,6 +1,4 @@
-# === ADMIN-DASHBOARD (streamlit_app.py) ===
-# Auf Streamlit Cloud muss die Datei "requirements.txt" heißen und im Ordner
-# des Dashboards (oder im Repo-Root) liegen -> Dashboard am besten in eigenes Repo/Verzeichnis.
 streamlit>=1.40
 firebase-admin>=6.5
+pandas
 tzdata
