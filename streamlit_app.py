@@ -16,6 +16,8 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
 
+from beta_apply import admin_beta_applications, render_beta_apply
+from feedback_inbox import feedback_panel, new_count
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop
 from stats_panel import stats_panel
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
@@ -406,6 +408,11 @@ def bans_panel():
             st.rerun()
 
 
+def _fb_label():
+    n = new_count()
+    return f"🐞 Bugs & Ideen ({n})" if n else "🐞 Bugs & Ideen"
+
+
 def support_main():
     st.set_page_config(page_title="Streamdex Support", page_icon="🛟", layout="wide")
     init_firebase()
@@ -417,8 +424,8 @@ def support_main():
         st.session_state.clear()
         st.rerun()
 
-    tab_chat, tab_games, tab_codes, tab_beta, tab_team = st.tabs(
-        ["💬 Live-Chat", "🎮 Freigaben", "🎟️ Partner-Codes", "🧪 Beta", "💭 Team-Chat"])
+    tab_chat, tab_games, tab_codes, tab_beta, tab_fb, tab_team = st.tabs(
+        ["💬 Live-Chat", "🎮 Freigaben", "🎟️ Partner-Codes", "🧪 Beta", _fb_label(), "💭 Team-Chat"])
     with tab_chat:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -441,9 +448,15 @@ def support_main():
             st.error(f"Firebase-Fehler: {e}")
     with tab_beta:
         try:
-            admin_beta_panel(GAMES, load_streamers())
+            t_apps, t_testers = st.tabs(["📝 Bewerbungen", "🧪 Beta-Tester"])
+            with t_apps:
+                admin_beta_applications(GAMES, me["name"], is_admin=False)
+            with t_testers:
+                admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
             st.error(f"Firebase-Fehler: {e}")
+    with tab_fb:
+        feedback_panel(me["name"], is_admin=False)
     with tab_team:
         team_chat_panel(me["name"])
 
@@ -451,6 +464,11 @@ def support_main():
 def main():
     if "support" in st.query_params:           # Supporter: /?support=1
         support_main()
+        return
+    if "beta" in st.query_params:              # Öffentlich: Beta-Bewerbung /?beta=1
+        st.set_page_config(page_title="Streamdex Beta", page_icon="🧪")
+        init_firebase()
+        render_beta_apply()
         return
     if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
@@ -467,7 +485,7 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_bans, tab_sups, tab_team = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"])
+    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"])
     with tab_support:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -494,9 +512,15 @@ def main():
         admin_coupon_panel()
     with tab_beta:
         try:
-            admin_beta_panel(GAMES, load_streamers())
+            t_apps, t_testers = st.tabs(["📝 Bewerbungen", "🧪 Beta-Tester"])
+            with t_apps:
+                admin_beta_applications(GAMES, ADMIN_NAME, is_admin=True)
+            with t_testers:
+                admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
             st.error(f"Firebase-Fehler: {e}")
+    with tab_fb:
+        feedback_panel(ADMIN_NAME, is_admin=True)
     with tab_bans:
         bans_panel()
     with tab_sups:
