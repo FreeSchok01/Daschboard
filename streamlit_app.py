@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
 
-from shop import admin_shop_panel, render_shop
+from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop
 from stats_panel import stats_panel
 
 
@@ -420,7 +420,7 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    tab_support, tab_stats, tab_games, tab_shop, tab_bans = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🚫 Sperren"])
+    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_bans = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", "🚫 Sperren"])
     with tab_support:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -443,6 +443,13 @@ def main():
         games_panel()
     with tab_shop:
         admin_shop_panel(GAMES)
+    with tab_coupons:
+        admin_coupon_panel()
+    with tab_beta:
+        try:
+            admin_beta_panel(GAMES, load_streamers())
+        except Exception as e:
+            st.error(f"Firebase-Fehler: {e}")
     with tab_bans:
         bans_panel()
 
