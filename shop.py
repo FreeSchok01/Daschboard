@@ -1,6 +1,6 @@
-"""Öffentlicher Streamdex-Shop (bezahlt per StreamElements-Tip) + Admin-Panel für Katalog und Bestellungen.
-Kauf -> Bestellcode -> Tip mit Code in der Nachricht -> Server gleicht per SE-API ab -> game_flags/streamers/{tid}/{game}=True.
-Die App übernimmt die Freischaltung beim nächsten Heartbeat (~60 s), ohne App-Änderung."""
+"""Streamdex-Shop: Einzel-Games, 4 Packs, Warenkorb. Bezahlung per StreamElements-Tip mit Bestellcode.
+Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nach ~60 s). Preise/Einstellungen: Admin-Tab 🛒 Shop."""
+import html
 import secrets
 from decimal import Decimal
 
@@ -12,6 +12,30 @@ from firebase_admin import db
 
 class _Skip(Exception):
     pass
+
+
+PRICES = {"slot": 2.99, "megaslot": 3.99, "steal": 1.99, "raffel": 1.99, "gambel": 1.99, "hilo": 1.99, "raffle": 1.99,
+          "fishing": 4.99, "mining": 3.49, "farming": 4.49, "race": 2.99, "arena": 5.99}
+DESC = {"slot": "Der Klassiker: Walzen drehen, Coins gewinnen.", "megaslot": "Großes Raster, mehrere Gewinnlinien, Jackpot.",
+        "steal": "Viewer klauen sich gegenseitig Coins. Chaos garantiert.", "raffel": "Lose kaufen und Punkte-Raffel im Chat.",
+        "gambel": "Einsatz rein, Glück testen – schnell und simpel.", "hilo": "Höher oder tiefer? Kartenspiel im Chat.",
+        "raffle": "Punkte-Verlosung mit !join für die ganze Community.", "fishing": "Angeln, Aquarium & Kraken mit Ruten und Gewässern.",
+        "mining": "Minen mit !mine – Erze sammeln und aufsteigen.", "farming": "Pflanzen, wachsen lassen, ernten, Level aufsteigen.",
+        "race": "Sim-Racing-Rennen im Chat mit Overlay.", "arena": "Duelle, Pets, Reittiere, Skins und Hausbau in der Arena."}
+PACKS = {
+    "pack_casino": ("🎰 Casino-Pack", "Slot, Mega Slot, Gambel, Hi-Lo & Raffel: alles fürs Glücksspiel im Chat.", ["slot", "megaslot", "gambel", "hilo", "raffel"], 9.99),
+    "pack_abenteuer": ("🌾 Abenteuer-Pack", "Angeln, Minen & Farm: Fortschritt und Sammeln für deine Community.", ["fishing", "mining", "farming"], 9.99),
+    "pack_action": ("⚔️ Action-Pack", "Arena, Taschenraub, Sim Racing & Punkte-Raffle.", ["arena", "steal", "race", "raffle"], 9.99),
+    "pack_komplett": ("👑 Komplett-Pack", "Alle 12 Games auf einmal: der beste Preis.", list(PRICES), 24.99),
+}
+
+
+def default_items(games):
+    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n}
+          for n, (k, p) in enumerate(PRICES.items()) if k in games}
+    for n, (k, (nm, ds, gm, p)) in enumerate(PACKS.items()):
+        it[k] = {"kind": "pack", "name": nm, "desc": ds, "price": p, "games": [g for g in gm if g in games], "active": True, "sort": 100 + n}
+    return it
 
 
 def _price(x):
@@ -33,7 +57,12 @@ def find_streamer(name):
 
 def load_items(active_only=True):
     items = db.reference("shop/items").get() or {}
-    return {k: v for k, v in items.items() if isinstance(v, dict) and (v.get("active", True) or not active_only)}
+    items = {k: v for k, v in items.items() if isinstance(v, dict) and (v.get("active", True) or not active_only)}
+    return dict(sorted(items.items(), key=lambda kv: (kv[1].get("sort", 50), kv[1].get("name", ""))))
+
+
+def shop_settings():
+    return db.reference("shop/settings").get() or {}
 
 
 def owned_games(tid):
@@ -46,13 +75,30 @@ def _se():
     return {"Authorization": f"Bearer {st.secrets['streamelements']['jwt']}"}
 
 
-def create_order(tid, name, item_id, item):
+def cart_view(cart, items, have):
+    """Bereinigt den Warenkorb: nichts doppelt kaufen (schon Besessenes oder von einem Pack Abgedecktes fliegt raus)."""
+    ids = [i for i in dict.fromkeys(cart) if i in items and not set(items[i].get("games", [])) <= have]
+    ids.sort(key=lambda i: -len(items[i].get("games", [])))
+    kept, covered = [], set()
+    for i in ids:
+        g = set(items[i].get("games", []))
+        if not g <= covered:
+            kept.append(i)
+            covered |= g
+    total = sum(Decimal(_price(items[i]["price"])) for i in kept)
+    single = {g: Decimal(_price(v["price"])) for v in items.values() if v.get("kind") == "game" for g in v.get("games", [])}
+    worth = sum(single.get(g, Decimal(0)) for g in covered - have)
+    return kept, total, max(Decimal(0), worth - total), covered
+
+
+def create_cart_order(tid, name, ids, items):
     code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
-    price = _price(item["price"])
-    db.reference(f"shop/orders/{code}").set({"tid": tid, "name": name, "item": item_id, "item_name": item["name"],
-                                            "games": item.get("games", []), "price": price, "status": "pending",
-                                            "ts": {".sv": "timestamp"}})
-    return code, item_id, price
+    games = sorted({g for i in ids for g in items[i].get("games", [])})
+    total = sum(Decimal(_price(items[i]["price"])) for i in ids)
+    db.reference(f"shop/orders/{code}").set({
+        "tid": tid, "name": name, "item": "cart", "item_name": " + ".join(items[i]["name"] for i in ids)[:200],
+        "items": ids, "games": games, "price": _price(total), "status": "pending", "ts": {".sv": "timestamp"}})
+    return code, _price(total)
 
 
 def _find_tip(code, price):
@@ -111,9 +157,107 @@ def fulfill(code, manual=False):
     return True, f"✅ Zahlung erhalten! **{order['item_name']}** ist für **{order['name']}** freigeschaltet (in der App nach ca. 1 Minute aktiv)."
 
 
-def render_shop():
-    st.title("🛒 Streamdex Shop")
-    st.caption("Schalte zusätzliche Funktionen für deinen Twitch-Kanal frei. Bezahlung per StreamElements-Tip (PayPal, Karte u.a.).")
+CSS = """<style>
+.block-container{max-width:1180px;padding-top:1.5rem}
+.hero{background:linear-gradient(135deg,#9146FF 0%,#5b21b6 55%,#1e1b4b 100%);border-radius:22px;padding:2.4rem 2.2rem;color:#fff;margin-bottom:1.2rem;box-shadow:0 10px 40px #9146ff33}
+.hero h1{margin:0;font-size:2.4rem;color:#fff;padding:0}.hero p{margin:.5rem 0 0;opacity:.92;font-size:1.05rem}
+.steps{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem}.steps span{background:#ffffff22;border-radius:999px;padding:.25rem .8rem;font-size:.85rem}
+.banner{background:#3b2a05;border:1px solid #f5b301;color:#ffd166;border-radius:12px;padding:.7rem 1rem;margin-bottom:1rem}
+.ct{font-size:1.15rem;font-weight:700;margin-bottom:.2rem}.cd{opacity:.72;font-size:.9rem;min-height:2.7em}
+.price{font-size:1.6rem;font-weight:800;color:#b388ff;margin:.4rem 0}.old{text-decoration:line-through;opacity:.5;font-size:.95rem;margin-left:.5rem;font-weight:400;color:#aaa}
+.badge{display:inline-block;background:#22c55e22;color:#4ade80;border-radius:999px;padding:.1rem .7rem;font-size:.8rem;font-weight:700}
+.badge.save{background:#f5b30126;color:#fbbf24}
+.chips span{display:inline-block;background:#ffffff14;border-radius:8px;padding:.05rem .5rem;margin:.1rem .2rem 0 0;font-size:.78rem}
+div[data-testid="stVerticalBlockBorderWrapper"]{border-radius:16px}
+.stButton>button,.stLinkButton>a{border-radius:12px;font-weight:600}
+</style>"""
+
+
+def _add(i):
+    c = st.session_state.setdefault("cart", [])
+    if i not in c:
+        c.append(i)
+
+
+def _rm(i):
+    st.session_state["cart"] = [x for x in st.session_state.get("cart", []) if x != i]
+
+
+def _card(iid, it, items, have, cart):
+    g = it.get("games", [])
+    pack = it.get("kind") == "pack"
+    with st.container(border=True):
+        chips = ""
+        if pack:
+            lab = {k: v["name"] for v in items.values() if v.get("kind") == "game" for k in v.get("games", [])}
+            chips = '<div class="chips">' + "".join(f"<span>{html.escape(lab.get(x, x))}</span>" for x in g) + "</div>"
+        single = sum(Decimal(_price(v["price"])) for v in items.values() if v.get("kind") == "game" and set(v.get("games", [])) <= set(g))
+        old = f'<span class="old">{single} €</span>' if pack and single > Decimal(_price(it["price"])) else ""
+        save = f'<span class="badge save">Spare {single - Decimal(_price(it["price"]))} €</span>' if old else ""
+        st.markdown(f'<div class="ct">{html.escape(it["name"])}</div><div class="cd">{html.escape(it.get("desc", ""))}</div>{chips}'
+                    f'<div class="price">{_price(it["price"])} €{old}</div>{save}', unsafe_allow_html=True)
+        if g and set(g) <= have:
+            st.markdown('<span class="badge">✅ Freigeschaltet</span>', unsafe_allow_html=True)
+        elif iid in cart:
+            st.button("✔ Im Warenkorb (entfernen)", key=f"rm_c_{iid}", on_click=_rm, args=(iid,), use_container_width=True)
+        else:
+            st.button("🛒 In den Warenkorb", key=f"add_{iid}", on_click=_add, args=(iid,), type="primary" if pack else "secondary", use_container_width=True)
+
+
+def _order_box():
+    code, price = st.session_state["order"]
+    with st.container(border=True):
+        st.markdown("### 💳 Jetzt bezahlen")
+        st.markdown(f"**1.** Öffne die Tip-Seite  \n**2.** Betrag: **{price} €** (oder mehr)  \n**3.** Nachricht: exakt diesen Code")
+        st.code(code, language=None)
+        st.link_button("➡️ Zur Tip-Seite", st.secrets["streamelements"]["tip_url"], use_container_width=True)
+        st.caption("Danach hier auf „Zahlung prüfen“ klicken.")
+        if st.button("🔍 Zahlung prüfen", type="primary", use_container_width=True):
+            ok, msg = fulfill(code)
+            if ok:
+                st.session_state.pop("order")
+                st.balloons()
+                st.success(msg)
+            else:
+                st.warning(msg)
+        if st.button("Abbrechen", use_container_width=True):
+            st.session_state.pop("order")
+            st.rerun()
+
+
+def _cart_box(tid, name, items, have):
+    ids, total, save, _ = cart_view(st.session_state.get("cart", []), items, have)
+    with st.container(border=True):
+        st.markdown("### 🛒 Warenkorb")
+        if not ids:
+            st.caption("Noch leer. Wähle links Packs oder einzelne Games.")
+            return
+        for i in ids:
+            a, b = st.columns([5, 1])
+            a.markdown(f"{html.escape(items[i]['name'])}  \n**{_price(items[i]['price'])} €**")
+            b.button("✕", key=f"x_{i}", on_click=_rm, args=(i,))
+        st.divider()
+        st.markdown(f'<div class="price">Gesamt: {total} €</div>' + (f'<span class="badge save">Du sparst {save} €</span>' if save > 0 else ""), unsafe_allow_html=True)
+        agree = st.checkbox("Ich stimme zu, dass die Freischaltung sofort erfolgt und mein Widerrufsrecht damit erlischt.")
+        if st.button("Bestellung anlegen", type="primary", disabled=not agree, use_container_width=True):
+            st.session_state["order"] = create_cart_order(tid, name, ids, items)
+            st.session_state["cart"] = []
+            st.rerun()
+
+
+def render_shop(games):
+    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>🛒 Streamdex Shop</h1><p>Schalte Chat-Games für deinen Twitch-Kanal frei: einzeln oder im Pack.</p>'
+                '<div class="steps"><span>1 · Twitch-Name eingeben</span><span>2 · Warenkorb füllen</span><span>3 · Per Tip bezahlen</span><span>4 · Nach ca. 1 Min. aktiv</span></div></div>',
+                unsafe_allow_html=True)
+    if not db.reference("shop/items").get():
+        db.reference("shop/items").set(default_items(games))
+    cfg = shop_settings()
+    if cfg.get("banner"):
+        st.markdown(f'<div class="banner">📢 {html.escape(str(cfg["banner"]))}</div>', unsafe_allow_html=True)
+    if cfg.get("open", True) is False:
+        st.info("Der Shop ist gerade geschlossen. Schau bald wieder vorbei!")
+        return
     name = st.text_input("Dein Twitch-Name", value=str(st.query_params.get("u", "")), placeholder="z.B. meinkanal")
     if not name.strip():
         st.info("Gib deinen Twitch-Namen ein. Du musst die Streamdex-App mindestens einmal gestartet haben.")
@@ -122,31 +266,30 @@ def render_shop():
     if not tid:
         st.error("Kein Konto mit diesem Namen gefunden. Starte die Streamdex-App einmal mit deinem Twitch-Account.")
         return
-    st.success(f"Konto gefunden: **{p.get('twitch_username')}** · App {p.get('app_version', '?')}")
-    have = owned_games(tid)
-    items = load_items()
+    if st.session_state.get("cart_tid") != tid:
+        st.session_state.update(cart=[], cart_tid=tid)
+        st.session_state.pop("order", None)
+    have, items = owned_games(tid), load_items()
     if not items:
         st.info("Aktuell gibt es keine Angebote.")
         return
-    agree = st.checkbox("Ich stimme zu, dass die Freischaltung sofort erfolgt, und weiß, dass damit mein Widerrufsrecht erlischt.")
-    for iid, it in items.items():
-        with st.container(border=True):
-            c1, c2 = st.columns([4, 1])
-            c1.subheader(it["name"])
-            c1.write(it.get("desc", ""))
-            c2.metric("Preis", f"{_price(it['price'])} €")
-            if it.get("games") and set(it["games"]) <= have:
-                c2.success("✅ Freigeschaltet")
-            elif c2.button("Kaufen", key=f"buy_{iid}", disabled=not agree, use_container_width=True):
-                st.session_state["order"] = create_order(tid, p.get("twitch_username"), iid, it)
-            o = st.session_state.get("order")
-            if o and o[1] == iid:
-                st.info(f"1️⃣ Öffne die [Tip-Seite]({st.secrets['streamelements']['tip_url']})  \n"
-                        f"2️⃣ Betrag: **{o[2]} €** (oder mehr)  \n3️⃣ Nachricht: **`{o[0]}`** (genau so eintragen!)  \n"
-                        "4️⃣ Nach dem Bezahlen hier auf „Zahlung prüfen“ klicken.")
-                if st.button("🔍 Zahlung prüfen", key=f"chk_{iid}"):
-                    ok, msg = fulfill(o[0])
-                    (st.success if ok else st.warning)(msg)
+    st.caption(f"✅ Konto: **{p.get('twitch_username')}** · App {p.get('app_version', '?')} · {len(have)} Game(s) freigeschaltet")
+    cart = st.session_state.get("cart", [])
+    left, right = st.columns([3, 1.3], gap="large")
+    with left:
+        t_packs, t_games = st.tabs(["🎁 Packs (sparen)", "🎮 Einzelne Games"])
+        for tab, kind, n in ((t_packs, "pack", 2), (t_games, "game", 3)):
+            with tab:
+                lst = [(k, v) for k, v in items.items() if v.get("kind", "game") == kind]
+                for r in range(0, len(lst), n):
+                    for col, (k, v) in zip(st.columns(n), lst[r:r + n]):
+                        with col:
+                            _card(k, v, items, have, cart)
+    with right:
+        if st.session_state.get("order"):
+            _order_box()
+        else:
+            _cart_box(tid, p.get("twitch_username"), items, have)
     with st.expander("Rechtliches"):
         s = st.secrets.get("shop", {})
         st.markdown(f"[Impressum]({s.get('impressum_url', '#')}) · [AGB]({s.get('agb_url', '#')}) · [Widerruf]({s.get('widerruf_url', '#')})")
@@ -154,27 +297,59 @@ def render_shop():
 
 def admin_shop_panel(games):
     items = load_items(active_only=False)
-    st.subheader("📦 Katalog")
-    pick = st.selectbox("Artikel bearbeiten", ["➕ Neu"] + list(items), key="shop_pick")
-    cur = items.get(pick, {})
-    with st.form("shop_item"):
-        iid = st.text_input("Artikel-ID (a-z, 0-9, _)", value="" if pick == "➕ Neu" else pick, disabled=pick != "➕ Neu")
-        nm = st.text_input("Name", value=cur.get("name", ""))
-        ds = st.text_area("Beschreibung", value=cur.get("desc", ""))
-        pr = st.number_input("Preis (€)", 0.5, 500.0, float(cur.get("price", 4.99)), 0.5)
-        gm = st.multiselect("Schaltet frei", list(games), default=[g for g in cur.get("games", []) if g in games],
-                            format_func=lambda k: games[k])
-        act = st.checkbox("Aktiv (im Shop sichtbar)", value=cur.get("active", True))
+    cfg = shop_settings()
+    st.subheader("⚙️ Shop-Einstellungen (global)")
+    with st.form("shop_cfg"):
+        op = st.toggle("Shop geöffnet", value=cfg.get("open", True))
+        bn = st.text_input("Banner-Hinweis (optional, oben im Shop)", value=cfg.get("banner", ""), max_chars=200)
         if st.form_submit_button("💾 Speichern"):
-            key = (iid if pick == "➕ Neu" else pick).strip().lower()
-            if not key.replace("_", "").isalnum() or not nm.strip() or not gm:
-                st.error("ID, Name und mindestens ein Game sind Pflicht.")
-            else:
-                db.reference(f"shop/items/{key}").set({"name": nm.strip(), "desc": ds.strip(), "price": pr, "games": gm, "active": act})
-                st.rerun()
-    if pick != "➕ Neu" and st.button("🗑️ Artikel löschen"):
-        db.reference(f"shop/items/{pick}").delete()
-        st.rerun()
+            db.reference("shop/settings").set({"open": op, "banner": bn.strip()})
+            st.success("Gespeichert.")
+    st.caption("Welche Games standardmäßig für ALLE frei sind, stellst du im Tab „🎮 Game-Freigaben“ unter „Global“ ein.")
+
+    st.subheader("💶 Preise & Sichtbarkeit")
+    if not items:
+        st.info("Noch kein Katalog. Er wird beim ersten Shop-Aufruf angelegt oder unten über „Standard-Katalog“.")
+    else:
+        df = pd.DataFrame([{"ID": k, "Name": v["name"], "Typ": v.get("kind", "game"), "Preis €": float(v["price"]), "Aktiv": bool(v.get("active", True))} for k, v in items.items()])
+        ed = st.data_editor(df, hide_index=True, use_container_width=True, key="price_editor", disabled=["ID", "Name", "Typ"],
+                            column_config={"Preis €": st.column_config.NumberColumn(min_value=0.5, max_value=500.0, step=0.5, format="%.2f")})
+        if st.button("💾 Preise speichern", type="primary"):
+            n = 0
+            for _, r in ed.iterrows():
+                o = items[r["ID"]]
+                if float(r["Preis €"]) != float(o["price"]) or bool(r["Aktiv"]) != bool(o.get("active", True)):
+                    db.reference(f"shop/items/{r['ID']}").update({"price": float(r["Preis €"]), "active": bool(r["Aktiv"])})
+                    n += 1
+            st.success(f"{n} Artikel aktualisiert.")
+            st.rerun()
+    with st.expander("🧰 Artikel bearbeiten / neu anlegen / Standard-Katalog"):
+        pick = st.selectbox("Artikel", ["➕ Neu"] + list(items), key="shop_pick")
+        cur = items.get(pick, {})
+        with st.form("shop_item"):
+            iid = st.text_input("Artikel-ID (a-z, 0-9, _)", value="" if pick == "➕ Neu" else pick, disabled=pick != "➕ Neu")
+            nm = st.text_input("Name", value=cur.get("name", ""))
+            ds = st.text_area("Beschreibung", value=cur.get("desc", ""))
+            kd = st.selectbox("Typ", ["game", "pack"], index=1 if cur.get("kind") == "pack" else 0)
+            pr = st.number_input("Preis (€)", 0.5, 500.0, float(cur.get("price", 4.99)), 0.5)
+            gm = st.multiselect("Schaltet frei", list(games), default=[g for g in cur.get("games", []) if g in games], format_func=lambda k: games[k])
+            act = st.checkbox("Aktiv", value=cur.get("active", True))
+            if st.form_submit_button("💾 Speichern"):
+                key = (iid if pick == "➕ Neu" else pick).strip().lower()
+                if not key.replace("_", "").isalnum() or not nm.strip() or not gm:
+                    st.error("ID, Name und mindestens ein Game sind Pflicht.")
+                else:
+                    db.reference(f"shop/items/{key}").set({"kind": kd, "name": nm.strip(), "desc": ds.strip(), "price": pr, "games": gm,
+                                                          "active": act, "sort": cur.get("sort", 50 if kd == "game" else 150)})
+                    st.rerun()
+        if pick != "➕ Neu" and st.button("🗑️ Artikel löschen"):
+            db.reference(f"shop/items/{pick}").delete()
+            st.rerun()
+        st.divider()
+        ok = st.checkbox("Standard-Katalog (12 Games + 4 Packs) neu anlegen. Überschreibt ALLE Artikel und Preise!")
+        if st.button("♻️ Standard-Katalog anlegen", disabled=not ok):
+            db.reference("shop/items").set(default_items(games))
+            st.rerun()
 
     st.subheader("🧾 Bestellungen")
     orders = db.reference("shop/orders").get() or {}
@@ -182,17 +357,16 @@ def admin_shop_panel(games):
     if df.empty:
         st.info("Noch keine Bestellungen.")
         return
+    df["price"] = df["price"].astype(float)
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).dt.tz_convert("Europe/Berlin").dt.strftime("%d.%m.%Y %H:%M")
     pend = df[df["status"] == "pending"]["order_id"].tolist()
     if pend:
         c1, c2 = st.columns([3, 1])
         code = c1.selectbox("Offene Bestellung manuell verbuchen (Tip ohne/mit falschem Code)", pend)
         if c2.button("✅ Verbuchen"):
             st.info(fulfill(code, manual=True)[1])
-    df["price"] = df["price"].astype(float)
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).dt.tz_convert("Europe/Berlin").dt.strftime("%d.%m.%Y %H:%M")
     paid = df[df["status"] == "paid"]
     c1, c2 = st.columns(2)
     c1.metric("Umsatz (brutto, vor Gebühren)", f"{paid['price'].sum():.2f} €")
     c2.metric("Bezahlte Bestellungen", len(paid))
-    st.dataframe(df[["ts", "name", "item_name", "price", "status", "order_id"]].sort_values("ts", ascending=False),
-                 hide_index=True, use_container_width=True)
+    st.dataframe(df[["ts", "name", "item_name", "price", "status", "order_id"]].sort_values("ts", ascending=False), hide_index=True, use_container_width=True)
