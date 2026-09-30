@@ -16,7 +16,9 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
 
-st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
+from shop import admin_shop_panel, render_shop
+from stats_panel import stats_panel
+
 
 TZ = ZoneInfo("Europe/Berlin")
 ONLINE_STALE_SECONDS = 150      # 60-s-Heartbeat: >2,5 Intervalle ohne Ping = gilt als offline (z.B. Absturz)
@@ -403,6 +405,12 @@ def bans_panel():
 
 
 def main():
+    if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
+        st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
+        init_firebase()
+        render_shop()
+        return
+    st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
     require_login()
     init_firebase()
 
@@ -412,7 +420,7 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    tab_support, tab_games, tab_bans = st.tabs(["💬 Support", "🎮 Game-Freigaben", "🚫 Sperren"])
+    tab_support, tab_stats, tab_games, tab_shop, tab_bans = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🚫 Sperren"])
     with tab_support:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -426,8 +434,15 @@ def main():
             except Exception:
                 rows_by_tid = {}
             chat_panel(rows_by_tid)
+    with tab_stats:
+        try:
+            stats_panel(load_streamers(), GAMES)
+        except Exception as e:
+            st.error(f"Firebase-Fehler: {e}")
     with tab_games:
         games_panel()
+    with tab_shop:
+        admin_shop_panel(GAMES)
     with tab_bans:
         bans_panel()
 
