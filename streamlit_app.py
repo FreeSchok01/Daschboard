@@ -408,7 +408,7 @@ def main():
     if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
         init_firebase()
-        render_shop()
+        render_shop(GAMES)
         return
     st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
     require_login()
