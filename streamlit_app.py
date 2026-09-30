@@ -12,6 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import firebase_admin
+import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
 
@@ -23,6 +24,21 @@ LIST_REFRESH_SECONDS = 10
 CHAT_REFRESH_SECONDS = 4
 ADMIN_NAME = "Support"
 SERVER_TS = {".sv": "timestamp"}
+
+# Muss zu GAME_LABELS in app.py passen (gleiche Schlüssel!)
+GAMES = {
+    "slot": "🎰 Slot Machine",
+    "megaslot": "🎡 Mega Slot",
+    "steal": "🕵️ Taschenraub",
+    "fishing": "🎣 Angeln/Kraken",
+    "mining": "⛏️ Minen",
+    "farming": "🌱 Farm",
+    "race": "🏎️ Sim Racing",
+    "arena": "🚶 Arena",
+}
+OPT_DEFAULT = "➖ wie global"
+OPT_ON = "✅ frei"
+OPT_OFF = "⛔ gesperrt"
 
 
 # ----------------------------------------------------------------------------
@@ -235,6 +251,75 @@ def chat_panel(rows_by_tid):
             st.success("Zurückgesetzt.")
 
 
+def games_panel():
+    st.caption(
+        "Alle Games sind standardmäßig **gesperrt**. Freigaben wirken in der App nach spätestens ca. 60 Sekunden "
+        "(beim nächsten Heartbeat), ohne Neustart und ohne Update."
+    )
+    try:
+        g_global = db.reference("game_flags/global").get() or {}
+        g_streamers = db.reference("game_flags/streamers").get() or {}
+        rows = load_streamers()
+    except Exception as e:
+        st.error(f"Firebase-Fehler: {e}")
+        return
+
+    st.subheader("🌍 Global (gilt für alle, sofern nichts anderes eingestellt ist)")
+    gl_df = pd.DataFrame([{k: bool(g_global.get(k, False)) for k in GAMES}])
+    gl_edit = st.data_editor(
+        gl_df, hide_index=True, use_container_width=True, key="gl_editor",
+        column_config={k: st.column_config.CheckboxColumn(v) for k, v in GAMES.items()},
+    )
+    if st.button("💾 Global speichern", key="save_global"):
+        db.reference("game_flags/global").set({k: bool(gl_edit.iloc[0][k]) for k in GAMES})
+        st.success("Global gespeichert.")
+        st.rerun()
+
+    st.subheader("👤 Pro Streamer (überschreibt global)")
+    if not rows:
+        st.info("Noch keine Streamer registriert.")
+        return
+    q = st.text_input("Streamer suchen", key="games_search", placeholder="Twitch-Name ...")
+    shown = [r for r in rows if not q.strip() or q.strip().lower() in r["name"].lower()]
+
+    def to_opt(v):
+        return OPT_ON if v is True else OPT_OFF if v is False else OPT_DEFAULT
+
+    data = []
+    for r in shown:
+        own = g_streamers.get(r["tid"]) if isinstance(g_streamers.get(r["tid"]), dict) else {}
+        row = {"Streamer": r["name"], "Twitch-ID": r["tid"]}
+        for k, label in GAMES.items():
+            row[label] = to_opt(own.get(k))
+        data.append(row)
+    df = pd.DataFrame(data)
+    cfg = {"Streamer": st.column_config.TextColumn(disabled=True), "Twitch-ID": st.column_config.TextColumn(disabled=True)}
+    for label in GAMES.values():
+        cfg[label] = st.column_config.SelectboxColumn(label, options=[OPT_DEFAULT, OPT_ON, OPT_OFF], required=True)
+    edited = st.data_editor(df, hide_index=True, use_container_width=True, column_config=cfg, key="streamer_games_editor")
+
+    c1, c2 = st.columns([1, 3])
+    if c1.button("💾 Streamer speichern", type="primary", key="save_streamers"):
+        changed = 0
+        for i, r in enumerate(shown):
+            new_flags = {}
+            for k, label in GAMES.items():
+                v = edited.iloc[i][label]
+                if v == OPT_ON:
+                    new_flags[k] = True
+                elif v == OPT_OFF:
+                    new_flags[k] = False
+            old = g_streamers.get(r["tid"]) if isinstance(g_streamers.get(r["tid"]), dict) else {}
+            old = {k: v for k, v in old.items() if k in GAMES and isinstance(v, bool)}
+            if new_flags != old:
+                ref = db.reference(f"game_flags/streamers/{r['tid']}")
+                ref.set(new_flags) if new_flags else ref.delete()
+                changed += 1
+        st.success(f"{changed} Streamer aktualisiert.")
+        st.rerun()
+    c2.caption("➖ = es gilt die globale Einstellung · ✅ = für diesen Streamer frei · ⛔ = für diesen Streamer gesperrt")
+
+
 def main():
     require_login()
     init_firebase()
@@ -245,18 +330,22 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    left, right = st.columns([1, 2], gap="large")
-    with left:
-        st.subheader("Streamer")
-        search = st.text_input("Suche", placeholder="Twitch-Name ...", label_visibility="collapsed")
-        only_online = st.toggle("Nur online", value=False)
-        streamer_list(search, only_online)
-    with right:
-        try:
-            rows_by_tid = {r["tid"]: r for r in load_streamers()}
-        except Exception:
-            rows_by_tid = {}
-        chat_panel(rows_by_tid)
+    tab_support, tab_games = st.tabs(["💬 Support", "🎮 Game-Freigaben"])
+    with tab_support:
+        left, right = st.columns([1, 2], gap="large")
+        with left:
+            st.subheader("Streamer")
+            search = st.text_input("Suche", placeholder="Twitch-Name ...", label_visibility="collapsed")
+            only_online = st.toggle("Nur online", value=False)
+            streamer_list(search, only_online)
+        with right:
+            try:
+                rows_by_tid = {r["tid"]: r for r in load_streamers()}
+            except Exception:
+                rows_by_tid = {}
+            chat_panel(rows_by_tid)
+    with tab_games:
+        games_panel()
 
 
 main()
