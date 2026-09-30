@@ -209,6 +209,9 @@ def fulfill(code, manual=False):
         ref.transaction(claim)
     except _Skip:
         return False, "Die Bestellung wird gerade verarbeitet oder ist schon verbucht."
+    if order.get("item") == "tourskip":        # Rundgang-Überspringen: Freigabe für die App (tour_skip/{tid})
+        db.reference(f"tour_skip/{order['tid']}").set({"order": ref.key, "ts": {".sv": "timestamp"}})
+        return True, f"✅ Zahlung erhalten! Danke für deine Spende. Das Überspringen ist für **{order['name']}** freigeschaltet. Klicke in der App auf „Ich habe bezahlt – prüfen“."
     for g in order.get("games", []):
         db.reference(f"game_flags/streamers/{order['tid']}/{g}").set(True)
     if "gift_from" in order:      # Geschenk: Nachricht für den Streamer (wird in der App angezeigt)
@@ -274,7 +277,8 @@ def _card(iid, it, items, have, cart):
 
 
 def _order_box():
-    code, price = st.session_state["order"]
+    key = "skip_order" if st.session_state.get("skip_order") else "order"
+    code, price = st.session_state[key]
     with st.container(border=True):
         st.markdown("### 💳 Jetzt bezahlen")
         st.markdown(f"**1.** Öffne die Tip-Seite  \n**2.** Betrag: **{price} €** (oder mehr)  \n**3.** Nachricht: exakt diesen Code")
@@ -284,14 +288,14 @@ def _order_box():
         if st.button("🔍 Zahlung prüfen", type="primary", use_container_width=True):
             ok, msg = fulfill(code)
             if ok:
-                st.session_state.pop("order")
+                st.session_state.pop(key)
                 st.balloons()
                 st.success(msg)
             else:
                 st.warning(msg)
         if st.button("Abbrechen", use_container_width=True):
             cancel_order(code)
-            st.session_state.pop("order")
+            st.session_state.pop(key)
             st.rerun()
 
 
@@ -402,6 +406,45 @@ def render_shop(games):
     with st.expander("Rechtliches"):
         s = st.secrets.get("shop", {})
         st.markdown(f"[Impressum]({s.get('impressum_url', '#')}) · [AGB]({s.get('agb_url', '#')}) · [Widerruf]({s.get('widerruf_url', '#')})")
+
+
+SKIP_PRICE = "2.00"
+
+
+def render_tour_skip():
+    """Öffentliche Seite /?skip=1&u=<twitchname>: 2 € Spende, um den Rundgang in der App zu überspringen."""
+    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>⏭ Rundgang überspringen</h1><p>Einmalig 2 € Spende. Danach kannst du jeden Rundgang in der App überspringen.</p>'
+                '<div class="steps"><span>1 · Twitch-Name eingeben</span><span>2 · Code erzeugen</span><span>3 · Per Tip bezahlen</span><span>4 · In der App prüfen</span></div></div>',
+                unsafe_allow_html=True)
+    name = st.text_input("Dein Twitch-Name", value=str(st.query_params.get("u", "")), placeholder="z.B. meinkanal")
+    if not name.strip():
+        st.info("Gib deinen Twitch-Namen ein. Du musst die Streamdex-App mindestens einmal gestartet haben.")
+        return
+    tid, p = find_streamer(name)
+    if not tid:
+        st.error("Kein Konto mit diesem Namen gefunden. Starte die Streamdex-App einmal mit deinem Twitch-Account.")
+        return
+    if st.session_state.get("skip_tid") != tid:
+        st.session_state.pop("skip_order", None)
+        st.session_state["skip_tid"] = tid
+    if db.reference(f"tour_skip/{tid}").get():
+        st.success(f"✅ Für **{p.get('twitch_username')}** ist das Überspringen schon freigeschaltet. Klicke in der App auf „Ich habe bezahlt – prüfen“.")
+        return
+    if not st.session_state.get("skip_order"):
+        st.caption(f"Konto: **{p.get('twitch_username')}**")
+        if st.button(f"🧾 Bestellcode für {SKIP_PRICE} € erzeugen", type="primary"):
+            code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+            db.reference(f"shop/orders/{code}").set({
+                "tid": tid, "name": p.get("twitch_username"), "item": "tourskip", "item_name": "Rundgang überspringen",
+                "items": [], "games": [], "price": SKIP_PRICE, "gross": SKIP_PRICE, "status": "pending", "ts": {".sv": "timestamp"}})
+            st.session_state["skip_order"] = (code, SKIP_PRICE)
+            st.rerun()
+    else:
+        _order_box()
+    with st.expander("Rechtliches"):
+        sec = st.secrets.get("shop", {})
+        st.markdown(f"[Impressum]({sec.get('impressum_url', '#')}) · [AGB]({sec.get('agb_url', '#')}) · [Widerruf]({sec.get('widerruf_url', '#')})")
 
 
 def admin_shop_panel(games):
