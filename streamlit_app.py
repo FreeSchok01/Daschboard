@@ -18,6 +18,7 @@ from firebase_admin import credentials, db
 
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop
 from stats_panel import stats_panel
+from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -173,11 +174,11 @@ def load_messages(tid):
     return msgs
 
 
-def send_admin_message(tid, text):
+def send_admin_message(tid, text, name=ADMIN_NAME):
     text = text.strip()[:2000]
     if not text:
         return
-    db.reference(f"chats/{tid}/messages").push({"sender": "admin", "name": ADMIN_NAME, "text": text, "ts": SERVER_TS})
+    db.reference(f"chats/{tid}/messages").push({"sender": "admin", "name": name, "text": text, "ts": SERVER_TS})
     db.reference(f"chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "admin", "last_text": text[:100]})
 
 
@@ -232,7 +233,7 @@ def chat_messages(tid):
         mark_read(tid, max(int(m.get("ts") or 0) for m in msgs))
 
 
-def chat_panel(rows_by_tid):
+def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True):
     tid = st.session_state.get("selected_tid")
     if not tid:
         st.info("⬅️ Wähle links einen Streamer aus, um den Chat zu öffnen.")
@@ -249,21 +250,22 @@ def chat_panel(rows_by_tid):
     prompt = st.chat_input(f"Antwort an {name} ...")
     if prompt:
         try:
-            send_admin_message(tid, prompt)
+            send_admin_message(tid, prompt, sender_name)
         except Exception as e:
             st.error(f"Senden fehlgeschlagen: {e}")
     with messages_area:
         chat_messages(tid)
 
-    with st.expander("⚙️ Aktionen"):
-        st.caption(
-            "Setzt die Geräte-Bindung des Streamers zurück (z.B. nach Neuinstallation oder PC-Wechsel), "
-            "sodass sich beim nächsten Start ein neues Gerät registrieren kann."
-        )
-        confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{tid}")
-        if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{tid}"):
-            db.reference(f"presence/{tid}/uid").delete()
-            st.success("Zurückgesetzt.")
+    if allow_actions:
+        with st.expander("⚙️ Aktionen"):
+            st.caption(
+                "Setzt die Geräte-Bindung des Streamers zurück (z.B. nach Neuinstallation oder PC-Wechsel), "
+                "sodass sich beim nächsten Start ein neues Gerät registrieren kann."
+            )
+            confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{tid}")
+            if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{tid}"):
+                db.reference(f"presence/{tid}/uid").delete()
+                st.success("Zurückgesetzt.")
 
 
 def games_panel():
@@ -404,7 +406,52 @@ def bans_panel():
             st.rerun()
 
 
+def support_main():
+    st.set_page_config(page_title="Streamdex Support", page_icon="🛟", layout="wide")
+    init_firebase()
+    me = supporter_login()                      # stoppt, bis ein aktiver Supporter angemeldet ist
+    top_l, top_r = st.columns([6, 1])
+    top_l.title("🛟 Streamdex Support")
+    top_l.caption(f"Angemeldet als **{me['name']}**")
+    if top_r.button("Abmelden"):
+        st.session_state.clear()
+        st.rerun()
+
+    tab_chat, tab_games, tab_codes, tab_beta, tab_team = st.tabs(
+        ["💬 Live-Chat", "🎮 Freigaben", "🎟️ Partner-Codes", "🧪 Beta", "💭 Team-Chat"])
+    with tab_chat:
+        left, right = st.columns([1, 2], gap="large")
+        with left:
+            st.subheader("Streamer")
+            search = st.text_input("Suche", placeholder="Twitch-Name ...", label_visibility="collapsed")
+            only_online = st.toggle("Nur online", value=False)
+            streamer_list(search, only_online)
+        with right:
+            try:
+                rows_by_tid = {r["tid"]: r for r in load_streamers()}
+            except Exception:
+                rows_by_tid = {}
+            chat_panel(rows_by_tid, sender_name=me["name"], allow_actions=False)
+    with tab_games:
+        games_panel()
+    with tab_codes:
+        try:
+            partner_codes_view()
+        except Exception as e:
+            st.error(f"Firebase-Fehler: {e}")
+    with tab_beta:
+        try:
+            admin_beta_panel(GAMES, load_streamers())
+        except Exception as e:
+            st.error(f"Firebase-Fehler: {e}")
+    with tab_team:
+        team_chat_panel(me["name"])
+
+
 def main():
+    if "support" in st.query_params:           # Supporter: /?support=1
+        support_main()
+        return
     if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
         init_firebase()
@@ -420,7 +467,7 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_bans = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", "🚫 Sperren"])
+    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_bans, tab_sups, tab_team = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"])
     with tab_support:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -452,6 +499,13 @@ def main():
             st.error(f"Firebase-Fehler: {e}")
     with tab_bans:
         bans_panel()
+    with tab_sups:
+        try:
+            admin_supporter_panel()
+        except Exception as e:
+            st.error(f"Firebase-Fehler: {e}")
+    with tab_team:
+        team_chat_panel(ADMIN_NAME)
 
 
 main()
