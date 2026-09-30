@@ -21,6 +21,7 @@ from feedback_inbox import feedback_panel, new_count
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
+from theme import apply_theme, header_html
 
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -61,7 +62,8 @@ def require_login():
     except Exception:
         st.error("`[admin] password` fehlt in den Secrets.")
         st.stop()
-    st.title("🛟 TwitchHub Admin")
+    apply_theme()
+    st.markdown(header_html("ADMIN LOGIN", "LOCKED"), unsafe_allow_html=True)
     with st.form("login"):
         pw = st.text_input("Passwort", type="password")
         if st.form_submit_button("Anmelden"):
@@ -416,10 +418,10 @@ def _fb_label():
 def support_main():
     st.set_page_config(page_title="Streamdex Support", page_icon="🛟", layout="wide")
     init_firebase()
+    apply_theme()
     me = supporter_login()                      # stoppt, bis ein aktiver Supporter angemeldet ist
-    top_l, top_r = st.columns([6, 1])
-    top_l.title("🛟 Streamdex Support")
-    top_l.caption(f"Angemeldet als **{me['name']}**")
+    top_l, top_r = st.columns([6, 1], vertical_alignment="center")
+    top_l.markdown(header_html(f"SUPPORT · {me['name']}"), unsafe_allow_html=True)
     if top_r.button("Abmelden"):
         st.session_state.clear()
         st.rerun()
@@ -468,24 +470,28 @@ def main():
     if "beta" in st.query_params:              # Öffentlich: Beta-Bewerbung /?beta=1
         st.set_page_config(page_title="Streamdex Beta", page_icon="🧪")
         init_firebase()
+        apply_theme()
         render_beta_apply()
         return
     if "skip" in st.query_params:              # Öffentlich: Rundgang überspringen /?skip=1
         st.set_page_config(page_title="Streamdex Rundgang überspringen", page_icon="⏭")
         init_firebase()
+        apply_theme()
         render_tour_skip()
         return
     if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
         init_firebase()
+        apply_theme()
         render_shop(GAMES)
         return
     st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
     require_login()
     init_firebase()
+    apply_theme()
 
-    top_l, top_r = st.columns([6, 1])
-    top_l.title("🛟 TwitchHub Admin")
+    top_l, top_r = st.columns([6, 1], vertical_alignment="center")
+    top_l.markdown(header_html("ADMIN"), unsafe_allow_html=True)
     if top_r.button("Abmelden"):
         st.session_state.clear()
         st.rerun()
