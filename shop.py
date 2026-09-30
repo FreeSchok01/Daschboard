@@ -133,7 +133,7 @@ def cancel_order(code):
         db.reference(f"shop/orders/{code}").delete()
 
 
-def create_cart_order(tid, name, ids, items, coupon=""):
+def create_cart_order(tid, name, ids, items, coupon="", gift=None):
     code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
     games = sorted({g for i in ids for g in items[i].get("games", [])})
     total = sum(Decimal(_price(items[i]["price"])) for i in ids)
@@ -152,6 +152,8 @@ def create_cart_order(tid, name, ids, items, coupon=""):
              "items": ids, "games": games, "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
     if ok:
         order.update(coupon=c["code"], coupon_type=c.get("type", "percent"), partner=c.get("partner", ""), discount=_price(disc))
+    if gift:
+        order.update(gift_from=str(gift.get("from", ""))[:40], gift_msg=str(gift.get("msg", ""))[:100])
     db.reference(f"shop/orders/{code}").set(order)
     return code, _price(final)
 
@@ -209,6 +211,12 @@ def fulfill(code, manual=False):
         return False, "Die Bestellung wird gerade verarbeitet oder ist schon verbucht."
     for g in order.get("games", []):
         db.reference(f"game_flags/streamers/{order['tid']}/{g}").set(True)
+    if "gift_from" in order:      # Geschenk: Nachricht für den Streamer (wird in der App angezeigt)
+        try:
+            db.reference(f"gifts/{order['tid']}/{ref.key}").set({"from": order.get("gift_from", ""), "msg": order.get("gift_msg", ""),
+                                                                 "items": order.get("item_name", ""), "ts": {".sv": "timestamp"}})
+        except Exception:
+            pass
     if order.get("coupon"):
         try:
             db.reference(f"shop/coupons/{order['coupon']}").transaction(
@@ -323,7 +331,7 @@ def _cart_box(tid, name, items, have):
         agree = st.checkbox("Ich stimme zu, dass die Freischaltung sofort erfolgt und mein Widerrufsrecht damit erlischt.")
         if st.button("🎁 Kostenlos freischalten" if final == 0 else "Bestellung anlegen", type="primary", disabled=not agree, use_container_width=True):
             try:
-                oc, op = create_cart_order(tid, name, ids, items, cc if ok else "")
+                oc, op = create_cart_order(tid, name, ids, items, cc if ok else "", st.session_state.get("gift_data"))
             except ValueError as e:
                 st.error(str(e))
             else:
@@ -367,6 +375,14 @@ def render_shop(games):
         st.info("Aktuell gibt es keine Angebote.")
         return
     st.caption(f"✅ Konto: **{p.get('twitch_username')}** · App {p.get('app_version', '?')} · {len(have)} Game(s) freigeschaltet")
+    gift = st.toggle(f"🎁 Als Geschenk für {p.get('twitch_username')} kaufen", value=str(st.query_params.get("gift", "")) == "1")
+    st.session_state["gift_data"] = None
+    if gift:
+        g1, g2 = st.columns(2)
+        gf = g1.text_input("Dein Name (optional)", max_chars=40, placeholder="z.B. dein Twitch-Name")
+        gm = g2.text_input("Nachricht (optional)", max_chars=100, placeholder="z.B. Viel Spaß mit den Games!")
+        st.session_state["gift_data"] = {"from": gf.strip(), "msg": gm.strip()}
+        st.caption("Bezahle wie gewohnt per Tip. Der Streamer bekommt die Freischaltung automatisch.")
     cart = st.session_state.get("cart", [])
     left, right = st.columns([3, 1.3], gap="large")
     with left:
@@ -462,7 +478,7 @@ def admin_shop_panel(games):
     c1, c2 = st.columns(2)
     c1.metric("Umsatz (brutto, vor Gebühren)", f"{paid['price'].sum():.2f} €")
     c2.metric("Bezahlte Bestellungen", len(paid))
-    st.dataframe(df[["ts", "name", "item_name", "price", "status", "order_id"]].sort_values("ts", ascending=False), hide_index=True, use_container_width=True)
+    st.dataframe(df[["ts", "name", "item_name", "price", "status", "order_id"] + [c for c in ("gift_from", "gift_msg") if c in df]].sort_values("ts", ascending=False), hide_index=True, use_container_width=True)
     with st.expander("🗑️ Bestellungen löschen"):
         lab = {r.order_id: f"{r.order_id} · {r.name} · {str(r.item_name)[:40]} · {r.price:.2f} € · {r.status}" for r in df.itertuples()}
         sel = st.multiselect("Bestellungen", list(lab), format_func=lab.get)
