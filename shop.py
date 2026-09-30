@@ -114,7 +114,7 @@ def fulfill(code, manual=False):
 def render_shop():
     st.title("🛒 Streamdex Shop")
     st.caption("Schalte zusätzliche Funktionen für deinen Twitch-Kanal frei. Bezahlung per StreamElements-Tip (PayPal, Karte u.a.).")
-    name = st.text_input("Dein Twitch-Name", placeholder="z.B. meinkanal")
+    name = st.text_input("Dein Twitch-Name", value=str(st.query_params.get("u", "")), placeholder="z.B. meinkanal")
     if not name.strip():
         st.info("Gib deinen Twitch-Namen ein. Du musst die Streamdex-App mindestens einmal gestartet haben.")
         return
