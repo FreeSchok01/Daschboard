@@ -1,7 +1,7 @@
-"""Öffentlicher Streamdex-Shop (PayPal) + Admin-Panel für Katalog und Bestellungen.
-Kauf -> PayPal-Order (serverseitig) -> Rückkehr -> Capture + Prüfung -> game_flags/streamers/{tid}/{game}=True.
+"""Öffentlicher Streamdex-Shop (bezahlt per StreamElements-Tip) + Admin-Panel für Katalog und Bestellungen.
+Kauf -> Bestellcode -> Tip mit Code in der Nachricht -> Server gleicht per SE-API ab -> game_flags/streamers/{tid}/{game}=True.
 Die App übernimmt die Freischaltung beim nächsten Heartbeat (~60 s), ohne App-Änderung."""
-import time
+import secrets
 from decimal import Decimal
 
 import pandas as pd
@@ -12,15 +12,6 @@ from firebase_admin import db
 
 class _Skip(Exception):
     pass
-
-
-def _pp():
-    c = st.secrets["paypal"]
-    base = "https://api-m.sandbox.paypal.com" if c.get("mode", "sandbox") == "sandbox" else "https://api-m.paypal.com"
-    r = requests.post(f"{base}/v1/oauth2/token", data={"grant_type": "client_credentials"},
-                      auth=(c["client_id"], c["client_secret"]), timeout=15)
-    r.raise_for_status()
-    return base, {"Authorization": f"Bearer {r.json()['access_token']}", "Content-Type": "application/json"}
 
 
 def _price(x):
@@ -51,79 +42,78 @@ def owned_games(tid):
     return {g for g in set(own) | set(glob) if own.get(g) is True or (not isinstance(own.get(g), bool) and glob.get(g) is True)}
 
 
+def _se():
+    return {"Authorization": f"Bearer {st.secrets['streamelements']['jwt']}"}
+
+
 def create_order(tid, name, item_id, item):
-    base, h = _pp()
-    url = st.secrets["shop"]["base_url"].rstrip("/")
+    code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
     price = _price(item["price"])
-    body = {"intent": "CAPTURE",
-            "purchase_units": [{"custom_id": f"{tid}:{item_id}", "description": str(item["name"])[:120],
-                                "amount": {"currency_code": "EUR", "value": price}}],
-            "payment_source": {"paypal": {"experience_context": {
-                "return_url": f"{url}/?shop=return", "cancel_url": f"{url}/?shop=cancel",
-                "user_action": "PAY_NOW", "brand_name": "Streamdex", "shipping_preference": "NO_SHIPPING"}}}}
-    r = requests.post(f"{base}/v2/checkout/orders", json=body, headers=h, timeout=15)
+    db.reference(f"shop/orders/{code}").set({"tid": tid, "name": name, "item": item_id, "item_name": item["name"],
+                                            "games": item.get("games", []), "price": price, "status": "pending",
+                                            "ts": {".sv": "timestamp"}})
+    return code, item_id, price
+
+
+def _find_tip(code, price):
+    h = _se()
+    api = "https://api.streamelements.com/kappa/v2"
+    r = requests.get(f"{api}/channels/me", headers=h, timeout=15)
     r.raise_for_status()
-    j = r.json()
-    link = next(l["href"] for l in j["links"] if l["rel"] in ("payer-action", "approve"))
-    db.reference(f"shop/orders/{j['id']}").set({"tid": tid, "name": name, "item": item_id, "item_name": item["name"],
-                                               "games": item.get("games", []), "price": price, "status": "created",
-                                               "ts": {".sv": "timestamp"}})
-    return link
+    r = requests.get(f"{api}/tips/{r.json()['_id']}", params={"limit": 100}, headers=h, timeout=20)
+    r.raise_for_status()
+    cur = st.secrets["streamelements"].get("currency", "EUR").upper()
+    for t in r.json().get("docs", []):
+        d = t.get("donation") or {}
+        if (code in str(d.get("message", "")).upper() and t.get("status", "success") == "success"
+                and str(d.get("currency", "")).upper() == cur and Decimal(str(d.get("amount", 0))) >= Decimal(price)):
+            return t
+    return None
 
 
-def fulfill(oid):
-    """Gibt (ok, Text) zurück. Idempotent: eine Bestellung wird höchstens einmal verbucht."""
-    ref = db.reference(f"shop/orders/{oid}")
+def fulfill(code, manual=False):
+    """Gibt (ok, Text) zurück. Ein Tip und eine Bestellung werden höchstens einmal verbucht."""
+    ref = db.reference(f"shop/orders/{code.strip().upper()}")
     order = ref.get()
     if not isinstance(order, dict):
-        return False, "Unbekannte Bestellung."
+        return False, "Unbekannter Bestellcode."
     if order.get("status") == "paid":
-        return True, f"Bestellung bereits verbucht: **{order['item_name']}** für {order['name']}."
+        return True, f"Bereits verbucht: **{order['item_name']}** für {order['name']}."
+    tip_id = "manuell"
+    if not manual:
+        try:
+            tip = _find_tip(ref.key, order["price"])
+        except Exception as e:
+            return False, f"StreamElements-Abfrage fehlgeschlagen: {e}"
+        if not tip:
+            return False, "Noch keine passende Zahlung gefunden. Prüfe Betrag und Code in der Nachricht und versuche es in ein paar Sekunden erneut."
+        tip_id = str(tip["_id"])
+
+        def use(cur):
+            if cur:
+                raise _Skip()
+            return ref.key
+        try:
+            db.reference(f"shop/used_tips/{tip_id}").transaction(use)
+        except _Skip:
+            return False, "Diese Zahlung wurde schon einer anderen Bestellung zugeordnet."
 
     def claim(cur):
-        if not cur or cur.get("status") not in ("created", "error"):
+        if not cur or cur.get("status") != "pending":
             raise _Skip()
-        return dict(cur, status="processing")
+        return dict(cur, status="paid", tip_id=tip_id, paid_ts={".sv": "timestamp"})
     try:
         ref.transaction(claim)
     except _Skip:
-        return False, "Die Bestellung wird gerade verarbeitet. Bitte kurz warten und neu laden."
-    try:
-        base, h = _pp()
-        r = requests.post(f"{base}/v2/checkout/orders/{oid}/capture", headers={**h, "PayPal-Request-Id": oid}, timeout=20)
-        if r.status_code == 422:      # z.B. bereits erfasst -> Order abfragen
-            r = requests.get(f"{base}/v2/checkout/orders/{oid}", headers=h, timeout=15)
-        r.raise_for_status()
-        pu = r.json()["purchase_units"][0]
-        cap = pu["payments"]["captures"][0]
-        ok = (cap["status"] == "COMPLETED" and cap["amount"]["currency_code"] == "EUR"
-              and Decimal(cap["amount"]["value"]) == Decimal(order["price"])
-              and pu.get("custom_id") == f"{order['tid']}:{order['item']}")
-        if not ok:
-            raise ValueError(f"Zahlung nicht verifizierbar (Status {cap['status']}).")
-    except Exception as e:
-        ref.update({"status": "error", "error": str(e)[:300]})
-        return False, f"Zahlung konnte nicht bestätigt werden: {e}"
+        return False, "Die Bestellung wird gerade verarbeitet oder ist schon verbucht."
     for g in order.get("games", []):
         db.reference(f"game_flags/streamers/{order['tid']}/{g}").set(True)
-    ref.update({"status": "paid", "paid_ts": {".sv": "timestamp"}, "capture_id": cap["id"]})
     return True, f"✅ Zahlung erhalten! **{order['item_name']}** ist für **{order['name']}** freigeschaltet (in der App nach ca. 1 Minute aktiv)."
 
 
 def render_shop():
     st.title("🛒 Streamdex Shop")
-    st.caption("Schalte zusätzliche Funktionen für deinen Twitch-Kanal frei. Zahlung sicher per PayPal.")
-    q = st.query_params
-    if q.get("shop") == "return" and q.get("token"):
-        ok, msg = fulfill(str(q["token"]))
-        (st.success if ok else st.error)(msg)
-        if st.button("Zurück zum Shop"):
-            st.query_params.clear()
-            st.rerun()
-        return
-    if q.get("shop") == "cancel":
-        st.warning("Zahlung abgebrochen. Es wurde nichts abgebucht.")
-
+    st.caption("Schalte zusätzliche Funktionen für deinen Twitch-Kanal frei. Bezahlung per StreamElements-Tip (PayPal, Karte u.a.).")
     name = st.text_input("Dein Twitch-Name", placeholder="z.B. meinkanal")
     if not name.strip():
         st.info("Gib deinen Twitch-Namen ein. Du musst die Streamdex-App mindestens einmal gestartet haben.")
@@ -148,13 +138,15 @@ def render_shop():
             if it.get("games") and set(it["games"]) <= have:
                 c2.success("✅ Freigeschaltet")
             elif c2.button("Kaufen", key=f"buy_{iid}", disabled=not agree, use_container_width=True):
-                try:
-                    st.session_state["pay_link"] = (iid, create_order(tid, p.get("twitch_username"), iid, it))
-                except Exception as e:
-                    st.error(f"PayPal-Fehler: {e}")
-            pl = st.session_state.get("pay_link")
-            if pl and pl[0] == iid:
-                c2.link_button("➡️ Weiter zu PayPal", pl[1], use_container_width=True)
+                st.session_state["order"] = create_order(tid, p.get("twitch_username"), iid, it)
+            o = st.session_state.get("order")
+            if o and o[1] == iid:
+                st.info(f"1️⃣ Öffne die [Tip-Seite]({st.secrets['streamelements']['tip_url']})  \n"
+                        f"2️⃣ Betrag: **{o[2]} €** (oder mehr)  \n3️⃣ Nachricht: **`{o[0]}`** (genau so eintragen!)  \n"
+                        "4️⃣ Nach dem Bezahlen hier auf „Zahlung prüfen“ klicken.")
+                if st.button("🔍 Zahlung prüfen", key=f"chk_{iid}"):
+                    ok, msg = fulfill(o[0])
+                    (st.success if ok else st.warning)(msg)
     with st.expander("Rechtliches"):
         s = st.secrets.get("shop", {})
         st.markdown(f"[Impressum]({s.get('impressum_url', '#')}) · [AGB]({s.get('agb_url', '#')}) · [Widerruf]({s.get('widerruf_url', '#')})")
@@ -190,11 +182,17 @@ def admin_shop_panel(games):
     if df.empty:
         st.info("Noch keine Bestellungen.")
         return
+    pend = df[df["status"] == "pending"]["order_id"].tolist()
+    if pend:
+        c1, c2 = st.columns([3, 1])
+        code = c1.selectbox("Offene Bestellung manuell verbuchen (Tip ohne/mit falschem Code)", pend)
+        if c2.button("✅ Verbuchen"):
+            st.info(fulfill(code, manual=True)[1])
     df["price"] = df["price"].astype(float)
     df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).dt.tz_convert("Europe/Berlin").dt.strftime("%d.%m.%Y %H:%M")
     paid = df[df["status"] == "paid"]
     c1, c2 = st.columns(2)
-    c1.metric("Umsatz (brutto, vor PayPal-Gebühren)", f"{paid['price'].sum():.2f} €")
+    c1.metric("Umsatz (brutto, vor Gebühren)", f"{paid['price'].sum():.2f} €")
     c2.metric("Bezahlte Bestellungen", len(paid))
     st.dataframe(df[["ts", "name", "item_name", "price", "status", "order_id"]].sort_values("ts", ascending=False),
                  hide_index=True, use_container_width=True)
