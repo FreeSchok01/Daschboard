@@ -18,7 +18,7 @@ from firebase_admin import credentials, db
 
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
-from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop
+from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 
@@ -469,6 +469,11 @@ def main():
         st.set_page_config(page_title="Streamdex Beta", page_icon="🧪")
         init_firebase()
         render_beta_apply()
+        return
+    if "skip" in st.query_params:              # Öffentlich: Rundgang überspringen /?skip=1
+        st.set_page_config(page_title="Streamdex Rundgang überspringen", page_icon="⏭")
+        init_firebase()
+        render_tour_skip()
         return
     if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
