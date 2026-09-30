@@ -30,6 +30,10 @@ GAMES = {
     "slot": "🎰 Slot Machine",
     "megaslot": "🎡 Mega Slot",
     "steal": "🕵️ Taschenraub",
+    "raffel": "🎫 Raffel (!raffel)",
+    "gambel": "🎲 Gambel",
+    "hilo": "🃏 Hi-Lo",
+    "raffle": "🎟️ Punkte-Raffle",
     "fishing": "🎣 Angeln/Kraken",
     "mining": "⛏️ Minen",
     "farming": "🌱 Farm",
@@ -126,6 +130,8 @@ def load_streamers():
     presence = db.reference("presence").get() or {}
     meta = db.reference("chat_meta").get() or {}
     read = db.reference("admin_state/read").get() or {}
+    bans_tw = db.reference("bans/twitch").get() or {}
+    bans_hw = db.reference("bans/hwid").get() or {}
     now_ms = int(time.time() * 1000)
     rows = []
     for tid, p in presence.items():
@@ -137,7 +143,14 @@ def load_streamers():
         m = meta.get(tid) if isinstance(meta.get(tid), dict) else {}
         last_msg_ts = int(m.get("last_ts") or 0)
         unread = m.get("last_sender") == "streamer" and last_msg_ts > int(read.get(tid) or 0)
+        hw = [h for h in (p.get("hw_machine"), p.get("hw_board")) if isinstance(h, str) and len(h) == 64]
+        banned = tid in bans_tw
+        hw_banned = any(h in bans_hw for h in hw)
         rows.append({
+            "banned": banned,
+            "hw_banned": hw_banned and not banned,
+            "blocked": p.get("status") == "blocked",
+            "hw": hw,
             "tid": tid,
             "name": p.get("twitch_username") or tid,
             "version": p.get("app_version") or "?",
@@ -188,7 +201,7 @@ def streamer_list(search, only_online):
     if not shown:
         st.info("Keine Streamer gefunden.")
     for r in shown:
-        icon = "🟢" if r["online"] else "⚪"
+        icon = "🚫" if r["banned"] else "⚠️" if r["hw_banned"] else "🟢" if r["online"] else "⚪"
         badge = " 🔴" if r["unread"] else ""
         label = f"{icon} {r['name']}{badge} · {r['version']} · {fmt_ago(r['age'])}"
         selected = st.session_state.get("selected_tid") == r["tid"]
@@ -320,6 +333,75 @@ def games_panel():
     c2.caption("➖ = es gilt die globale Einstellung · ✅ = für diesen Streamer frei · ⛔ = für diesen Streamer gesperrt")
 
 
+def ban_streamer(row, reason, with_hw=True):
+    reason = (reason or "").strip()[:300] or "Kein Grund angegeben."
+    db.reference(f"bans/twitch/{row['tid']}").set({"reason": reason, "name": row["name"], "ts": SERVER_TS})
+    if with_hw:
+        for h in row["hw"]:
+            db.reference(f"bans/hwid/{h}").set({"reason": reason, "tid": row["tid"], "name": row["name"], "ts": SERVER_TS})
+
+
+def unban_streamer(tid):
+    db.reference(f"bans/twitch/{tid}").delete()
+    for h, v in (db.reference("bans/hwid").get() or {}).items():
+        if isinstance(v, dict) and str(v.get("tid")) == str(tid):
+            db.reference(f"bans/hwid/{h}").delete()
+
+
+def bans_panel():
+    st.caption(
+        "Ein Ausschluss sperrt die **gesamte App** (Bot, Games, Overlays, Support-Chat). Die App prüft die Sperre beim Start "
+        "und danach jede Minute. Mit **Hardware-Sperre** hilft auch ein neuer Twitch-Account nicht, solange er auf demselben PC läuft."
+    )
+    try:
+        rows = load_streamers()
+        bans_tw = db.reference("bans/twitch").get() or {}
+        bans_hw = db.reference("bans/hwid").get() or {}
+    except Exception as e:
+        st.error(f"Firebase-Fehler: {e}")
+        return
+
+    st.subheader("🚫 Streamer ausschließen")
+    candidates = [r for r in rows if not r["banned"]]
+    if not candidates:
+        st.info("Keine Streamer zum Ausschließen vorhanden.")
+    else:
+        by_label = {f"{r['name']} ({r['tid']})": r for r in candidates}
+        choice = st.selectbox("Streamer", list(by_label), key="ban_pick")
+        row = by_label[choice]
+        reason = st.text_input("Grund (sieht der Streamer)", key="ban_reason", max_chars=300)
+        with_hw = st.checkbox("Hardware mitsperren (verhindert neue Twitch-Accounts auf diesem PC)", value=True, key="ban_hw")
+        if with_hw and not row["hw"]:
+            st.warning("Von diesem Streamer liegt noch keine Geräte-Kennung vor (ältere App-Version). Es wird nur das Twitch-Konto gesperrt.")
+        elif with_hw:
+            st.caption("⚠️ Bei gemeinsam genutzten oder geklonten PCs kann die Hardware-Sperre Unbeteiligte treffen. Vorher prüfen.")
+        confirm = st.checkbox(f"Ja, {row['name']} wirklich ausschließen", key="ban_confirm")
+        if st.button("🚫 Ausschließen", type="primary", disabled=not confirm, key="ban_go"):
+            ban_streamer(row, reason, with_hw)
+            st.success(f"{row['name']} wurde ausgeschlossen.")
+            st.rerun()
+
+    alerts = [r for r in rows if r["hw_banned"] or (r["blocked"] and not r["banned"])]
+    if alerts:
+        st.subheader("⚠️ Mögliche Umgehungsversuche")
+        st.caption("Diese Konten laufen auf einem gesperrten Gerät, sind aber selbst (noch) nicht gesperrt.")
+        for r in alerts:
+            st.write(f"**{r['name']}** (`{r['tid']}`) · zuletzt aktiv {fmt_ago(r['age'])}")
+
+    st.subheader("📋 Aktive Sperren")
+    if not bans_tw:
+        st.info("Keine aktiven Sperren.")
+    for tid, b in bans_tw.items():
+        b = b if isinstance(b, dict) else {}
+        n_hw = sum(1 for v in bans_hw.values() if isinstance(v, dict) and str(v.get("tid")) == str(tid))
+        c1, c2 = st.columns([5, 1])
+        c1.write(f"🚫 **{b.get('name') or tid}** (`{tid}`) · seit {fmt_ts(b.get('ts'))} · {n_hw} Gerät(e) · Grund: {b.get('reason', '')}")
+        if c2.button("Aufheben", key=f"unban_{tid}"):
+            unban_streamer(tid)
+            st.success("Sperre aufgehoben.")
+            st.rerun()
+
+
 def main():
     require_login()
     init_firebase()
@@ -330,7 +412,7 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    tab_support, tab_games = st.tabs(["💬 Support", "🎮 Game-Freigaben"])
+    tab_support, tab_games, tab_bans = st.tabs(["💬 Support", "🎮 Game-Freigaben", "🚫 Sperren"])
     with tab_support:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -346,6 +428,8 @@ def main():
             chat_panel(rows_by_tid)
     with tab_games:
         games_panel()
+    with tab_bans:
+        bans_panel()
 
 
 main()
