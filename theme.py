@@ -48,6 +48,16 @@ button[role="tab"]:hover{border-color:var(--primary)!important}
 /* verschachtelte Reiter (Beta) dezenter */
 div[role="tabpanel"] div[role="tablist"] button[role="tab"][aria-selected="true"]{background:rgba(168,85,247,.25)!important;box-shadow:none}
 
+/* ---------- Tool-Leiste (Streamdex OS) ---------- */
+.st-key-os_nav div[role="radiogroup"]{gap:8px;flex-wrap:nowrap;overflow-x:auto}
+.st-key-os_nav label{flex:1;justify-content:center;background:rgba(30,41,59,.6);border:1px solid var(--line);
+ border-radius:12px;padding:10px 16px;cursor:pointer;transition:all .2s;margin:0}
+.st-key-os_nav label>div:first-child{display:none}
+.st-key-os_nav label p{font-weight:800;color:var(--muted);text-align:center;white-space:nowrap}
+.st-key-os_nav label:has(input:checked){background:linear-gradient(135deg,rgba(168,85,247,.35),rgba(6,182,212,.25));
+ border-color:var(--primary);box-shadow:0 0 14px var(--glow)}
+.st-key-os_nav label:has(input:checked) p{color:#fff}
+
 /* ---------- Karten ---------- */
 div[data-testid="stVerticalBlockBorderWrapper"]{background:var(--panel);border:1px solid var(--line)!important;
  border-radius:14px;backdrop-filter:blur(20px);box-shadow:0 8px 25px rgba(0,0,0,.4)}
