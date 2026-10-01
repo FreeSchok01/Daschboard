@@ -17,8 +17,8 @@ html,body,[class*="css"],.stApp{font-family:'Plus Jakarta Sans',sans-serif}
  background-image:radial-gradient(circle at 10% 10%,rgba(168,85,247,.08) 0%,transparent 40%),
                   radial-gradient(circle at 90% 90%,rgba(6,182,212,.08) 0%,transparent 40%);
  background-attachment:fixed}
-header[data-testid="stHeader"]{background:rgba(3,7,18,.6);backdrop-filter:blur(12px)}
-.block-container{padding-top:1.2rem;max-width:1400px}
+header[data-testid="stHeader"]{background:rgba(3,7,18,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.block-container,[data-testid="stMainBlockContainer"]{padding-top:4.5rem!important;max-width:1400px}
 h1,h2,h3{font-weight:800;letter-spacing:-.01em}
 h2,h3{font-size:1.15rem!important}
 [data-testid="stCaptionContainer"],.stCaption{color:var(--muted)}
@@ -37,16 +37,16 @@ h2,h3{font-size:1.15rem!important}
 @keyframes sdp{0%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.4}100%{transform:scale(1);opacity:1}}
 
 /* ---------- Reiter als wischbare Pillen ---------- */
-div[data-baseweb="tab-list"]{gap:8px;overflow-x:auto;scrollbar-width:none;padding:4px 2px 8px}
-div[data-baseweb="tab-list"]::-webkit-scrollbar{display:none}
-div[data-baseweb="tab-highlight"],div[data-baseweb="tab-border"]{display:none}
-button[data-baseweb="tab"]{background:rgba(30,41,59,.6);border:1px solid var(--line);border-radius:8px;
- padding:8px 14px;height:auto;white-space:nowrap;transition:all .2s}
-button[data-baseweb="tab"] p{font-size:.82rem;font-weight:600;color:var(--muted)}
-button[data-baseweb="tab"][aria-selected="true"]{background:var(--primary);border-color:var(--primary);box-shadow:0 0 12px var(--glow)}
-button[data-baseweb="tab"][aria-selected="true"] p{color:#fff}
-/* verschachtelte Reiter (Beta) etwas dezenter */
-div[data-baseweb="tab-panel"] div[data-baseweb="tab-list"] button[data-baseweb="tab"][aria-selected="true"]{background:rgba(168,85,247,.25);box-shadow:none;border-color:var(--primary)}
+div[data-baseweb="tab-list"],div[role="tablist"]{gap:8px!important;overflow-x:auto;scrollbar-width:none;padding:4px 2px 10px;border:none!important}
+div[data-baseweb="tab-list"]::-webkit-scrollbar,div[role="tablist"]::-webkit-scrollbar{display:none}
+div[data-baseweb="tab-highlight"],div[data-baseweb="tab-border"]{display:none!important;background:transparent!important;height:0!important}
+button[data-baseweb="tab"],button[role="tab"]{background:rgba(30,41,59,.6)!important;border:1px solid var(--line)!important;border-radius:8px!important;
+ padding:8px 14px!important;height:auto!important;white-space:nowrap;transition:all .2s;color:var(--muted)!important}
+button[role="tab"] p,button[role="tab"] span,button[role="tab"] div{font-size:.82rem;font-weight:600;color:inherit!important}
+button[role="tab"][aria-selected="true"]{background:var(--primary)!important;border-color:var(--primary)!important;box-shadow:0 0 12px var(--glow);color:#fff!important}
+button[role="tab"]:hover{border-color:var(--primary)!important}
+/* verschachtelte Reiter (Beta) dezenter */
+div[role="tabpanel"] div[role="tablist"] button[role="tab"][aria-selected="true"]{background:rgba(168,85,247,.25)!important;box-shadow:none}
 
 /* ---------- Karten ---------- */
 div[data-testid="stVerticalBlockBorderWrapper"]{background:var(--panel);border:1px solid var(--line)!important;
@@ -86,7 +86,7 @@ div[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"
 
 /* ---------- Mobil ---------- */
 @media (max-width:640px){
- .block-container{padding:.6rem .7rem 5rem}
+ .block-container,[data-testid="stMainBlockContainer"]{padding:4rem .7rem 5rem!important}
  .sd-head{padding:8px 10px}.sd-sub{display:none}
  button[data-baseweb="tab"]{padding:7px 11px}
 }
