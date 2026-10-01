@@ -14,7 +14,7 @@ from feedback_inbox import feedback_panel
 NS = "lurk"
 STAT_KEYS = {
     "channels": "Kanäle", "favorites": "Favoriten", "auto_open": "Auto-Open", "auto_commands": "Auto-Befehle",
-    "watch_hours": "Watch-Stunden", "watched_channels": "Geschaute Kanäle", "streams_open": "Offene Streams",
+    "watch_hours": "Lurk-Stunden", "watched_channels": "Kanäle mit Lurk-Zeit", "streams_open": "Live-Kanäle (gelurkt)",
 }
 
 
@@ -59,7 +59,7 @@ def lurk_stats(rows):
 
     l, r_ = st.columns(2)
     with l:
-        st.subheader("🏆 Top-Nutzer (Watch-Stunden)")
+        st.subheader("🏆 Top-Nutzer (Lurk-Stunden)")
         names = {r["tid"]: r["name"] for r in rows}
         if stats:
             top = pd.Series({names.get(t, t): _num(s.get("watch_hours")) for t, s in stats.items()}).sort_values(ascending=False).head(10)
@@ -77,7 +77,7 @@ def lurk_stats(rows):
     if rows:
         df = pd.DataFrame([{"Nutzer": r["name"], "Online": r["online"], "Version": r["version"],
                             **{STAT_KEYS[k]: _num((stats.get(r["tid"]) or {}).get(k)) for k in STAT_KEYS}} for r in rows])
-        st.dataframe(df.sort_values("Watch-Stunden", ascending=False), hide_index=True, use_container_width=True)
+        st.dataframe(df.sort_values("Lurk-Stunden", ascending=False), hide_index=True, use_container_width=True)
 
 
 def lurk_panel(*, load_streamers, streamer_list, chat_panel, bans_panel, fb_label, me):
