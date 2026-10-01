@@ -32,22 +32,31 @@ def _load():
     return items
 
 
+def _for_tool(items, tool):
+    """Reports der Lurk-App tragen "Lurk ..." in der Version. tool: None (alle), "lurk" oder "streamdex"."""
+    if tool == "lurk":
+        return [m for m in items if str(m.get("version", "")).startswith("Lurk")]
+    if tool == "streamdex":
+        return [m for m in items if not str(m.get("version", "")).startswith("Lurk")]
+    return items
+
+
 @st.cache_data(ttl=30, show_spinner=False)
-def new_count():
+def new_count(tool=None):
     """Anzahl neuer Einträge für das Tab-Label."""
     try:
-        return sum(1 for m in _load() if m.get("status", "neu") == "neu")
+        return sum(1 for m in _for_tool(_load(), tool) if m.get("status", "neu") == "neu")
     except Exception:
         return 0
 
 
-def feedback_panel(me, is_admin=False):
+def feedback_panel(me, is_admin=False, tool=None):
     st.subheader("🐞 Bugs, Feedback & Ideen")
-    st.caption("Kommt direkt aus der App der Streamer (Reiter „Feedback & Bugs“). Status und Notiz sind für alle im Team sichtbar.")
+    st.caption("Kommt direkt aus der App der Streamer (Reiter „Feedback & Bugs“)" + (" · nur Lurk-App" if tool == "lurk" else "") + ". Status und Notiz sind für alle im Team sichtbar.")
     if st.button("🔄 Aktualisieren", key="fb_refresh"):
         new_count.clear()
     try:
-        items = _load()
+        items = _for_tool(_load(), tool)
     except Exception as e:
         st.error(f"Firebase-Fehler: {e}")
         return
