@@ -18,6 +18,7 @@ from firebase_admin import credentials, db
 
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
+from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
@@ -46,6 +47,9 @@ GAMES = {
     "race": "🏎️ Sim Racing",
     "arena": "🚶 Arena",
 }
+# Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
+TOOLS = {"streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk"}
+
 OPT_DEFAULT = "➖ wie global"
 OPT_ON = "✅ frei"
 OPT_OFF = "⛔ gesperrt"
@@ -495,6 +499,13 @@ def main():
     if top_r.button("Abmelden"):
         st.session_state.clear()
         st.rerun()
+
+    with st.container(key="os_nav"):
+        tool = st.radio("Tool", list(TOOLS), format_func=TOOLS.get, horizontal=True,
+                        label_visibility="collapsed", key="os_tool")
+    if tool == "lurk":
+        lurk_panel()
+        return
 
     tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"])
     with tab_support:
