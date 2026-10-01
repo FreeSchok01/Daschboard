@@ -137,10 +137,15 @@ def fmt_ts(ms):
         return ""
 
 
-def load_streamers():
-    presence = db.reference("presence").get() or {}
-    meta = db.reference("chat_meta").get() or {}
-    read = db.reference("admin_state/read").get() or {}
+def _p(ns=""):
+    """Pfad-Präfix: leer = StreamDex (Giveaway-Tool), \"lurk\" = Lurk-App."""
+    return f"{ns}/" if ns else ""
+
+
+def load_streamers(ns=""):
+    presence = db.reference(f"{_p(ns)}presence").get() or {}
+    meta = db.reference(f"{_p(ns)}chat_meta").get() or {}
+    read = db.reference(f"{_p(ns)}admin_state/read").get() or {}
     bans_tw = db.reference("bans/twitch").get() or {}
     bans_hw = db.reference("bans/hwid").get() or {}
     now_ms = int(time.time() * 1000)
@@ -175,33 +180,34 @@ def load_streamers():
     return rows
 
 
-def load_messages(tid):
-    data = db.reference(f"chats/{tid}/messages").order_by_child("ts").limit_to_last(300).get() or {}
+def load_messages(tid, ns=""):
+    data = db.reference(f"{_p(ns)}chats/{tid}/messages").order_by_child("ts").limit_to_last(300).get() or {}
     msgs = [dict(v, id=k) for k, v in data.items() if isinstance(v, dict)]
     msgs.sort(key=lambda m: (int(m.get("ts") or 0), m["id"]))
     return msgs
 
 
-def send_admin_message(tid, text, name=ADMIN_NAME):
+def send_admin_message(tid, text, name=ADMIN_NAME, ns=""):
     text = text.strip()[:2000]
     if not text:
         return
-    db.reference(f"chats/{tid}/messages").push({"sender": "admin", "name": name, "text": text, "ts": SERVER_TS})
-    db.reference(f"chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "admin", "last_text": text[:100]})
+    db.reference(f"{_p(ns)}chats/{tid}/messages").push({"sender": "admin", "name": name, "text": text, "ts": SERVER_TS})
+    db.reference(f"{_p(ns)}chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "admin", "last_text": text[:100]})
 
 
-def mark_read(tid, up_to_ts):
+def mark_read(tid, up_to_ts, ns=""):
     if up_to_ts:
-        db.reference(f"admin_state/read/{tid}").set(int(up_to_ts))
+        db.reference(f"{_p(ns)}admin_state/read/{tid}").set(int(up_to_ts))
 
 
 # ----------------------------------------------------------------------------
 # UI
 # ----------------------------------------------------------------------------
 @st.fragment(run_every=LIST_REFRESH_SECONDS)
-def streamer_list(search, only_online):
+def streamer_list(search, only_online, ns=""):
+    sel_key = f"selected_tid_{ns}" if ns else "selected_tid"
     try:
-        rows = load_streamers()
+        rows = load_streamers(ns)
     except Exception as e:
         st.error(f"Firebase-Fehler: {e}")
         return
@@ -215,16 +221,16 @@ def streamer_list(search, only_online):
         icon = "🚫" if r["banned"] else "⚠️" if r["hw_banned"] else "🟢" if r["online"] else "⚪"
         badge = " 🔴" if r["unread"] else ""
         label = f"{icon} {r['name']}{badge} · {r['version']} · {fmt_ago(r['age'])}"
-        selected = st.session_state.get("selected_tid") == r["tid"]
-        if st.button(label, key=f"sel_{r['tid']}", use_container_width=True, type="primary" if selected else "secondary"):
-            st.session_state["selected_tid"] = r["tid"]
+        selected = st.session_state.get(sel_key) == r["tid"]
+        if st.button(label, key=f"sel_{ns}_{r['tid']}", use_container_width=True, type="primary" if selected else "secondary"):
+            st.session_state[sel_key] = r["tid"]
             st.rerun(scope="app")
 
 
 @st.fragment(run_every=CHAT_REFRESH_SECONDS)
-def chat_messages(tid):
+def chat_messages(tid, ns=""):
     try:
-        msgs = load_messages(tid)
+        msgs = load_messages(tid, ns)
     except Exception as e:
         st.error(f"Chat konnte nicht geladen werden: {e}")
         return
@@ -238,11 +244,11 @@ def chat_messages(tid):
                 st.caption(f"{m.get('name') or ('Support' if is_admin else 'Streamer')} · {fmt_ts(m.get('ts'))}")
                 st.write(m.get("text", ""))
     if msgs:
-        mark_read(tid, max(int(m.get("ts") or 0) for m in msgs))
+        mark_read(tid, max(int(m.get("ts") or 0) for m in msgs), ns)
 
 
-def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True):
-    tid = st.session_state.get("selected_tid")
+def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
+    tid = st.session_state.get(f"selected_tid_{ns}" if ns else "selected_tid")
     if not tid:
         st.info("⬅️ Wähle links einen Streamer aus, um den Chat zu öffnen.")
         return
@@ -258,11 +264,11 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True):
     prompt = st.chat_input(f"Antwort an {name} ...")
     if prompt:
         try:
-            send_admin_message(tid, prompt, sender_name)
+            send_admin_message(tid, prompt, sender_name, ns)
         except Exception as e:
             st.error(f"Senden fehlgeschlagen: {e}")
     with messages_area:
-        chat_messages(tid)
+        chat_messages(tid, ns)
 
     if allow_actions:
         with st.expander("⚙️ Aktionen"):
@@ -270,9 +276,9 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True):
                 "Setzt die Geräte-Bindung des Streamers zurück (z.B. nach Neuinstallation oder PC-Wechsel), "
                 "sodass sich beim nächsten Start ein neues Gerät registrieren kann."
             )
-            confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{tid}")
-            if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{tid}"):
-                db.reference(f"presence/{tid}/uid").delete()
+            confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{ns}_{tid}")
+            if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{ns}_{tid}"):
+                db.reference(f"{_p(ns)}presence/{tid}/uid").delete()
                 st.success("Zurückgesetzt.")
 
 
@@ -360,19 +366,21 @@ def unban_streamer(tid):
             db.reference(f"bans/hwid/{h}").delete()
 
 
-def bans_panel():
+def bans_panel(ns=""):
     st.caption(
         "Ein Ausschluss sperrt die **gesamte App** (Bot, Games, Overlays, Support-Chat). Die App prüft die Sperre beim Start "
         "und danach jede Minute. Mit **Hardware-Sperre** hilft auch ein neuer Twitch-Account nicht, solange er auf demselben PC läuft."
     )
     try:
-        rows = load_streamers()
+        rows = load_streamers(ns)
         bans_tw = db.reference("bans/twitch").get() or {}
         bans_hw = db.reference("bans/hwid").get() or {}
     except Exception as e:
         st.error(f"Firebase-Fehler: {e}")
         return
 
+    if ns:
+        st.info("Sperren gelten für **alle Tools** (StreamDex und Lurk): Twitch-Konto und, wenn gewählt, auch das Gerät.")
     st.subheader("🚫 Streamer ausschließen")
     candidates = [r for r in rows if not r["banned"]]
     if not candidates:
@@ -414,8 +422,8 @@ def bans_panel():
             st.rerun()
 
 
-def _fb_label():
-    n = new_count()
+def _fb_label(tool="streamdex"):
+    n = new_count(tool)
     return f"🐞 Bugs & Ideen ({n})" if n else "🐞 Bugs & Ideen"
 
 
@@ -462,7 +470,7 @@ def support_main():
         except Exception as e:
             st.error(f"Firebase-Fehler: {e}")
     with tab_fb:
-        feedback_panel(me["name"], is_admin=False)
+        feedback_panel(me["name"], is_admin=False, tool="streamdex")
     with tab_team:
         team_chat_panel(me["name"])
 
@@ -504,7 +512,8 @@ def main():
         tool = st.radio("Tool", list(TOOLS), format_func=TOOLS.get, horizontal=True,
                         label_visibility="collapsed", key="os_tool")
     if tool == "lurk":
-        lurk_panel()
+        lurk_panel(load_streamers=load_streamers, streamer_list=streamer_list, chat_panel=chat_panel,
+                   bans_panel=bans_panel, fb_label=lambda: _fb_label("lurk"), me=ADMIN_NAME)
         return
 
     tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"])
@@ -542,7 +551,7 @@ def main():
         except Exception as e:
             st.error(f"Firebase-Fehler: {e}")
     with tab_fb:
-        feedback_panel(ADMIN_NAME, is_admin=True)
+        feedback_panel(ADMIN_NAME, is_admin=True, tool="streamdex")
     with tab_bans:
         bans_panel()
     with tab_sups:
