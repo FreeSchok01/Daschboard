@@ -1,5 +1,6 @@
 """Streamer-Dashboard mit geschütztem Zugriff über Einmal-Tokens."""
 import html
+import json
 import re
 import secrets
 import time
@@ -58,9 +59,9 @@ TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 
 def _verify_and_consume_token(token: str):
     """Prüft einen Login-Token und löscht ihn atomar (Einmal-Nutzung).
-    DEBUG-Version: der genaue Ablehnungsgrund landet in st.session_state['_tok_dbg']."""
+    Gibt die Twitch-ID zurück oder None. Der Grund einer Ablehnung wird nur auf der Serverkonsole geloggt."""
     def _fail(reason):
-        st.session_state["_tok_dbg"] = reason
+        print(f"[dashboard] Token abgelehnt: {reason}")   # nur Streamlit-Log, nicht im Browser sichtbar
         return None
 
     if not isinstance(token, str) or not TOKEN_RE.match(token):
@@ -267,6 +268,147 @@ def _daily_series(history, key, days, today=None):
     return pd.Series([deltas.get(i.date(), 0) for i in idx], index=idx, name=HISTORY_LABELS.get(key, key))
 
 
+# ----------------------------------------------------------------------------
+# 🧾 Konto & Datenschutz: Daten ansehen, exportieren, Konto-Daten löschen
+# ----------------------------------------------------------------------------
+# Wird beim Löschen entfernt (alles, was unter der eigenen Twitch-ID liegt). presence ZULETZT,
+# damit der Login bei einem Fehler mittendrin noch funktioniert und man es erneut versuchen kann.
+_DELETE_PATHS = [
+    "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
+    "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
+    "presence/{t}",
+]
+# Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
+_KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
+
+ACCOUNT_DATA_TABLE = """
+| Was | Wozu |
+|---|---|
+| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität, technische Anmelde-Kennung | Login, Status-Anzeige, Zuordnung deiner Daten |
+| Hardware-Kennungen (nur als Hash) | Sperrliste gegen Missbrauch |
+| Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
+| Support-Nachrichten und Feedback | Support |
+| Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
+"""
+
+
+def _safe_get(path):
+    try:
+        return db.reference(path).get()
+    except Exception as e:
+        return {"_fehler": f"{type(e).__name__}"}
+
+
+def _load_feedback(tid):
+    """Feedback-Einträge dieser Twitch-ID. Mit Index auf 'tid' direkt, sonst Fallback über 'ts' (letzte 1000)."""
+    ref = db.reference("feedback_inbox")
+    try:
+        data = ref.order_by_child("tid").equal_to(str(tid)).get() or {}
+    except Exception:
+        data = ref.order_by_child("ts").limit_to_last(1000).get() or {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
+
+
+def _collect_account_data(tid):
+    """Alle gespeicherten Daten dieser Twitch-ID (nur nicht-leere Bereiche)."""
+    out = {}
+    for path in _KEEP_PATHS + _DELETE_PATHS:
+        p = path.format(t=tid)
+        val = _safe_get(p)
+        if val not in (None, {}, []):
+            out[p] = val
+    fb = _load_feedback(tid)
+    if fb:
+        out["feedback_inbox (nur deine Einträge)"] = fb
+    return out
+
+
+def _delete_account_data(tid):
+    """Löscht alle Daten unter der eigenen Twitch-ID. Gibt (Anzahl gelöschter Bereiche, Fehlerliste) zurück."""
+    removed, errors = 0, []
+    try:
+        for key in list(_load_feedback(tid)):
+            db.reference(f"feedback_inbox/{key}").delete()
+            removed += 1
+    except Exception as e:
+        errors.append(f"feedback_inbox: {type(e).__name__}")
+    for path in _DELETE_PATHS:
+        p = path.format(t=tid)
+        try:
+            ref = db.reference(p)
+            if ref.get() is not None:
+                ref.delete()
+                removed += 1
+        except Exception as e:
+            errors.append(f"{p}: {type(e).__name__}")
+    return removed, errors
+
+
+def _render_account_tab(tid, username, is_online):
+    st.subheader("🧾 Konto & Datenschutz")
+    st.caption("Hier siehst du, welche Daten Streamdex unter deiner Twitch-ID gespeichert hat, kannst sie exportieren "
+               "oder löschen.")
+    with st.expander("Was wird gespeichert und wozu?"):
+        st.markdown(ACCOUNT_DATA_TABLE)
+
+    # --- Daten ansehen & exportieren (wird erst auf Klick geladen) ---
+    st.markdown("### 📥 Meine Daten")
+    if st.button("Meine Daten laden", key="acct_load"):
+        st.session_state["acct_data"] = {"tid": tid, "data": _collect_account_data(tid)}
+    cached = st.session_state.get("acct_data")
+    if cached and cached.get("tid") == tid:
+        data = cached["data"]
+        if not data:
+            st.info("Unter deiner Twitch-ID sind keine Daten gespeichert.")
+        else:
+            payload = {
+                "exportiert_am": datetime.now(TZ).isoformat(timespec="seconds"),
+                "twitch_id": tid,
+                "hinweis": "Zeitstempel (ts, last_seen, …) sind Millisekunden seit 1970 (UTC).",
+                "daten": data,
+            }
+            st.download_button(
+                "⬇️ Alles als JSON herunterladen",
+                data=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                file_name=f"streamdex_daten_{tid}.json",
+                mime="application/json",
+                key="acct_dl",
+            )
+            for path, val in data.items():
+                with st.expander(path):
+                    st.json(val)
+
+    st.divider()
+
+    # --- Löschen ---
+    st.markdown("### 🗑️ Meine Daten löschen")
+    st.warning(
+        "Gelöscht werden Status, Statistiken, Verlauf, Support-Chat und deine Feedback-Einträge auf dem Server. "
+        "Das lässt sich **nicht rückgängig machen**."
+    )
+    st.markdown(
+        "**Bleibt bestehen:** Kauf- und Freischaltungsdaten (damit bezahlte Games erhalten bleiben), "
+        "die Sperrliste (Missbrauchsschutz) und alles, was nur auf deinem PC liegt (Einstellungen, Logs). "
+        "Dein Twitch-Konto ist nicht betroffen. Startest du die App danach wieder, legt sie neue Einträge an."
+    )
+    if is_online:
+        st.info("Deine Desktop-App läuft gerade und würde die Daten sofort neu anlegen. "
+                "Schließe die App zuerst, warte etwa 3 Minuten, bis dein Status „Offline“ ist, und lade diese Seite neu.")
+    confirm = st.checkbox("Ich habe verstanden, dass meine Daten dauerhaft gelöscht werden.", key="acct_confirm")
+    typed = st.text_input(f"Zur Bestätigung deinen Twitch-Namen eingeben: **{username}**", key="acct_typed")
+    ready = confirm and typed.strip().lower() == str(username).strip().lower() and not is_online
+    if st.button("🗑️ Endgültig löschen", type="primary", disabled=not ready, key="acct_delete"):
+        removed, errors = _delete_account_data(tid)
+        if errors:
+            st.error("Nicht alles konnte gelöscht werden. Bitte versuche es erneut oder melde dich beim Support. "
+                     f"(Betroffen: {', '.join(errors)})")
+        else:
+            st.session_state.pop("authenticated_tid", None)
+            st.session_state.pop("acct_data", None)
+            st.session_state["acct_deleted"] = removed
+            st.rerun()
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
@@ -286,12 +428,15 @@ def render_streamer_dashboard(games):
             st.rerun()
         else:
             st.error("Der Zugriffs-Link ist ungültig oder abgelaufen. Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
-            st.caption("🔧 Debug: " + str(st.session_state.get("_tok_dbg", "kein Grund erfasst")))
 
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
 
     if not authed_tid:
+        if st.session_state.get("acct_deleted") is not None:
+            st.session_state.pop("acct_deleted", None)
+            st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
+            return
         st.warning("🔒 Zugriffsgeschützter Bereich")
         st.info(
             "Bitte öffne das Dashboard direkt aus deiner **Streamdex Desktop-App**, "
@@ -328,7 +473,7 @@ def render_streamer_dashboard(games):
 
     st.divider()
 
-    t_over, t_games, t_stats, t_hist, t_support = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "💬 Support-Chat"])
+    t_over, t_games, t_stats, t_hist, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
 
     # --- Tab 0: Übersicht ---
     with t_over:
@@ -402,3 +547,7 @@ def render_streamer_dashboard(games):
         if prompt:
             _send_message(authed_tid, twitch_username, prompt)
             st.rerun()
+
+    # --- Tab 5: Konto & Datenschutz ---
+    with t_acct:
+        _render_account_tab(authed_tid, twitch_username, bool(is_online))
