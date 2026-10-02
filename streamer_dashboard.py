@@ -14,7 +14,7 @@ import streamlit as st
 from firebase_admin import db
 
 from beta_apply import _apply_form, _status_view
-from downloads import (lurk_repo, render_member_downloads, render_public_downloads,
+from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
                        settings as download_settings, update_notice)
 from shop import owned_games, CSS
 
@@ -710,7 +710,8 @@ def render_streamer_dashboard(games):
 
     # --- Tab 0: Übersicht ---
     with t_over:
-        _upd = _update_notice(app_version)
+        # Beta-Builds ("BETA VERSION V2") haben keine Release-Nummer: Vergleich mit der öffentlichen Release würde falsch warnen
+        _upd = None if "beta" in str(app_version).lower() else _update_notice(app_version)
         if _upd:
             st.info(f"🔔 **Neue Version verfügbar: {_upd[0]}** (du nutzt {app_version}). "
                     "Die App bietet das Update beim Start an, oder du lädst es hier herunter.")
@@ -728,6 +729,20 @@ def render_streamer_dashboard(games):
         st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
                     unsafe_allow_html=True)
         if beta_info:
+            try:
+                _cfg = download_settings()
+                _rev = int(_cfg.get("beta_rev") or 0)
+                if _rev and _rev > int(db.reference(f"beta_seen/{authed_tid}").get() or 0):
+                    _n = str(_cfg.get("beta_note") or "").strip()
+                    st.success("🧪 **Neuer Beta-Build verfügbar!**" + (f" {_n}" if _n else ""))
+                    _b1, _b2 = st.columns(2)
+                    if beta_link(_cfg):
+                        _b1.link_button("⬇️ Neuen Beta-Build laden", beta_link(_cfg), type="primary", use_container_width=True)
+                    if _b2.button("✔ Gelesen", key="beta_seen_btn", use_container_width=True):
+                        db.reference(f"beta_seen/{authed_tid}").set(_rev)
+                        st.rerun()
+            except Exception:
+                pass
             st.markdown("**🧪 Downloads für Beta-Tester**")
             try:
                 render_member_downloads()
