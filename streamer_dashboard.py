@@ -124,6 +124,44 @@ def _send_message(tid, name, text):
     db.reference(f"chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "streamer", "last_text": text[:100]})
 
 
+def _support_last_read(tid):
+    """Zeitstempel (ms) der zuletzt als gelesen markierten Support-Antwort. Liegt unter support_read/{tid}."""
+    try:
+        return int(db.reference(f"support_read/{tid}").get() or 0)
+    except Exception:
+        return 0
+
+
+def _unread_admin(msgs, last_read):
+    """Antworten vom Support, die neuer sind als der Gelesen-Stand."""
+    out = []
+    for m in msgs:
+        try:
+            ts = int(m.get("ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0
+        if m.get("sender") == "admin" and ts > last_read:
+            out.append(m)
+    return out
+
+
+def _mark_support_read(tid, msgs):
+    """Markiert alles bis zur neuesten bekannten Support-Antwort als gelesen. Bewusst NICHT die aktuelle Zeit:
+    sonst würde eine Antwort, die gerade erst eingetroffen ist, ungesehen als gelesen gelten."""
+    latest = 0
+    for m in msgs:
+        if m.get("sender") == "admin":
+            try:
+                latest = max(latest, int(m.get("ts") or 0))
+            except (TypeError, ValueError):
+                pass
+    if latest:
+        try:
+            db.reference(f"support_read/{tid}").set(latest)
+        except Exception:
+            pass
+
+
 # ----------------------------------------------------------------------------
 # 🏠 Übersicht (echte Daten aus Firebase: presence, stats, game_flags, shop/beta)
 # Hinweis: Live-Zuschauer und Coins im Umlauf werden von der App aktuell nicht
@@ -277,6 +315,7 @@ def _daily_series(history, key, days, today=None):
 _DELETE_PATHS = [
     "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
+    "support_read/{t}",
     "presence/{t}",
 ]
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
@@ -517,6 +556,20 @@ def render_streamer_dashboard(games):
 
     st.divider()
 
+    # Support-Nachrichten einmal laden (Banner oben und Tab "Support-Chat" nutzen dieselben Daten).
+    # Bewusst ein Banner statt Zähler im Tab-Titel: ändert sich der Titel, springt Streamlit zurück auf den ersten Tab.
+    msgs = _load_messages(authed_tid)
+    support_last_read = _support_last_read(authed_tid)
+    unread = _unread_admin(msgs, support_last_read)
+    if unread:
+        n_un = len(unread)
+        b_text, b_btn = st.columns([4, 1])
+        b_text.info(f"💬 **{n_un} neue {'Antwort' if n_un == 1 else 'Antworten'}** vom Support – "
+                    "lies sie im Tab „Support-Chat“.")
+        if b_btn.button("✔ Gelesen", key="support_mark_read", use_container_width=True):
+            _mark_support_read(authed_tid, msgs)
+            st.rerun()
+
     t_over, t_games, t_stats, t_hist, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
 
     # --- Tab 0: Übersicht ---
@@ -581,7 +634,6 @@ def render_streamer_dashboard(games):
     # --- Tab 4: Support ---
     with t_support:
         st.subheader("💬 Direkt-Support")
-        msgs = _load_messages(authed_tid)
         chat_box = st.container(height=400, border=True)
         with chat_box:
             if not msgs:
@@ -589,12 +641,14 @@ def render_streamer_dashboard(games):
             for m in msgs:
                 is_admin = m.get("sender") == "admin"
                 with st.chat_message("assistant" if is_admin else "user"):
-                    st.caption(f"{'Support' if is_admin else twitch_username} · {_fmt_ts(m.get('ts'))}")
+                    _is_new = m in unread
+                    st.caption(f"{'🆕 ' if _is_new else ''}{'Support' if is_admin else twitch_username} · {_fmt_ts(m.get('ts'))}")
                     st.write(m.get("text", ""))
 
         prompt = st.chat_input("Nachricht an den Support senden ...")
         if prompt:
             _send_message(authed_tid, twitch_username, prompt)
+            _mark_support_read(authed_tid, msgs)   # wer antwortet, hat die bisherigen Antworten gelesen
             st.rerun()
 
     # --- Tab 5: Konto & Datenschutz ---
