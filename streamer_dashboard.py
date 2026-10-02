@@ -1,5 +1,6 @@
 """Streamer-Dashboard mit geschütztem Zugriff über Einmal-Tokens."""
 import html
+import re
 import secrets
 import time
 import urllib.parse
@@ -50,28 +51,43 @@ def _fmt_ago(ms):
     return f"vor {diff // 86400} d"
 
 
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32}$")   # genau das Format, das die App erzeugt (token_urlsafe(24))
+TID_RE = re.compile(r"^[0-9]{1,15}$")
+TOKEN_MAX_AGE_MS = 5 * 60 * 1000
+
+
 def _verify_and_consume_token(token: str):
-    """Prüft einen Login-Token aus Firebase und löscht ihn nach Verwendung."""
-    if not token or len(token) < 16:
+    """Prüft einen Login-Token und löscht ihn dabei atomar (Einmal-Nutzung).
+    Lesen und Löschen passieren in EINER Firebase-Transaktion: bei zwei gleichzeitigen Aufrufen mit demselben
+    Token sieht nur einer die Daten, der andere bekommt None. Gibt die Twitch-ID zurück oder None."""
+    # Format streng prüfen: schützt auch vor Pfad-Tricks wie "a/b" oder "..", die db.reference sonst weiterreicht
+    if not isinstance(token, str) or not TOKEN_RE.match(token):
         return None
-    
-    ref = db.reference(f"dash_tokens/{token}")
-    data = ref.get()
-    
+
+    consumed = {}
+
+    def _take(current):
+        consumed["data"] = current   # bei einem Retry wird überschrieben: gewertet wird der erfolgreiche Durchlauf
+        return None                  # None = Eintrag löschen
+
+    try:
+        db.reference(f"dash_tokens/{token}").transaction(_take)
+    except Exception:
+        return None                  # z.B. TransactionAbortedError nach zu vielen Konflikten
+
+    data = consumed.get("data")
     if not isinstance(data, dict):
+        return None                  # gab es nicht oder hat ein anderer gleichzeitig eingelöst
+
+    try:
+        created_at = int(data.get("ts") or 0)
+    except (TypeError, ValueError):
         return None
-    
-    # Prüfen ob Token abgelaufen ist (z.B. nach 5 Minuten = 300.000 ms)
-    created_at = int(data.get("ts") or 0)
-    now_ms = int(time.time() * 1000)
-    
-    # Token löschen (Einmal-Nutzung)
-    ref.delete()
-    
-    if now_ms - created_at > 300000:
-        return None  # Abgelaufen
-        
-    return str(data.get("tid"))
+    if not created_at or int(time.time() * 1000) - created_at > TOKEN_MAX_AGE_MS:
+        return None                  # abgelaufen (der Eintrag ist trotzdem schon gelöscht)
+
+    tid = str(data.get("tid") or "")
+    return tid if TID_RE.match(tid) else None
 
 
 def _load_messages(tid):
