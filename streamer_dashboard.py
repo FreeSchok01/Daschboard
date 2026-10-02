@@ -56,6 +56,7 @@ def _fmt_ago(ms):
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32}$")   # genau das Format, das die App erzeugt (token_urlsafe(24))
 TID_RE = re.compile(r"^[0-9]{1,15}$")
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
+SESSION_MAX_AGE_S = 2 * 60 * 60   # nach 2 Stunden ist ein neuer Login über die App nötig
 
 
 def _verify_and_consume_token(token: str):
@@ -107,6 +108,51 @@ def _verify_and_consume_token(token: str):
     if not TID_RE.match(tid):
         return _fail(f"tid ungültig: {tid!r}")
     return tid
+
+
+def cleanup_old_entries(token_max_age_hours=1, history_days=400):
+    """Admin-Aufräumen (im Admin-Panel per Knopf aufrufen):
+    - dash_tokens: abgelaufene und halb eingelöste Einträge entfernen
+    - stats_history: Tageseinträge älter als history_days entfernen
+    Gibt {"tokens": n, "history_days": n} zurück."""
+    now_ms = int(time.time() * 1000)
+    removed_tokens = removed_days = 0
+
+    try:
+        tokens = db.reference("dash_tokens").get() or {}
+    except Exception:
+        tokens = {}
+    if isinstance(tokens, dict):
+        for key, val in list(tokens.items()):
+            try:
+                ts = int(val.get("ts") or 0) if isinstance(val, dict) else 0
+            except (TypeError, ValueError):
+                ts = 0
+            if not ts or now_ms - ts > token_max_age_hours * 3600 * 1000:
+                try:
+                    db.reference(f"dash_tokens/{key}").delete()
+                    removed_tokens += 1
+                except Exception:
+                    pass
+
+    cutoff = (datetime.now(TZ).date() - timedelta(days=history_days)).isoformat()
+    try:
+        tids = list((db.reference("stats_history").get(shallow=True) or {}).keys())
+    except Exception:
+        tids = []
+    for tid in tids:
+        try:
+            days = list((db.reference(f"stats_history/{tid}").get(shallow=True) or {}).keys())
+        except Exception:
+            continue
+        for day in days:
+            if re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", str(day)) and str(day) < cutoff:
+                try:
+                    db.reference(f"stats_history/{tid}/{day}").delete()
+                    removed_days += 1
+                except Exception:
+                    pass
+    return {"tokens": removed_tokens, "history_days": removed_days}
 
 
 def _load_messages(tid):
@@ -560,6 +606,7 @@ def render_streamer_dashboard(games):
         valid_tid = _verify_and_consume_token(token_arg)
         if valid_tid:
             st.session_state["authenticated_tid"] = valid_tid
+            st.session_state["authenticated_at"] = time.time()
             # Token aus URL entfernen für saubere Adresse
             st.query_params.clear()
             st.query_params["dashboard"] = "1"
@@ -569,8 +616,19 @@ def render_streamer_dashboard(games):
 
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
+    if authed_tid:
+        started = st.session_state.setdefault("authenticated_at", time.time())
+        if time.time() - started > SESSION_MAX_AGE_S:
+            for k in ("authenticated_tid", "authenticated_at", "acct_data"):
+                st.session_state.pop(k, None)
+            st.session_state["session_expired"] = True
+            authed_tid = None
 
     if not authed_tid:
+        if st.session_state.pop("session_expired", False):
+            st.warning(f"⏱️ Deine Sitzung ist nach {SESSION_MAX_AGE_S // 3600} Stunden aus Sicherheitsgründen abgelaufen. "
+                       "Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
+            return
         if st.session_state.get("acct_deleted") is not None:
             st.session_state.pop("acct_deleted", None)
             st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
