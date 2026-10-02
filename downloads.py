@@ -11,6 +11,8 @@ import urllib.request
 import streamlit as st
 from firebase_admin import db
 
+SERVER_TS = {".sv": "timestamp"}
+
 GITHUB_REPO = "FreeSchok01/Givewaytool"      # öffentliche StreamDex-Version
 LURK_REPO = "FreeSchok01/Twitch-Auto-Lurk"   # StreamDex Lurk (Standard, in den Admin-Einstellungen überschreibbar)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -130,3 +132,18 @@ def update_notice(repo, app_version):
     if cur and new and new > cur:
         return rel["tag"], rel["page"]
     return None
+
+
+def notify_beta_testers(url, note="", sender="Support"):
+    """Schickt allen Beta-Testern (shop/beta/*) eine Support-Chat-Nachricht mit dem neuen Beta-Link.
+    Erscheint in der App (Live-Support) und im Dashboard als ungelesene Support-Antwort. Gibt die Anzahl zurück."""
+    testers = [t for t, v in (db.reference("shop/beta").get() or {}).items() if isinstance(v, dict)]
+    text = "🧪 Neuer Beta-Build verfügbar!"
+    if note.strip():
+        text += f"\n{note.strip()[:300]}"
+    text += f"\nDownload: {url}"
+    text = text[:2000]
+    for tid in testers:
+        db.reference(f"chats/{tid}/messages").push({"sender": "admin", "name": sender, "text": text, "ts": SERVER_TS})
+        db.reference(f"chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "admin", "last_text": text[:100]})
+    return len(testers)
