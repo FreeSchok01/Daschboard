@@ -5,6 +5,7 @@ Firebase-Struktur:
                                     reject_reason, tid, applied}
       status: pending | approved | rejected
       applied: True, sobald der Beta-Status (shop/beta) in der App-Kennung gesetzt wurde
+  beta_codes/{twitchname} = Klartext-Zugangscode (nur Admin-Ansicht; Bewerber haben ihn vergessen)
   beta/settings = {open: bool, download_url: str}
 """
 import hashlib
@@ -18,6 +19,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from firebase_admin import db
 
+from downloads import REPO_RE, beta_link, render_public_downloads
 from shop import remove_beta, set_beta
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -87,6 +89,10 @@ def _apply_form(cfg):
                        "code_hash": _hash(code), "ts": SERVER_TS}
                 res = db.reference(f"beta_applications/{k}").transaction(lambda cur: cur if cur is not None else rec)
                 if isinstance(res, dict) and res.get("code_hash") == rec["code_hash"]:
+                    try:
+                        db.reference(f"beta_codes/{k}").set(code)    # nur für die Admin-Ansicht (Code vergessen)
+                    except Exception:
+                        pass
                     st.success("Bewerbung gesendet! Wir prüfen sie so schnell wie möglich.")
                     st.warning("**Dein Zugangscode (wird nur jetzt angezeigt, bitte speichern):**")
                     st.code(code, language=None)
@@ -118,8 +124,8 @@ def _status_view(cfg):
                  + (f"\n\nHinweis: {rec['reject_reason']}" if rec.get("reject_reason") else ""))
     else:
         st.success("🧪 Du bist **Beta-Tester**! Danke, dass du hilfst.")
-        url = str(cfg.get("download_url") or "").strip()
-        if url.startswith("https://"):
+        url = beta_link(cfg)
+        if url:
             st.link_button("⬇️ Beta herunterladen", url, type="primary")
         else:
             st.info("Der Download-Link folgt in Kürze.")
@@ -135,6 +141,9 @@ def render_beta_apply():
     st.caption("Hilf mit, Streamdex besser zu machen.")
     try:
         cfg = _settings()
+        st.markdown("**Einfach nur ausprobieren?** Die öffentliche Version kann jeder laden:")
+        render_public_downloads(cfg)
+        st.divider()
         t_apply, t_status = st.tabs(["📝 Bewerben", "🔎 Status & Download"])
         with t_apply:
             _apply_form(cfg)
@@ -186,11 +195,22 @@ def admin_beta_applications(games, me, is_admin=False):
             open_ = st.toggle("Bewerbungen offen", value=cfg.get("open", True), key="beta_open")
             url = st.text_input("Download-Link (https://…) für freigeschaltete Tester",
                                 value=str(cfg.get("download_url") or ""), key="beta_url")
+            pub = st.text_input("Öffentlicher Download (optional, sonst automatisch neueste GitHub-Release)",
+                                value=str(cfg.get("public_url") or ""), key="beta_pub_url")
+            lurk_url = st.text_input("StreamDex Lurk: direkter Download-Link (https://…)",
+                                     value=str(cfg.get("lurk_url") or ""), key="beta_lurk_url")
+            lurk_repo = st.text_input("… oder GitHub-Repo der Lurk-App (owner/repo, nutzt die neueste Release)",
+                                      value=str(cfg.get("lurk_repo") or ""), key="beta_lurk_repo")
             if st.button("💾 Speichern", key="beta_cfg_save"):
-                if url.strip() and not url.strip().startswith("https://"):
-                    st.error("Der Link muss mit https:// beginnen.")
+                links = [url, pub, lurk_url]
+                if any(u.strip() and not u.strip().startswith("https://") for u in links):
+                    st.error("Links müssen mit https:// beginnen.")
+                elif lurk_repo.strip() and not REPO_RE.match(lurk_repo.strip()):
+                    st.error("Repo bitte als owner/repo angeben.")
                 else:
-                    db.reference("beta/settings").update({"open": bool(open_), "download_url": url.strip()})
+                    db.reference("beta/settings").update({
+                        "open": bool(open_), "download_url": url.strip(), "public_url": pub.strip(),
+                        "lurk_url": lurk_url.strip(), "lurk_repo": lurk_repo.strip()})
                     st.success("Gespeichert.")
 
     apps = {k: v for k, v in (db.reference("beta_applications").get() or {}).items() if isinstance(v, dict)}
@@ -199,6 +219,7 @@ def admin_beta_applications(games, me, is_admin=False):
         st.toast(f"{synced} Beta-Status nachträglich gesetzt.")
         apps = {k: v for k, v in (db.reference("beta_applications").get() or {}).items() if isinstance(v, dict)}
 
+    codes = (db.reference("beta_codes").get() or {}) if is_admin else {}
     cnt = {s: sum(1 for v in apps.values() if v.get("status", "pending") == s) for s in STATUS_LABEL}
     c = st.columns(3)
     for col, s in zip(c, STATUS_LABEL):
@@ -216,6 +237,20 @@ def admin_beta_applications(games, me, is_admin=False):
             st.markdown("**Warum Beta-Tester?**")
             st.write(v.get("reason", ""))
             st.caption("Geheimhaltung, Bug-Hinweis und Melde-Pflicht bestätigt ✅" if v.get("agreed") else "Zustimmung fehlt ⚠️")
+            if is_admin:
+                code = codes.get(k)
+                c_a, c_b = st.columns([3, 2])
+                with c_a:
+                    if code:
+                        st.markdown("**Zugangscode:**")
+                        st.code(str(code), language=None)
+                    else:
+                        st.caption("Zugangscode nicht gespeichert (ältere Bewerbung). Mit „Neuen Code erzeugen“ bekommt die Person einen neuen.")
+                if c_b.button("🔑 Neuen Code erzeugen", key=f"ba_newcode_{k}"):
+                    new = secrets.token_urlsafe(9)
+                    db.reference(f"beta_applications/{k}").update({"code_hash": _hash(new)})
+                    db.reference(f"beta_codes/{k}").set(new)
+                    st.rerun()
             if status == "approved":
                 st.caption(f"Freigegeben von {v.get('decided_by', '?')} am {_fmt_ts(v.get('decided_ts'))} · "
                            + ("Beta-Status in der App aktiv." if v.get("applied")
@@ -243,4 +278,5 @@ def admin_beta_applications(games, me, is_admin=False):
                 if b3.button("🗑️ Löschen", disabled=not ok, key=f"ba_del_{k}"):
                     _revoke_beta(v)
                     db.reference(f"beta_applications/{k}").delete()
+                    db.reference(f"beta_codes/{k}").delete()
                     st.rerun()
