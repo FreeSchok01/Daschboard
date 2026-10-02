@@ -1,4 +1,4 @@
-"""TwitchHub Admin-Dashboard (Streamlit Community Cloud)
+"""TwitchHub Admin-Dashboard & Public Apps (Streamlit Community Cloud)
 
 Links: alle registrierten Streamer (Online/Offline, Version, letzte Aktivität)
 Rechts: Live-Support-Chat mit dem ausgewählten Streamer
@@ -21,6 +21,7 @@ from feedback_inbox import feedback_panel, new_count
 from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
+from streamer_dashboard import render_streamer_dashboard
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 from theme import apply_theme, header_html
 
@@ -88,7 +89,6 @@ def init_firebase():
         return firebase_admin.get_app()
     except ValueError:
         if "firebase_json" in st.secrets:
-            # Empfohlen: komplette JSON-Datei unverändert als ein Text-Block in den Secrets
             try:
                 info = json.loads(st.secrets["firebase_json"])
             except Exception:
@@ -97,22 +97,15 @@ def init_firebase():
         else:
             info = dict(st.secrets["firebase"])
         pk = str(info.get("private_key", "")).strip().strip('"').strip("'")
-        pk = pk.replace("\\n", "\n").replace("\r\n", "\n")   # doppelt escapte \n und Windows-Zeilenenden reparieren
+        pk = pk.replace("\\n", "\n").replace("\r\n", "\n")
         info["private_key"] = pk + "\n" if not pk.endswith("\n") else pk
         if not (pk.startswith("-----BEGIN PRIVATE KEY-----") and "-----END PRIVATE KEY-----" in pk):
-            st.error(
-                "Der `private_key` in den Secrets ist unvollständig oder beschädigt "
-                f"(Länge {len(pk)} Zeichen, sollte ca. 1600-1700 haben). "
-                "Bitte den kompletten Wert aus der JSON-Datei neu kopieren."
-            )
+            st.error("Der `private_key` in den Secrets ist unvollständig oder beschädigt.")
             st.stop()
         try:
             cred = credentials.Certificate(info)
         except ValueError:
-            st.error(
-                "Der `private_key` konnte nicht gelesen werden. Meist fehlt ein Stück oder es wurde "
-                "ein Zeichen verändert. Neuen Schlüssel in Firebase generieren und komplett neu einfügen."
-            )
+            st.error("Der `private_key` konnte nicht gelesen werden.")
             st.stop()
         return firebase_admin.initialize_app(cred, {"databaseURL": st.secrets["firebase_db"]["database_url"]})
 
@@ -138,7 +131,6 @@ def fmt_ts(ms):
 
 
 def _p(ns=""):
-    """Pfad-Präfix: leer = StreamDex (Giveaway-Tool), \"lurk\" = Lurk-App."""
     return f"{ns}/" if ns else ""
 
 
@@ -272,10 +264,7 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
 
     if allow_actions:
         with st.expander("⚙️ Aktionen"):
-            st.caption(
-                "Setzt die Geräte-Bindung des Streamers zurück (z.B. nach Neuinstallation oder PC-Wechsel), "
-                "sodass sich beim nächsten Start ein neues Gerät registrieren kann."
-            )
+            st.caption("Setzt die Geräte-Bindung des Streamers zurück.")
             confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{ns}_{tid}")
             if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{ns}_{tid}"):
                 db.reference(f"{_p(ns)}presence/{tid}/uid").delete()
@@ -283,10 +272,7 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
 
 
 def games_panel():
-    st.caption(
-        "Alle Games sind standardmäßig **gesperrt**. Freigaben wirken in der App nach spätestens ca. 60 Sekunden "
-        "(beim nächsten Heartbeat), ohne Neustart und ohne Update."
-    )
+    st.caption("Alle Games sind standardmäßig **gesperrt**.")
     try:
         g_global = db.reference("game_flags/global").get() or {}
         g_streamers = db.reference("game_flags/streamers").get() or {}
@@ -295,18 +281,15 @@ def games_panel():
         st.error(f"Firebase-Fehler: {e}")
         return
 
-    st.subheader("🌍 Global (gilt für alle, sofern nichts anderes eingestellt ist)")
+    st.subheader("🌍 Global")
     gl_df = pd.DataFrame([{k: bool(g_global.get(k, False)) for k in GAMES}])
-    gl_edit = st.data_editor(
-        gl_df, hide_index=True, use_container_width=True, key="gl_editor",
-        column_config={k: st.column_config.CheckboxColumn(v) for k, v in GAMES.items()},
-    )
+    gl_edit = st.data_editor(gl_df, hide_index=True, use_container_width=True, key="gl_editor", column_config={k: st.column_config.CheckboxColumn(v) for k, v in GAMES.items()})
     if st.button("💾 Global speichern", key="save_global"):
         db.reference("game_flags/global").set({k: bool(gl_edit.iloc[0][k]) for k in GAMES})
         st.success("Global gespeichert.")
         st.rerun()
 
-    st.subheader("👤 Pro Streamer (überschreibt global)")
+    st.subheader("👤 Pro Streamer")
     if not rows:
         st.info("Noch keine Streamer registriert.")
         return
@@ -348,7 +331,6 @@ def games_panel():
                 changed += 1
         st.success(f"{changed} Streamer aktualisiert.")
         st.rerun()
-    c2.caption("➖ = es gilt die globale Einstellung · ✅ = für diesen Streamer frei · ⛔ = für diesen Streamer gesperrt")
 
 
 def ban_streamer(row, reason, with_hw=True):
@@ -367,10 +349,6 @@ def unban_streamer(tid):
 
 
 def bans_panel(ns=""):
-    st.caption(
-        "Ein Ausschluss sperrt die **gesamte App** (Bot, Games, Overlays, Support-Chat). Die App prüft die Sperre beim Start "
-        "und danach jede Minute. Mit **Hardware-Sperre** hilft auch ein neuer Twitch-Account nicht, solange er auf demselben PC läuft."
-    )
     try:
         rows = load_streamers(ns)
         bans_tw = db.reference("bans/twitch").get() or {}
@@ -379,8 +357,6 @@ def bans_panel(ns=""):
         st.error(f"Firebase-Fehler: {e}")
         return
 
-    if ns:
-        st.info("Sperren gelten für **alle Tools** (StreamDex und Lurk): Twitch-Konto und, wenn gewählt, auch das Gerät.")
     st.subheader("🚫 Streamer ausschließen")
     candidates = [r for r in rows if not r["banned"]]
     if not candidates:
@@ -390,23 +366,12 @@ def bans_panel(ns=""):
         choice = st.selectbox("Streamer", list(by_label), key="ban_pick")
         row = by_label[choice]
         reason = st.text_input("Grund (sieht der Streamer)", key="ban_reason", max_chars=300)
-        with_hw = st.checkbox("Hardware mitsperren (verhindert neue Twitch-Accounts auf diesem PC)", value=True, key="ban_hw")
-        if with_hw and not row["hw"]:
-            st.warning("Von diesem Streamer liegt noch keine Geräte-Kennung vor (ältere App-Version). Es wird nur das Twitch-Konto gesperrt.")
-        elif with_hw:
-            st.caption("⚠️ Bei gemeinsam genutzten oder geklonten PCs kann die Hardware-Sperre Unbeteiligte treffen. Vorher prüfen.")
+        with_hw = st.checkbox("Hardware mitsperren", value=True, key="ban_hw")
         confirm = st.checkbox(f"Ja, {row['name']} wirklich ausschließen", key="ban_confirm")
         if st.button("🚫 Ausschließen", type="primary", disabled=not confirm, key="ban_go"):
             ban_streamer(row, reason, with_hw)
             st.success(f"{row['name']} wurde ausgeschlossen.")
             st.rerun()
-
-    alerts = [r for r in rows if r["hw_banned"] or (r["blocked"] and not r["banned"])]
-    if alerts:
-        st.subheader("⚠️ Mögliche Umgehungsversuche")
-        st.caption("Diese Konten laufen auf einem gesperrten Gerät, sind aber selbst (noch) nicht gesperrt.")
-        for r in alerts:
-            st.write(f"**{r['name']}** (`{r['tid']}`) · zuletzt aktiv {fmt_ago(r['age'])}")
 
     st.subheader("📋 Aktive Sperren")
     if not bans_tw:
@@ -431,7 +396,7 @@ def support_main():
     st.set_page_config(page_title="Streamdex Support", page_icon="🛟", layout="wide")
     init_firebase()
     apply_theme()
-    me = supporter_login()                      # stoppt, bis ein aktiver Supporter angemeldet ist
+    me = supporter_login()
     top_l, top_r = st.columns([6, 1], vertical_alignment="center")
     top_l.markdown(header_html(f"SUPPORT · {me['name']}"), unsafe_allow_html=True)
     if top_r.button("Abmelden"):
@@ -439,7 +404,8 @@ def support_main():
         st.rerun()
 
     tab_chat, tab_games, tab_codes, tab_beta, tab_fb, tab_team = st.tabs(
-        ["💬 Live-Chat", "🎮 Freigaben", "🎟️ Partner-Codes", "🧪 Beta", _fb_label(), "💭 Team-Chat"])
+        ["💬 Live-Chat", "🎮 Freigaben", "🎟️ Partner-Codes", "🧪 Beta", _fb_label(), "💭 Team-Chat"]
+    )
     with tab_chat:
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -491,12 +457,19 @@ def main():
         apply_theme()
         render_tour_skip()
         return
-    if "admin" not in st.query_params:      # Öffentlich: Shop. Admin: /?admin=1
+    if "dashboard" in st.query_params or "streamer" in st.query_params:  # Öffentlich: Streamer-Dashboard /?dashboard=1
+        st.set_page_config(page_title="Streamdex Dashboard", page_icon="📊", layout="wide")
+        init_firebase()
+        apply_theme()
+        render_streamer_dashboard(GAMES)
+        return
+    if "admin" not in st.query_params:         # Öffentlich: Shop. Admin: /?admin=1
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
         init_firebase()
         apply_theme()
         render_shop(GAMES)
         return
+
     st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
     require_login()
     init_firebase()
@@ -509,14 +482,21 @@ def main():
         st.rerun()
 
     with st.container(key="os_nav"):
-        tool = st.radio("Tool", list(TOOLS), format_func=TOOLS.get, horizontal=True,
-                        label_visibility="collapsed", key="os_tool")
+        tool = st.radio("Tool", list(TOOLS), format_func=TOOLS.get, horizontal=True, label_visibility="collapsed", key="os_tool")
     if tool == "lurk":
-        lurk_panel(load_streamers=load_streamers, streamer_list=streamer_list, chat_panel=chat_panel,
-                   bans_panel=bans_panel, fb_label=lambda: _fb_label("lurk"), me=ADMIN_NAME)
+        lurk_panel(
+            load_streamers=load_streamers,
+            streamer_list=streamer_list,
+            chat_panel=chat_panel,
+            bans_panel=bans_panel,
+            fb_label=lambda: _fb_label("lurk"),
+            me=ADMIN_NAME,
+        )
         return
 
-    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"])
+    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(
+        ["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"]
+    )
     with tab_support:
         left, right = st.columns([1, 2], gap="large")
         with left:
