@@ -617,10 +617,8 @@ def _render_landing():
 
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
-    st.markdown(
-        '<div class="hero"><h1>📊 Streamer Dashboard</h1><p>Verwalte deine Freischaltungen, Statistiken und Support-Tickets.</p></div>',
-        unsafe_allow_html=True,
-    )
+    hero = st.empty()   # Kopfbereich wird erst gefüllt, wenn klar ist, ob jemand angemeldet ist
+
 
     # 1. Token aus URL verarbeiten (falls vorhanden)
     token_arg = st.query_params.get("token")
@@ -645,6 +643,19 @@ def render_streamer_dashboard(games):
                 st.session_state.pop(k, None)
             st.session_state["session_expired"] = True
             authed_tid = None
+
+    if authed_tid:
+        hero.markdown(
+            '<div class="hero"><h1>📊 Streamer Dashboard</h1><p>Verwalte deine Freischaltungen, Statistiken und Support-Tickets.</p></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        hero.markdown(
+            '<div class="hero"><h1>👋 Willkommen bei StreamDex OS</h1>'
+            '<p>Dein Toolkit für Streams: Games, Giveaways, Statistiken und Support. '
+            'Lade die App herunter oder bewirb dich für die Beta.</p></div>',
+            unsafe_allow_html=True,
+        )
 
     if not authed_tid:
         if st.session_state.pop("session_expired", False):
