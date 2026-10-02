@@ -105,3 +105,28 @@ def render_member_downloads(cfg=None):
         c1.info("Der Beta-Download-Link folgt in Kürze.")
     if lurk:
         c2.link_button(f"⬇️ StreamDex Lurk{f' ({lver})' if lver else ''}", lurk, use_container_width=True)
+
+
+def lurk_repo(cfg=None):
+    cfg = cfg if cfg is not None else settings()
+    repo = str(cfg.get("lurk_repo") or "").strip()
+    return repo if REPO_RE.match(repo) else LURK_REPO
+
+
+def _version_tuple(v):
+    """Wie parse_v() in den Apps: alles außer Ziffern und Punkten entfernen ("Lurk v4.8.2" -> (4, 8, 2))."""
+    try:
+        return tuple(int(x) for x in re.sub(r"[^0-9.]", "", str(v)).split(".") if x)
+    except ValueError:
+        return ()
+
+
+def update_notice(repo, app_version):
+    """(neueste_version, release_seite), wenn auf GitHub eine neuere Release als app_version existiert, sonst None."""
+    rel = latest_release(repo)
+    if not rel or not rel["tag"]:
+        return None
+    cur, new = _version_tuple(app_version), _version_tuple(rel["tag"])
+    if cur and new and new > cur:
+        return rel["tag"], rel["page"]
+    return None
