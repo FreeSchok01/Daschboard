@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from firebase_admin import db
 
-from downloads import REPO_RE, beta_link, render_public_downloads
+from downloads import REPO_RE, beta_link, notify_beta_testers, render_public_downloads
 from shop import remove_beta, set_beta
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -201,6 +201,10 @@ def admin_beta_applications(games, me, is_admin=False):
                                      value=str(cfg.get("lurk_url") or ""), key="beta_lurk_url")
             lurk_repo = st.text_input("… oder GitHub-Repo der Lurk-App (owner/repo, nutzt die neueste Release)",
                                       value=str(cfg.get("lurk_repo") or ""), key="beta_lurk_repo")
+            notify = st.checkbox("Bei neuem Beta-Link alle Beta-Tester benachrichtigen (Support-Chat + Dashboard)",
+                                 value=True, key="beta_notify")
+            note = st.text_input("Hinweis für die Tester (optional, z.B. Version oder was neu ist)",
+                                 max_chars=300, key="beta_note")
             if st.button("💾 Speichern", key="beta_cfg_save"):
                 links = [url, pub, lurk_url]
                 if any(u.strip() and not u.strip().startswith("https://") for u in links):
@@ -208,10 +212,18 @@ def admin_beta_applications(games, me, is_admin=False):
                 elif lurk_repo.strip() and not REPO_RE.match(lurk_repo.strip()):
                     st.error("Repo bitte als owner/repo angeben.")
                 else:
-                    db.reference("beta/settings").update({
-                        "open": bool(open_), "download_url": url.strip(), "public_url": pub.strip(),
-                        "lurk_url": lurk_url.strip(), "lurk_repo": lurk_repo.strip()})
+                    changed = bool(url.strip()) and url.strip() != str(cfg.get("download_url") or "").strip()
+                    upd = {"open": bool(open_), "download_url": url.strip(), "public_url": pub.strip(),
+                           "lurk_url": lurk_url.strip(), "lurk_repo": lurk_repo.strip()}
+                    if changed:
+                        upd.update({"beta_rev": int(cfg.get("beta_rev") or 0) + 1, "beta_note": note.strip(),
+                                    "beta_link_ts": SERVER_TS})
+                    db.reference("beta/settings").update(upd)
                     st.success("Gespeichert.")
+                    if changed and notify:
+                        st.success(f"{notify_beta_testers(url.strip(), note, me)} Beta-Tester benachrichtigt.")
+            if beta_link(cfg) and st.button("📣 Beta-Tester jetzt erneut benachrichtigen", key="beta_renotify"):
+                st.success(f"{notify_beta_testers(beta_link(cfg), str(cfg.get('beta_note') or ''), me)} Beta-Tester benachrichtigt.")
 
     apps = {k: v for k, v in (db.reference("beta_applications").get() or {}).items() if isinstance(v, dict)}
     synced = _sync_pending(apps, games)
