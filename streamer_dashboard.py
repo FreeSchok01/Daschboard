@@ -13,6 +13,8 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import db
 
+from beta_apply import _apply_form, _status_view
+from downloads import render_member_downloads, render_public_downloads, settings as download_settings
 from shop import owned_games, CSS
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -593,6 +595,26 @@ def _render_giveaway_tab(tid):
     st.caption("Gewinnernamen werden bewusst nicht ins Dashboard hochgeladen. Sie bleiben nur in deiner App.")
 
 
+def _render_landing():
+    """Startseite ohne Token: Downloads und Beta-Bewerbung (statt nur 'Zugriff gesperrt')."""
+    st.info("🔒 Dein persönliches Dashboard öffnest du direkt in der **Streamdex Desktop-App** (sicherer Login per Token). "
+            "Noch keine App? Hier kannst du sie laden oder dich für die Beta bewerben.")
+    try:
+        cfg = download_settings()
+        t_dl, t_apply, t_status = st.tabs(["⬇️ Downloads", "📝 Für Beta bewerben", "🔎 Beta-Status & Download"])
+        with t_dl:
+            render_public_downloads(cfg)
+        with t_apply:
+            _apply_form(cfg)
+        with t_status:
+            _status_view(cfg)
+    except Exception as e:
+        st.error(f"Gerade nicht erreichbar, bitte später erneut versuchen. ({e})")
+    if st.session_state.get("authenticated_tid") and st.button("Sitzung zurücksetzen"):
+        st.session_state.pop("authenticated_tid", None)
+        st.rerun()
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
@@ -628,21 +650,10 @@ def render_streamer_dashboard(games):
         if st.session_state.pop("session_expired", False):
             st.warning(f"⏱️ Deine Sitzung ist nach {SESSION_MAX_AGE_S // 3600} Stunden aus Sicherheitsgründen abgelaufen. "
                        "Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
-            return
-        if st.session_state.get("acct_deleted") is not None:
+        elif st.session_state.get("acct_deleted") is not None:
             st.session_state.pop("acct_deleted", None)
             st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
-            return
-        st.warning("🔒 Zugriffsgeschützter Bereich")
-        st.info(
-            "Bitte öffne das Dashboard direkt aus deiner **Streamdex Desktop-App**, "
-            "um dich automatisch und sicher zu authentifizieren."
-        )
-        
-        # Abmeldung / Reset-Button falls Sitzung hängen geblieben ist
-        if st.button("Sitzung zurücksetzen"):
-            st.session_state.pop("authenticated_tid", None)
-            st.rerun()
+        _render_landing()
         return
 
     # Daten des authentifizierten Streamers laden
@@ -694,6 +705,12 @@ def render_streamer_dashboard(games):
             st.link_button("⬇️ Zur neuen Version", _upd[1])
         st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
                     unsafe_allow_html=True)
+        if beta_info:
+            st.markdown("**🧪 Downloads für Beta-Tester**")
+            try:
+                render_member_downloads()
+            except Exception:
+                st.caption("Download-Links gerade nicht erreichbar.")
         if any(g not in have_games for g in games):
             st.link_button("🛒 Weitere Games im Shop freischalten", f"/?u={urllib.parse.quote(str(twitch_username))}")
 
