@@ -315,7 +315,7 @@ def _daily_series(history, key, days, today=None):
 _DELETE_PATHS = [
     "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
-    "support_read/{t}",
+    "support_read/{t}", "giveaway_log/{t}",
     "presence/{t}",
 ]
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
@@ -327,6 +327,7 @@ ACCOUNT_DATA_TABLE = """
 | Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität, technische Anmelde-Kennung | Login, Status-Anzeige, Zuordnung deiner Daten |
 | Hardware-Kennungen (nur als Hash) | Sperrliste gegen Missbrauch |
 | Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
+| Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
 | Support-Nachrichten und Feedback | Support |
 | Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
 """
@@ -492,6 +493,60 @@ def _update_notice(app_version):
     return None
 
 
+# ----------------------------------------------------------------------------
+# 🎁 Giveaway-Verlauf (Datum, Preis, Teilnehmerzahl - Gewinnernamen werden bewusst NICHT hochgeladen)
+# ----------------------------------------------------------------------------
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_giveaway_log(tid):
+    try:
+        data = db.reference(f"giveaway_log/{tid}").get() or {}
+    except Exception:
+        return []
+    if isinstance(data, list):   # Firebase liefert Schlüssel 1,2,3,… als Liste zurück
+        data = {str(i): v for i, v in enumerate(data) if v is not None}
+    rows = []
+    for v in data.values():
+        if not isinstance(v, dict):
+            continue
+        d = str(v.get("date") or "")
+        if not re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$", d):
+            continue
+        rows.append({"date": d, "Preis": str(v.get("prize") or ""), "Teilnehmer": int(_num(v.get("participants")))})
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    return rows[:1000]
+
+
+def _csv_safe(text):
+    """Schützt vor Formel-Einschleusung in Excel (Zellen, die mit = + - @ beginnen)."""
+    text = str(text)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def _render_giveaway_tab(tid):
+    st.subheader("🎁 Giveaway-Verlauf")
+    rows = _load_giveaway_log(tid)
+    if not rows:
+        st.info("Noch kein Giveaway-Verlauf vorhanden. Die App lädt neue und frühere Giveaways alle 10 Minuten hoch "
+                "(ältere nach und nach, höchstens 50 pro Durchlauf).")
+        return
+    df = pd.DataFrame(rows)
+    df.insert(0, "Datum", df["date"].map(lambda d: f"{d[8:10]}.{d[5:7]}.{d[0:4]} {d[11:]}"))
+    df = df.drop(columns=["date"])
+    search = st.text_input("Preis suchen", key="gw_search")
+    if search.strip():
+        df = df[df["Preis"].str.contains(search.strip(), case=False, regex=False)]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Giveaways", _de(len(df)))
+    m2.metric("Teilnahmen gesamt", _de(int(df["Teilnehmer"].sum())))
+    m3.metric("Ø Teilnehmer", f"{df['Teilnehmer'].mean():.1f}".replace(".", ",") if len(df) else "–")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    out = df.copy()
+    out["Preis"] = out["Preis"].map(_csv_safe)
+    st.download_button("⬇️ Als CSV herunterladen", out.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                       file_name="giveaway_verlauf.csv", mime="text/csv", key="gw_csv")
+    st.caption("Gewinnernamen werden bewusst nicht ins Dashboard hochgeladen. Sie bleiben nur in deiner App.")
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
@@ -570,7 +625,7 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
-    t_over, t_games, t_stats, t_hist, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
+    t_over, t_games, t_stats, t_hist, t_gw, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "🎁 Giveaways", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
 
     # --- Tab 0: Übersicht ---
     with t_over:
@@ -630,6 +685,10 @@ def render_streamer_dashboard(games):
             m3.metric("Bester Tag", f"{series.idxmax():%d.%m.} · {_de(int(series.max()))}" if total else "–")
             st.bar_chart(series, height=300)
             st.caption("Tage, an denen die App nicht lief, zeigen 0 – ihre Aktivität wird dem nächsten Tag mit Daten zugerechnet.")
+
+    # --- Tab: Giveaway-Verlauf ---
+    with t_gw:
+        _render_giveaway_tab(authed_tid)
 
     # --- Tab 4: Support ---
     with t_support:
