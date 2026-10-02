@@ -12,6 +12,7 @@ import streamlit as st
 from firebase_admin import db
 
 GITHUB_REPO = "FreeSchok01/Givewaytool"      # öffentliche StreamDex-Version
+LURK_REPO = "FreeSchok01/Twitch-Auto-Lurk"   # StreamDex Lurk (Standard, in den Admin-Einstellungen überschreibbar)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -60,17 +61,16 @@ def public_link(cfg=None):
 
 
 def lurk_link(cfg=None):
-    """(url, version) von StreamDex Lurk oder (None, "") wenn noch nichts hinterlegt ist."""
+    """(url, version) von StreamDex Lurk: eigener Link > konfiguriertes Repo > Standard-Repo (neueste Release)."""
     cfg = cfg if cfg is not None else settings()
     if _https(cfg.get("lurk_url")):
         return _https(cfg["lurk_url"]), ""
     repo = str(cfg.get("lurk_repo") or "").strip()
-    if REPO_RE.match(repo):
-        rel = latest_release(repo)
-        if rel:
-            return rel["file"] or rel["page"], rel["tag"]
-        return f"https://github.com/{repo}/releases/latest", ""
-    return None, ""
+    repo = repo if REPO_RE.match(repo) else LURK_REPO
+    rel = latest_release(repo)
+    if rel:
+        return rel["file"] or rel["page"], rel["tag"]
+    return f"https://github.com/{repo}", ""      # noch keine Release: Repo-Seite statt 404
 
 
 def beta_link(cfg=None):
