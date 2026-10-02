@@ -69,13 +69,24 @@ def _verify_and_consume_token(token: str):
     consumed = {}
 
     def _take(current):
-        consumed["data"] = current
-        return None  # None = Eintrag löschen
+        # firebase_admin erlaubt in transaction() KEIN None als Ergebnis ("Value must not be none").
+        # Deshalb wird der Eintrag atomar auf eine Markierung gesetzt; nur wer noch die echten Daten
+        # (ohne "used") sieht, hat den Token eingelöst. Danach wird der Knoten gelöscht.
+        if isinstance(current, dict) and not current.get("used"):
+            consumed["data"] = current
+        else:
+            consumed["data"] = None
+        return {"used": True}
 
+    ref = db.reference(f"dash_tokens/{token}")
     try:
-        db.reference(f"dash_tokens/{token}").transaction(_take)
+        ref.transaction(_take)
     except Exception as e:
         return _fail(f"Transaktion fehlgeschlagen: {type(e).__name__}: {e}")
+    try:
+        ref.delete()   # Markierung entfernen (Token ist ohnehin schon unbrauchbar)
+    except Exception:
+        pass
 
     data = consumed.get("data")
     if not isinstance(data, dict):
