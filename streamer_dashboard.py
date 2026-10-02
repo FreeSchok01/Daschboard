@@ -3,7 +3,7 @@ import html
 import secrets
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -188,6 +188,52 @@ def _overview_html(presence, stats, games, have_games, beta_info, is_online):
     return f'<div class="sdx-grid4">{metrics}</div><div class="sdx-grid2">{activity}{account}</div>{games_card}'
 
 
+# ----------------------------------------------------------------------------
+# 📅 Verlauf: tägliche Zuwächse aus den Tagesständen stats_history/{tid}/{YYYY-MM-DD}
+# (die App speichert dort einmal pro Tag den letzten Stand der kumulativen Zähler)
+# ----------------------------------------------------------------------------
+HISTORY_LABELS = {
+    "giveaways": "Giveaways",
+    "giveaway_participants": "Teilnahmen",
+    "viewers": "Neue Viewer",
+    "checkins": "Check-ins",
+    "slot_spins": "Slot-Spins",
+    "megaslot_spins": "Mega-Slot-Spins",
+    "raids": "Raids",
+    "fish_catches": "Fänge (Angeln)",
+    "harvests": "Ernten (Farm)",
+}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_history(tid):
+    """Letzte ~120 Tagesstände (Schlüssel = Datum, sortiert sich von selbst). Einer mehr als der größte Zeitraum dient als Basis."""
+    data = db.reference(f"stats_history/{tid}").order_by_key().limit_to_last(121).get() or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _daily_series(history, key, days, today=None):
+    """Tägliche Zuwächse eines kumulativen Zählers als pandas-Serie (lückenlos, fehlende Tage = 0).
+    Basis ist der höchste bisher gesehene Stand: so erzeugt ein Ausreißer nach unten (z.B. leere lokale DB)
+    keine falschen Spitzen. Tage ohne App-Start werden dem nächsten Tag mit Daten zugerechnet."""
+    today = today or datetime.now(TZ).date()
+    deltas, base = {}, None
+    for day in sorted(history):
+        entry = history[day]
+        if not isinstance(entry, dict):
+            continue
+        try:
+            d = datetime.strptime(day, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        val = _num(entry.get(key))
+        if base is not None and val > base:
+            deltas[d] = val - base
+        base = val if base is None else max(base, val)
+    idx = pd.date_range(today - timedelta(days=days - 1), today)
+    return pd.Series([deltas.get(i.date(), 0) for i in idx], index=idx, name=HISTORY_LABELS.get(key, key))
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
@@ -248,7 +294,7 @@ def render_streamer_dashboard(games):
 
     st.divider()
 
-    t_over, t_games, t_stats, t_support = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "💬 Support-Chat"])
+    t_over, t_games, t_stats, t_hist, t_support = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "💬 Support-Chat"])
 
     # --- Tab 0: Übersicht ---
     with t_over:
@@ -284,7 +330,27 @@ def render_streamer_dashboard(games):
                 val = int(stats_data.get(k) or 0)
                 s_cols[i % 3].metric(label, f"{val:,}".replace(",", "."))
 
-    # --- Tab 3: Support ---
+    # --- Tab 3: Verlauf ---
+    with t_hist:
+        st.subheader("📅 Verlauf")
+        history = _load_history(authed_tid)
+        if len(history) < 2:
+            st.info("Noch kein Verlauf vorhanden. Die App speichert ab jetzt täglich deinen Stand – "
+                    "nach dem zweiten Tag erscheinen hier die ersten Balken.")
+        else:
+            col_a, col_b = st.columns([2, 1])
+            h_key = col_a.selectbox("Kennzahl", list(HISTORY_LABELS), format_func=lambda k: HISTORY_LABELS[k], key="hist_key")
+            h_days = col_b.radio("Zeitraum", [7, 30, 90], index=1, format_func=lambda d: f"{d} Tage", horizontal=True, key="hist_days")
+            series = _daily_series(history, h_key, h_days)
+            total = int(series.sum())
+            m1, m2, m3 = st.columns(3)
+            m1.metric(f"Summe ({h_days} Tage)", _de(total))
+            m2.metric("Ø pro Tag", f"{total / h_days:.1f}".replace(".", ","))
+            m3.metric("Bester Tag", f"{series.idxmax():%d.%m.} · {_de(int(series.max()))}" if total else "–")
+            st.bar_chart(series, height=300)
+            st.caption("Tage, an denen die App nicht lief, zeigen 0 – ihre Aktivität wird dem nächsten Tag mit Daten zugerechnet.")
+
+    # --- Tab 4: Support ---
     with t_support:
         st.subheader("💬 Direkt-Support")
         msgs = _load_messages(authed_tid)
