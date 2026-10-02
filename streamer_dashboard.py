@@ -5,6 +5,7 @@ import re
 import secrets
 import time
 import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -409,6 +410,49 @@ def _render_account_tab(tid, username, is_online):
             st.rerun()
 
 
+# ----------------------------------------------------------------------------
+# 🔔 Update-Hinweis: App-Version des Streamers mit der neuesten GitHub-Release vergleichen
+# ----------------------------------------------------------------------------
+GITHUB_REPO = "FreeSchok01/Givewaytool"   # dasselbe Repo, das auch die Desktop-App für Updates nutzt
+
+
+def _version_tuple(v):
+    """Gleiche Logik wie parse_v() in der App: alles außer Ziffern und Punkten entfernen ("BETA VERSION V2" -> (2,))."""
+    try:
+        return tuple(int(x) for x in re.sub(r"[^0-9.]", "", str(v)).split(".") if x)
+    except ValueError:
+        return ()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _latest_release():
+    """Neueste Release von GitHub (15 Minuten zwischengespeichert, damit das API-Limit nicht erreicht wird)."""
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={"User-Agent": "StreamdexDashboard", "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+        url = str(d.get("html_url") or "")
+        if not url.startswith("https://github.com/"):
+            url = f"https://github.com/{GITHUB_REPO}/releases/latest"
+        return {"tag": str(d.get("tag_name") or ""), "url": url}
+    except Exception:
+        return None   # offline, Limit erreicht, kein Release: dann einfach keinen Hinweis zeigen
+
+
+def _update_notice(app_version):
+    """Gibt (neueste_version, link) zurück, wenn eine neuere Version existiert, sonst None."""
+    rel = _latest_release()
+    if not rel or not rel["tag"]:
+        return None
+    cur, new = _version_tuple(app_version), _version_tuple(rel["tag"])
+    if cur and new and new > cur:
+        return rel["tag"], rel["url"]
+    return None
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
@@ -477,6 +521,11 @@ def render_streamer_dashboard(games):
 
     # --- Tab 0: Übersicht ---
     with t_over:
+        _upd = _update_notice(app_version)
+        if _upd:
+            st.info(f"🔔 **Neue Version verfügbar: {_upd[0]}** (du nutzt {app_version}). "
+                    "Die App bietet das Update beim Start an, oder du lädst es hier herunter.")
+            st.link_button("⬇️ Zur neuen Version", _upd[1])
         st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
                     unsafe_allow_html=True)
         if any(g not in have_games for g in games):
