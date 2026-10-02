@@ -14,7 +14,8 @@ import streamlit as st
 from firebase_admin import db
 
 from beta_apply import _apply_form, _status_view
-from downloads import render_member_downloads, render_public_downloads, settings as download_settings
+from downloads import (lurk_repo, render_member_downloads, render_public_downloads,
+                       settings as download_settings, update_notice)
 from shop import owned_games, CSS
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -714,6 +715,16 @@ def render_streamer_dashboard(games):
             st.info(f"🔔 **Neue Version verfügbar: {_upd[0]}** (du nutzt {app_version}). "
                     "Die App bietet das Update beim Start an, oder du lädst es hier herunter.")
             st.link_button("⬇️ Zur neuen Version", _upd[1])
+        try:    # Lurk-App: gleiche Prüfung gegen die neueste Lurk-Release
+            _lp = db.reference(f"lurk/presence/{authed_tid}").get()
+            if isinstance(_lp, dict):
+                _lupd = update_notice(lurk_repo(), _lp.get("app_version"))
+                if _lupd:
+                    st.info(f"🔔 **Neue Lurk-Version verfügbar: {_lupd[0]}** (du nutzt {_lp.get('app_version', '?')}). "
+                            "Die Lurk-App bietet das Update beim Start an, oder du lädst es hier herunter.")
+                    st.link_button("⬇️ Zur neuen Lurk-Version", _lupd[1])
+        except Exception:
+            pass
         st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
                     unsafe_allow_html=True)
         if beta_info:
