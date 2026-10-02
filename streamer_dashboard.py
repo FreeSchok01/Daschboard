@@ -1,6 +1,8 @@
 """Streamer-Dashboard mit geschütztem Zugriff über Einmal-Tokens."""
+import html
 import secrets
 import time
+import urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -87,6 +89,105 @@ def _send_message(tid, name, text):
     db.reference(f"chat_meta/{tid}").update({"last_ts": SERVER_TS, "last_sender": "streamer", "last_text": text[:100]})
 
 
+# ----------------------------------------------------------------------------
+# 🏠 Übersicht (echte Daten aus Firebase: presence, stats, game_flags, shop/beta)
+# Hinweis: Live-Zuschauer und Coins im Umlauf werden von der App aktuell nicht
+# nach Firebase gemeldet und deshalb bewusst NICHT angezeigt (keine Dummy-Werte).
+# ----------------------------------------------------------------------------
+OVERVIEW_CSS = """<style>
+.sdx-grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:4px 0 16px}
+.sdx-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px}
+.sdx-metric,.sdx-card{background:rgba(15,23,42,.85);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:16px}
+.sdx-label{font-family:'JetBrains Mono',monospace;font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
+.sdx-value{font-size:1.7rem;font-weight:800;margin-top:4px;color:#f8fafc}
+.sdx-sub{font-size:.78rem;color:#64748b;margin-top:2px}
+.sdx-ok{color:#22c55e}.sdx-off{color:#94a3b8}
+.sdx-title{font-weight:800;font-size:1rem;margin-bottom:10px;color:#f8fafc}
+.sdx-bar-row{margin:9px 0}
+.sdx-bar-head{display:flex;justify-content:space-between;font-size:.82rem;color:#cbd5e1;margin-bottom:3px}
+.sdx-bar{height:8px;border-radius:6px;background:rgba(255,255,255,.06);overflow:hidden}
+.sdx-bar>div{height:100%;border-radius:6px;background:linear-gradient(90deg,#a855f7,#06b6d4)}
+.sdx-chips{display:flex;flex-wrap:wrap;gap:8px}
+.sdx-chip{padding:4px 10px;border-radius:20px;font-size:.78rem;font-weight:700;border:1px solid}
+.sdx-chip.on{color:#22c55e;background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3)}
+.sdx-chip.off{color:#f87171;background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.25)}
+.sdx-kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.85rem;color:#f8fafc}
+.sdx-kv:last-child{border-bottom:0}.sdx-kv span:first-child{color:#64748b}
+.sdx-empty{font-size:.85rem;color:#64748b}
+</style>"""
+
+ACTIVITY_KEYS = ["checkins", "slot_spins", "megaslot_spins", "fish_catches", "harvests", "raids", "viewers"]
+
+
+def _num(v):
+    try:
+        return max(0, int(float(v)))
+    except Exception:
+        return 0
+
+
+def _de(n):
+    return f"{n:,}".replace(",", ".")
+
+
+def _overview_html(presence, stats, games, have_games, beta_info, is_online):
+    """Baut das Übersichts-HTML. Alles Dynamische wird escaped; bewusst ohne Zeilenumbrüche/Einrückung,
+    damit Streamlit-Markdown den Block nicht als Code interpretiert."""
+    e = html.escape
+    g_total = _num(stats.get("giveaways"))
+    g_part = _num(stats.get("giveaway_participants"))
+    n_unlocked = len([g for g in games if g in have_games])
+    avg = f"Ø {round(g_part / g_total)} pro Giveaway" if g_total else "noch keine Giveaways"
+
+    def metric(label, value, sub="", cls=""):
+        sub_html = f'<div class="sdx-sub">{e(sub)}</div>' if sub else ""
+        return (f'<div class="sdx-metric"><div class="sdx-label">{e(label)}</div>'
+                f'<div class="sdx-value {cls}">{e(value)}</div>{sub_html}</div>')
+
+    metrics = "".join([
+        metric("Status", "🟢 Online" if is_online else "⚪ Offline",
+               f"Aktiv {_fmt_ago(presence.get('last_seen'))}", "sdx-ok" if is_online else "sdx-off"),
+        metric("Giveaways", _de(g_total),
+               f"{_de(_num(stats.get('giveaways_7d')))} in 7 Tagen · {_de(_num(stats.get('giveaways_30d')))} in 30 Tagen"),
+        metric("Teilnahmen", _de(g_part), avg),
+        metric("Freigeschaltete Games", f"{n_unlocked} / {len(games)}",
+               "alle frei" if n_unlocked == len(games) else f"{len(games) - n_unlocked} noch gesperrt"),
+    ])
+
+    # Aktivitäts-Balken (relativ zum größten Wert)
+    rows = [(STAT_KEYS.get(k, k), _num(stats.get(k))) for k in ACTIVITY_KEYS]
+    top = max([v for _, v in rows] + [0])
+    if top == 0:
+        bars = '<div class="sdx-empty">Noch keine Aktivität erfasst.</div>'
+    else:
+        bars = "".join(
+            f'<div class="sdx-bar-row"><div class="sdx-bar-head"><span>{e(label)}</span><span>{_de(v)}</span></div>'
+            f'<div class="sdx-bar"><div style="width:{max(2, round(v / top * 100)) if v else 0}%"></div></div></div>'
+            for label, v in rows)
+    activity = f'<div class="sdx-card"><div class="sdx-title">📈 Aktivität</div>{bars}</div>'
+
+    def kv(k, v):
+        return f'<div class="sdx-kv"><span>{e(k)}</span><span>{e(str(v))}</span></div>'
+
+    account_rows = [
+        kv("Twitch-Name", presence.get("twitch_username", "?")),
+        kv("App-Version", presence.get("app_version", "?")),
+        kv("Beta-Status", "🧪 Aktiv" if beta_info else "Nein"),
+        kv("Statistik aktualisiert", _fmt_ago(stats.get("updated_at"))),
+    ]
+    if is_online and presence.get("session_start"):
+        account_rows.append(kv("Online seit", _fmt_ts(presence.get("session_start"))))
+    account = f'<div class="sdx-card"><div class="sdx-title">🧾 Konto</div>{"".join(account_rows)}</div>'
+
+    chips = "".join(
+        f'<span class="sdx-chip {"on" if g_key in have_games else "off"}">'
+        f'{"✅" if g_key in have_games else "🔒"} {e(g_name)}</span>'
+        for g_key, g_name in games.items())
+    games_card = f'<div class="sdx-card"><div class="sdx-title">🎮 Deine Games</div><div class="sdx-chips">{chips}</div></div>'
+
+    return f'<div class="sdx-grid4">{metrics}</div><div class="sdx-grid2">{activity}{account}</div>{games_card}'
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
@@ -145,16 +246,16 @@ def render_streamer_dashboard(games):
         st.session_state.pop("authenticated_tid", None)
         st.rerun()
 
-    # Key Performance Indicators
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Status", "🟢 Online" if is_online else "⚪ Offline", delta=f"Aktiv { _fmt_ago(last_seen) }")
-    c2.metric("App-Version", app_version)
-    c3.metric("Freigeschaltete Games", f"{len(have_games)} / {len(games)}")
-    c4.metric("Beta-Status", "🧪 Aktiv" if beta_info else "Nein")
-
     st.divider()
 
-    t_games, t_stats, t_support = st.tabs(["🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "💬 Support-Chat"])
+    t_over, t_games, t_stats, t_support = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "💬 Support-Chat"])
+
+    # --- Tab 0: Übersicht ---
+    with t_over:
+        st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
+                    unsafe_allow_html=True)
+        if any(g not in have_games for g in games):
+            st.link_button("🛒 Weitere Games im Shop freischalten", f"/?u={urllib.parse.quote(str(twitch_username))}")
 
     # --- Tab 1: Games ---
     with t_games:
