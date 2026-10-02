@@ -57,37 +57,43 @@ TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 
 
 def _verify_and_consume_token(token: str):
-    """Prüft einen Login-Token und löscht ihn dabei atomar (Einmal-Nutzung).
-    Lesen und Löschen passieren in EINER Firebase-Transaktion: bei zwei gleichzeitigen Aufrufen mit demselben
-    Token sieht nur einer die Daten, der andere bekommt None. Gibt die Twitch-ID zurück oder None."""
-    # Format streng prüfen: schützt auch vor Pfad-Tricks wie "a/b" oder "..", die db.reference sonst weiterreicht
-    if not isinstance(token, str) or not TOKEN_RE.match(token):
+    """Prüft einen Login-Token und löscht ihn atomar (Einmal-Nutzung).
+    DEBUG-Version: der genaue Ablehnungsgrund landet in st.session_state['_tok_dbg']."""
+    def _fail(reason):
+        st.session_state["_tok_dbg"] = reason
         return None
+
+    if not isinstance(token, str) or not TOKEN_RE.match(token):
+        return _fail(f"Format falsch (Länge {len(token) if isinstance(token, str) else '-'})")
 
     consumed = {}
 
     def _take(current):
-        consumed["data"] = current   # bei einem Retry wird überschrieben: gewertet wird der erfolgreiche Durchlauf
-        return None                  # None = Eintrag löschen
+        consumed["data"] = current
+        return None  # None = Eintrag löschen
 
     try:
         db.reference(f"dash_tokens/{token}").transaction(_take)
-    except Exception:
-        return None                  # z.B. TransactionAbortedError nach zu vielen Konflikten
+    except Exception as e:
+        return _fail(f"Transaktion fehlgeschlagen: {type(e).__name__}: {e}")
 
     data = consumed.get("data")
     if not isinstance(data, dict):
-        return None                  # gab es nicht oder hat ein anderer gleichzeitig eingelöst
+        return _fail(f"Kein Eintrag gefunden (data={data!r}). Token schon eingelöst, "
+                     "oder das Dashboard liest in einer anderen Datenbank.")
 
     try:
         created_at = int(data.get("ts") or 0)
     except (TypeError, ValueError):
-        return None
-    if not created_at or int(time.time() * 1000) - created_at > TOKEN_MAX_AGE_MS:
-        return None                  # abgelaufen (der Eintrag ist trotzdem schon gelöscht)
+        return _fail(f"ts ungültig: {data!r}")
+    age_ms = int(time.time() * 1000) - created_at
+    if not created_at or age_ms > TOKEN_MAX_AGE_MS:
+        return _fail(f"Abgelaufen: Alter {age_ms / 1000:.0f} s (erlaubt {TOKEN_MAX_AGE_MS // 1000} s), ts={created_at}")
 
     tid = str(data.get("tid") or "")
-    return tid if TID_RE.match(tid) else None
+    if not TID_RE.match(tid):
+        return _fail(f"tid ungültig: {tid!r}")
+    return tid
 
 
 def _load_messages(tid):
@@ -269,6 +275,7 @@ def render_streamer_dashboard(games):
             st.rerun()
         else:
             st.error("Der Zugriffs-Link ist ungültig oder abgelaufen. Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
+            st.caption("🔧 Debug: " + str(st.session_state.get("_tok_dbg", "kein Grund erfasst")))
 
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
