@@ -1,4 +1,4 @@
-"""Download-Buttons: öffentlich (neueste GitHub-Release), nur für Beta-Tester, StreamDex Lurk.
+"""Download-Buttons: öffentlich (neueste GitHub-Release) und nur für Beta-Tester. (Lurk-Download-Button ist entfernt.)
 
 Firebase: beta/settings = {open, download_url,            <- Beta-Download (nur Freigeschaltete)
                            public_url,                    <- optional: eigener öffentlicher Link (sonst GitHub-Release)
@@ -81,32 +81,21 @@ def beta_link(cfg=None):
 
 
 def render_public_downloads(cfg=None):
-    """Öffentliche Download-Buttons (für alle sichtbar): StreamDex + Lurk."""
+    """Öffentlicher Download-Button (für alle sichtbar): StreamDex."""
     cfg = cfg if cfg is not None else settings()
-    c1, c2 = st.columns(2)
     url, ver = public_link(cfg)
-    c1.link_button(f"⬇️ StreamDex herunterladen{f' ({ver})' if ver else ''}", url, type="primary", use_container_width=True)
-    c1.caption("Öffentliche Version")
-    lurk, lver = lurk_link(cfg)
-    if lurk:
-        c2.link_button(f"⬇️ StreamDex Lurk herunterladen{f' ({lver})' if lver else ''}", lurk, use_container_width=True)
-        c2.caption("Lurk-App")
-    else:
-        c2.button("⬇️ StreamDex Lurk (folgt)", disabled=True, use_container_width=True)
+    st.link_button(f"⬇️ StreamDex herunterladen{f' ({ver})' if ver else ''}", url, type="primary", use_container_width=True)
+    st.caption("Öffentliche Version")
 
 
 def render_member_downloads(cfg=None):
-    """Für Beta-Tester im Dashboard: Beta-Download + Lurk."""
+    """Für Beta-Tester im Dashboard: Beta-Download."""
     cfg = cfg if cfg is not None else settings()
     b = beta_link(cfg)
-    lurk, lver = lurk_link(cfg)
-    c1, c2 = st.columns(2)
     if b:
-        c1.link_button("🧪 Beta herunterladen", b, type="primary", use_container_width=True)
+        st.link_button("🧪 Beta herunterladen", b, type="primary", use_container_width=True)
     else:
-        c1.info("Der Beta-Download-Link folgt in Kürze.")
-    if lurk:
-        c2.link_button(f"⬇️ StreamDex Lurk{f' ({lver})' if lver else ''}", lurk, use_container_width=True)
+        st.info("Der Beta-Download-Link folgt in Kürze.")
 
 
 def lurk_repo(cfg=None):
