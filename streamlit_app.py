@@ -24,6 +24,7 @@ from stats_panel import stats_panel
 from streamer_dashboard import render_streamer_dashboard
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 from theme import apply_theme, header_html
+from vacation import vacation_panel
 
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -231,9 +232,10 @@ def chat_messages(tid, ns=""):
         if not msgs:
             st.caption("Noch keine Nachrichten.")
         for m in msgs:
-            is_admin = m.get("sender") == "admin"
+            is_bot = m.get("sender") == "bot"        # automatische Antwort des StreamDex Bots (Urlaubsmodus)
+            is_admin = m.get("sender") == "admin" or is_bot
             with st.chat_message("assistant" if is_admin else "user"):
-                st.caption(f"{m.get('name') or ('Support' if is_admin else 'Streamer')} · {fmt_ts(m.get('ts'))}")
+                st.caption(f"{'🤖 ' if is_bot else ''}{m.get('name') or ('Support' if is_admin else 'Streamer')} · {fmt_ts(m.get('ts'))}" + (" · automatisch" if is_bot else ""))
                 st.write(m.get("text", ""))
     if msgs:
         mark_read(tid, max(int(m.get("ts") or 0) for m in msgs), ns)
@@ -498,6 +500,10 @@ def main():
         ["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"]
     )
     with tab_support:
+        try:
+            vacation_panel(ADMIN_NAME)
+        except Exception as e:
+            st.error(f"Urlaubsmodus nicht verfügbar: {e}")
         left, right = st.columns([1, 2], gap="large")
         with left:
             st.subheader("Streamer")
