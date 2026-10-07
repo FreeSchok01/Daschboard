@@ -24,7 +24,7 @@ from stats_panel import stats_panel
 from streamer_dashboard import render_streamer_dashboard
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 from theme import apply_theme, header_html
-from vacation import vacation_panel
+from vacation import start_vacation_bot, vacation_panel
 
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -85,7 +85,7 @@ def require_login():
 # Firebase
 # ----------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def init_firebase():
+def _connect_firebase():
     try:
         return firebase_admin.get_app()
     except ValueError:
@@ -109,6 +109,16 @@ def init_firebase():
             st.error("Der `private_key` konnte nicht gelesen werden.")
             st.stop()
         return firebase_admin.initialize_app(cred, {"databaseURL": st.secrets["firebase_db"]["database_url"]})
+
+
+def init_firebase():
+    """Verbindet Firebase und stellt sicher, dass der StreamDex Bot (Urlaubsmodus) im Hintergrund läuft."""
+    app = _connect_firebase()
+    try:
+        start_vacation_bot(GAMES)
+    except Exception as e:
+        print("StreamDex Bot konnte nicht gestartet werden:", e)
+    return app
 
 
 def fmt_ago(seconds):
