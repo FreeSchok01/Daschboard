@@ -140,7 +140,14 @@ def _until_txt(cfg):
     return str(cfg.get("until") or "").strip()
 
 
+def _bot_on(cfg):
+    """Bot antwortet: im Urlaubsmodus ODER wenn der Schalter 'immer antworten' an ist."""
+    return _active(cfg) or cfg.get("always_on") is True
+
+
 def _when(cfg):
+    if not _active(cfg):
+        return "sobald er Zeit hat"
     u = _until_txt(cfg)
     return f"ab dem {u}" if u else "sobald er zurück ist"
 
@@ -164,12 +171,14 @@ def _ctx(tid):
 
 def _ver_key(v):
     """'BETA VERSION V3' -> 'beta', 'v5.2.6' -> 'v526', sonst None."""
-    v = str(v or "").lower()
-    if "beta" in v:
+    v = str(v or "").lower().strip()
+    if not v:
+        return None
+    if "beta" in v and re.search(r"v\s*3\b", v):
         return "beta"
     if re.search(r"5\.2\.6", v):
         return "v526"
-    return None
+    return "old"      # z. B. BETA VERSION V2 oder ältere/andere Version -> Update empfehlen
 
 
 def _a_version(ctx, cfg):
@@ -178,6 +187,9 @@ def _a_version(ctx, cfg):
         return ("ℹ️ Ich sehe deine Version gerade nicht. Im Tool oben steht ein Badge, z. B. „v5.2.6“ oder „BETA "
                 "VERSION V3“. Neueste Version: {releases}")
     k = _ver_key(v)
+    if k == "old":
+        return (f"ℹ️ Du nutzt: {v}. Diese Version kenne ich nicht genau – ich rate dir zum Update auf die BETA VERSION "
+                "V3, dann hast du alle Funktionen und meine Antworten passen zu deiner App.\nDownload: {releases}")
     extra = {"beta": " Du hast die neueste Funktionsstufe (inkl. Mod-Panel, Songrequest, Minen 2.0, Angel v2 …).",
              "v526": " Die BETA VERSION V3 hat zusätzlich u. a. Mod-/Zuschauer-Panel, Songrequest, Hi-Lo, Automationen, "
                      "Minen 2.0, Angel v2 – tippe „was ist neu“."}.get(k, "")
@@ -187,6 +199,9 @@ def _a_version(ctx, cfg):
 def _render_wissen(e, ctx):
     ver = _ver_key(ctx.get("version"))
     a = e["answer"]
+    if ver == "old":
+        return (f"⚠️ Du nutzt {ctx.get('version')} – diese Version kenne ich nicht genau. Ich rate dir zum Update auf die "
+                "BETA VERSION V3 ({releases}), dann stimmt alles, was ich dir erkläre.\n\n" + a)
     if ver == "v526" and e.get("answer_v526"):
         a = e["answer_v526"]
     if e.get("v") == "beta":
@@ -270,7 +285,7 @@ DEFAULT_FAQ = [
      "kw": ["overlay", "obs", "browserquelle", "browser quelle", "browser source", "localhost", "8765",
             "subathon", "streams24", "stempeluhr", "alert", "schwarz", "leer"]},
     {"title": "Beta",
-     "answer": "🧪 Beta-Zugang beantragst du hier: {seite}/?beta=1 – der Support prüft Bewerbungen nach dem Urlaub.",
+     "answer": "🧪 Beta-Zugang beantragst du hier: {seite}/?beta=1 – der Support prüft Bewerbungen so bald wie möglich.",
      "kw": ["beta zugang", "beta bewerb", "beta tester", "beta beantragen", "bewerb", "tester"]},
     {"title": "Meine Version", "answer": _a_version,
      "kw": ["welche version", "meine version", "version habe ich", "welche version nutze", "versionsnummer"]},
@@ -293,7 +308,9 @@ DEFAULT_FAQ = [
                 "Alles bleibt für den Support gespeichert."),
      "kw": []},
     {"title": "Wann kommt Antwort?",
-     "answer": "⏳ Der Support ist im Urlaub und antwortet {zurueck}. Deine Nachricht ist gespeichert.",
+     "answer": lambda ctx, cfg: ("⏳ Das Team ist gerade im Urlaub und antwortet {zurueck}. Deine Nachricht ist gespeichert."
+                                 if _active(cfg) else
+                                 "⏳ Das Team antwortet, sobald es Zeit hat. Deine Nachricht ist gespeichert."),
      "kw": ["wann", "urlaub", "erreichbar", "dauert", "antwort", "zurueck", "wie lange"]},
     {"title": "Bist du ein Bot?",
      "answer": ("🤖 Ich bin der StreamDex Bot – ein automatischer Helfer, kein Mensch. Der echte Support liest alles, "
@@ -432,10 +449,15 @@ def pick_answers(text, faq):
 # ----------------------------------------------------------------------------
 def _intro(ctx, cfg):
     name = ctx.get("name") or ""
-    u = _until_txt(cfg)
-    s = (f"🏖️ Hi{' ' + name if name else ''}! Ich bin der StreamDex Bot. Der Support ist gerade im Urlaub"
-         + (f" und ab dem {u} wieder da" if u else "") + ". Ich helfe dir trotzdem gern – und deine Nachricht bleibt "
-         "für den Support gespeichert. Tippe jederzeit MENÜ für eine Übersicht.")
+    hi = f"Hi{' ' + name if name else ''}!"
+    if _active(cfg):
+        u = _until_txt(cfg)
+        s = (f"🏖️ {hi} Ich bin der StreamDex Bot. Das Team ist gerade im Urlaub"
+             + (f" und ab dem {u} wieder da" if u else "") + ". Ich helfe dir trotzdem gern – und deine Nachricht bleibt "
+             "für das Team gespeichert. Tippe jederzeit MENÜ für eine Übersicht.")
+    else:
+        s = (f"👋 {hi} Ich bin der StreamDex Bot und helfe dir gern. Deine Nachricht bleibt für das Team gespeichert. "
+             "Tippe jederzeit MENÜ für eine Übersicht.")
     if cfg.get("text"):
         s += "\n" + str(cfg["text"])
     return s
@@ -461,9 +483,10 @@ def _render(e, ctx, cfg):
 
 
 def _handoff(cfg):
-    return ("👤 Alles klar, ich habe deine Nachricht für den Support markiert. Er ist im Urlaub und meldet sich "
+    return ("👤 Alles klar, ich habe deine Nachricht für das Team markiert. "
+            + ("Es ist gerade im Urlaub und meldet sich " if _active(cfg) else "Es meldet sich ")
             + _when(cfg) + ". Schreib am besten gleich dazu, worum es geht (Version, was passiert, Fehlermeldung) – "
-            "dann kann er sofort loslegen.")
+            "dann kann das Team sofort loslegen.")
 
 
 # ----------------------------------------------------------------------------
@@ -834,7 +857,7 @@ def _loop():
         try:
             cfg = _dict(db.reference("support_status").get())
             _STATE["last_run"] = time.time()
-            if _active(cfg):
+            if _bot_on(cfg):
                 _scan(cfg)
                 wait = POLL_ACTIVE_S
         except Exception as e:
@@ -874,11 +897,13 @@ def vacation_panel(me):
     esc = _dict(db.reference("bot_escalations").get())
     on_now = cur.get("vacation") is True
     live = _active(cur)
+    always = cur.get("always_on") is True
     label = ("🏖️ Urlaubsmodus · AN (StreamDex Bot antwortet)" if live
+             else "🤖 StreamDex Bot · antwortet immer (kein Urlaub)" if always and not on_now
              else "🏖️ Urlaubsmodus · abgelaufen" if on_now else "🏖️ Urlaubsmodus · aus")
     if esc:
         label += f" · 🚨 {len(esc)} vom Bot übergeben"
-    with st.expander(label, expanded=on_now or bool(esc)):
+    with st.expander(label, expanded=on_now or always or bool(esc)):
         if esc:
             st.markdown("**🚨 Der Bot hat diese Streamer an dich übergeben**")
             for tid, e in sorted(esc.items(), key=lambda kv: -int(_dict(kv[1]).get("ts") or 0)):
@@ -895,6 +920,9 @@ def vacation_panel(me):
                    "Nachrichten (versteht Tippfehler, Menü mit Zahlen, Live-Daten wie Spiele-Freigaben/Sperre). "
                    "Die Chats bleiben für dich ungelesen. Antwortest du selbst, hält sich der Bot raus. Bugs, Ideen und Feedback, "
                    "die Streamer dem Bot schreiben, landen automatisch in „Bugs & Ideen“ (feedback_inbox).")
+        always_new = st.toggle("🤖 Bot antwortet immer (auch ohne Urlaubsmodus)", value=always, key="vac_always")
+        st.caption("Ohne Urlaubsmodus antwortet der Bot ganz normal, ohne den Hinweis „Team im Urlaub“. "
+                   "Mit Urlaubsmodus sagt er den Leuten, dass das Team gerade im Urlaub ist.")
         on = st.toggle("Urlaubsmodus an", value=on_now, key="vac_on")
         until = st.text_input("Zurück am (optional, z. B. 20.10.2026)", value=str(cur.get("until") or ""),
                               max_chars=20, key="vac_until")
@@ -904,11 +932,12 @@ def vacation_panel(me):
                             value=str(cur.get("text") or ""), max_chars=300, height=80, key="vac_text")
         if st.button("💾 Speichern", key="vac_save"):
             payload = {"vacation": bool(on), "until": until.strip(), "text": text.strip(),
-                       "auto_end": bool(auto_end), "updated": SERVER_TS, "by": me}
-            if on and not on_now:
+                       "auto_end": bool(auto_end), "always_on": bool(always_new), "updated": SERVER_TS, "by": me}
+            if (on or always_new) and not _bot_on(cur):
                 payload["since"] = SERVER_TS   # nur Nachrichten NACH dem Einschalten werden beantwortet
             db.reference("support_status").update(payload)
-            st.success("Urlaubsmodus ist jetzt " + ("AN." if on else "aus."))
+            st.success("Urlaubsmodus ist jetzt " + ("AN." if on else "aus.") + " Bot antwortet immer: "
+                       + ("ja." if always_new else "nein."))
             st.rerun()
 
         t = _STATE["thread"]
