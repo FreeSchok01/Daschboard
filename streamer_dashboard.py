@@ -22,6 +22,7 @@ from downloads import (beta_link, lurk_repo, render_member_downloads, render_pub
 from shop import owned_games, CSS
 from events import render_event_manager
 from planner import render_planner
+from radar import render_radar
 from creator_profile import render_creator_profile
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -1179,7 +1180,7 @@ def _render_landing():
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">🎮</span><span><b>Multi Tool</b><small>Chat Games, Kanalpunkte, Commands, Automationen und mehr.</small></span></a>'
         '<a class="sd-public-tool" href="/?planner=1"><span class="sd-public-tool-icon">▣</span><span><b>Planner</b><small>Stream-Planung, Kalender und Erinnerungen.</small></span></a>'
         '<a class="sd-public-tool" href="/?events=1"><span class="sd-public-tool-icon">♜</span><span><b>Events</b><small>Community-Events, Turniere und Specials.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Radar</b><small>Live-Status, Statistiken und mehrere Streamer im Blick.</small></span></a>'
+        '<a class="sd-public-tool" href="/?radar=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Radar</b><small>Live-Status, Statistiken und mehrere Streamer im Blick.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Lurk Tool</b><small>Browser öffnet sich automatisch, wenn ein Stream live geht.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
@@ -1506,6 +1507,16 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
+    # Direkter Radar-Link: nur für angemeldete Streamer öffnen.
+    if str(st.query_params.get("radar", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="radar_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_radar(authed_tid, twitch_username)
+        return
+
     # Direkter Profileditor: nur nach erfolgreichem Streamer-Login öffnen.
     if str(st.query_params.get("profile", "")) == "1":
         back_col, _ = st.columns([1, 5])
@@ -1528,9 +1539,10 @@ def render_streamer_dashboard(games):
 
     # Große Kachel-Navigation statt kleiner Reiter
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
+        t_over, t_games, t_radar, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
             "🏠 Übersicht",
             "🎮 Freigeschaltete Games",
+            "📡 Radar",
             "📈 Kanal-Statistiken",
             "📅 Verlauf",
             "🎁 Giveaways",
@@ -1541,6 +1553,10 @@ def render_streamer_dashboard(games):
             "💬 Support-Chat",
             "🧾 Konto & Datenschutz",
         ])
+
+    # --- StreamDex Radar ---
+    with t_radar:
+        render_radar(authed_tid, twitch_username)
 
     # --- Tab 0: Übersicht ---
     with t_over:
