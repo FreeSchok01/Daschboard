@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 from firebase_admin import db
@@ -13,6 +14,8 @@ from firebase_admin import db
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_USERS_URL = "https://api.twitch.tv/helix/users"
 TWITCH_STREAMS_URL = "https://api.twitch.tv/helix/streams"
+TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
+TWITCH_API_BASE = "https://api.twitch.tv/helix"
 MAX_WATCHLIST = 50
 LOGIN_RE = re.compile(r"^[a-z0-9_]{1,25}$")
 
@@ -175,14 +178,430 @@ def _fmt_started(value):
         return "—"
 
 
-def render_radar(tid, username):
+
+def _creator_access_token(tid):
+    """Liefert nur das Zugriffstoken der passend angemeldeten Twitch-Identität."""
+    session_tid = str(st.session_state.get("twitch_oauth_tid", "") or "")
+    if session_tid != str(tid):
+        return None
+    token = str(st.session_state.get("twitch_oauth_access_token", "") or "")
+    try:
+        expires_at = float(st.session_state.get("twitch_oauth_expires_at", 0) or 0)
+    except (TypeError, ValueError):
+        expires_at = 0
+    if token and time.time() < expires_at - 60:
+        return token
+
+    refresh_token = str(st.session_state.get("twitch_oauth_refresh_token", "") or "")
+    if not refresh_token:
+        return None
+    try:
+        client_id, client_secret = _credentials()
+        result = _http_json(
+            TWITCH_TOKEN_URL,
+            method="POST",
+            form={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        refreshed = str(result.get("access_token", "") or "")
+        if not refreshed:
+            return None
+        checked = _http_json(
+            TWITCH_VALIDATE_URL,
+            headers={"Authorization": f"OAuth {refreshed}"},
+        )
+        if str(checked.get("user_id", "") or "") != str(tid):
+            return None
+        try:
+            expires_in = max(60, int(result.get("expires_in") or 14400))
+        except (TypeError, ValueError):
+            expires_in = 14400
+        st.session_state["twitch_oauth_access_token"] = refreshed
+        st.session_state["twitch_oauth_refresh_token"] = str(result.get("refresh_token") or refresh_token)
+        st.session_state["twitch_oauth_expires_at"] = time.time() + expires_in
+        new_scopes = result.get("scope")
+        if isinstance(new_scopes, list):
+            st.session_state["twitch_oauth_scopes"] = new_scopes
+        return refreshed
+    except Exception:
+        # Tokens und OAuth-Fehlerdetails niemals in die Oberfläche oder Logs übernehmen.
+        return None
+
+
+def _helix_get(path, token, params=None):
+    client_id, _ = _credentials()
+    query = urllib.parse.urlencode(params or {})
+    url = f"{TWITCH_API_BASE}/{path.lstrip('/')}" + (f"?{query}" if query else "")
+    return _http_json(
+        url,
+        headers={"Client-Id": client_id, "Authorization": f"Bearer {token}"},
+    )
+
+
+def _creator_metrics(tid, token, force=False):
+    """Lädt die verfügbaren eigenen Kanalmetriken und hält sie kurz sitzungsintern vor."""
+    cache = st.session_state.get("sd_radar_creator_metrics_cache")
+    now = time.time()
+    if not force and isinstance(cache, dict) and cache.get("tid") == str(tid) and now - float(cache.get("ts", 0)) < 45:
+        cached = cache.get("data")
+        if isinstance(cached, dict):
+            return cached
+
+    now_utc = datetime.now(timezone.utc)
+    month_ago = (now_utc - timedelta(days=30)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    requests = {
+        "user": ("users", {"id": str(tid)}),
+        "channel": ("channels", {"broadcaster_id": str(tid)}),
+        "stream": ("streams", {"user_id": str(tid)}),
+        "followers": ("channels/followers", {"broadcaster_id": str(tid), "first": 1}),
+        "subscriptions": ("subscriptions", {"broadcaster_id": str(tid), "first": 1}),
+        "bits": ("bits/leaderboard", {"count": 10, "period": "month", "started_at": month_ago}),
+        "goals": ("goals", {"broadcaster_id": str(tid)}),
+        "hypetrain": ("hypetrain/status", {"broadcaster_id": str(tid)}),
+        "ads": ("channels/ads", {"broadcaster_id": str(tid)}),
+        "polls": ("polls", {"broadcaster_id": str(tid), "first": 20}),
+        "predictions": ("predictions", {"broadcaster_id": str(tid), "first": 20}),
+        "charity": ("charity/campaigns", {"broadcaster_id": str(tid)}),
+        "videos": ("videos", {"user_id": str(tid), "type": "archive", "first": 10, "sort": "time"}),
+        "clips": ("clips", {"broadcaster_id": str(tid), "first": 10, "started_at": month_ago, "ended_at": now_utc.isoformat(timespec="seconds").replace("+00:00", "Z")}),
+    }
+    result = {}
+    for key, (path, params) in requests.items():
+        try:
+            result[key] = _helix_get(path, token, params)
+        except Exception:
+            result[key] = {"data": [], "_unavailable": True}
+    st.session_state["sd_radar_creator_metrics_cache"] = {"tid": str(tid), "ts": now, "data": result}
+    return result
+
+
+def _api_rows(metrics, key):
+    item = metrics.get(key, {})
+    if not isinstance(item, dict):
+        return []
+    rows = item.get("data", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _api_total(metrics, key):
+    item = metrics.get(key, {})
+    if not isinstance(item, dict) or item.get("_unavailable") or "total" not in item:
+        return None
+    try:
+        return int(item.get("total") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_stream_sample(tid, stream):
+    """Sammelt höchstens alle fünf Minuten eine eigene Zuschauer-Messung in Firebase."""
+    try:
+        root = db.reference(f"radar_analytics/{tid}")
+        active_id = str(root.child("active_stream_id").get() or "")
+        now = int(time.time())
+        if stream:
+            stream_id = str(stream.get("id") or "")
+            if not stream_id:
+                return
+            session_ref = root.child("sessions").child(stream_id)
+            saved = session_ref.get() or {}
+            try:
+                twitch_started = datetime.fromisoformat(str(stream.get("started_at", "")).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError, OverflowError):
+                twitch_started = now
+            session_ref.update({
+                "stream_id": stream_id,
+                "started_at_unix": int(saved.get("started_at_unix") or twitch_started),
+                "title": str(stream.get("title") or "")[:300],
+                "game": str(stream.get("game_name") or "")[:120],
+                "last_observed_at": now,
+            })
+            try:
+                last_sample = int(saved.get("last_sample_at") or 0)
+            except (TypeError, ValueError):
+                last_sample = 0
+            if now - last_sample >= 300:
+                session_ref.child("samples").child(str(now)).set({
+                    "ts": now,
+                    "viewers": int(stream.get("viewer_count") or 0),
+                })
+                session_ref.child("last_sample_at").set(now)
+            if active_id and active_id != stream_id:
+                root.child("sessions").child(active_id).update({"ended_at_unix": now})
+            root.child("active_stream_id").set(stream_id)
+        elif active_id:
+            root.child("sessions").child(active_id).update({"ended_at_unix": now})
+            root.child("active_stream_id").set("")
+    except Exception:
+        # Statistik-Messung darf das eigentliche Dashboard nicht blockieren.
+        return
+
+
+def _tracked_sessions(tid):
+    try:
+        raw = db.reference(f"radar_analytics/{tid}/sessions").get() or {}
+    except Exception:
+        return []
+    if not isinstance(raw, dict):
+        return []
+    sessions = []
+    for stream_id, session in raw.items():
+        if not isinstance(session, dict):
+            continue
+        samples_raw = session.get("samples", {})
+        samples = []
+        if isinstance(samples_raw, dict):
+            for sample in samples_raw.values():
+                if isinstance(sample, dict):
+                    try:
+                        samples.append({"ts": int(sample.get("ts") or 0), "viewers": int(sample.get("viewers") or 0)})
+                    except (TypeError, ValueError):
+                        pass
+        samples.sort(key=lambda row: row["ts"])
+        sessions.append({
+            "stream_id": str(stream_id),
+            "started_at_unix": int(session.get("started_at_unix") or 0),
+            "ended_at_unix": int(session.get("ended_at_unix") or 0),
+            "title": str(session.get("title") or ""),
+            "game": str(session.get("game") or ""),
+            "samples": samples,
+        })
+    return sorted(sessions, key=lambda row: row["started_at_unix"], reverse=True)
+
+
+@st.fragment(run_every=300)
+def _render_creator_analytics(tid, username, reauth_url=None):
+    """Eigene Twitch-Kennzahlen plus transparent markierte StreamDex-Messwerte."""
+    st.markdown("### 📈 Deine Twitch-Creator-Statistiken")
+    st.caption("Privater Bereich für dein eigenes, angemeldetes Twitch-Konto.")
+    token = _creator_access_token(tid)
+    if not token:
+        st.warning(
+            "Für deine persönlichen Twitch-Statistiken ist eine erneute Twitch-Freigabe nötig. "
+            "Damit kann StreamDex nur die ausdrücklich angefragten Statistikbereiche lesen."
+        )
+        if reauth_url:
+            st.link_button("🟣 Twitch-Statistiken verbinden", reauth_url, type="primary")
+        st.caption("Das Twitch-Zugriffstoken wird nur in der laufenden Sitzung gehalten, nicht in Firebase gespeichert.")
+        return
+
+    refresh_col, status_col = st.columns([1, 2], vertical_alignment="center")
+    if refresh_col.button("🔄 Statistiken aktualisieren", key="sd_radar_analytics_refresh"):
+        st.session_state.pop("sd_radar_creator_metrics_cache", None)
+        st.rerun()
+    status_col.caption("Live-Daten werden automatisch etwa alle 5 Minuten neu abgefragt.")
+
+    try:
+        metrics = _creator_metrics(tid, token)
+    except Exception:
+        st.error("Die Twitch-Statistiken konnten gerade nicht geladen werden. Bitte später erneut versuchen.")
+        return
+
+    user_rows = _api_rows(metrics, "user")
+    channel_rows = _api_rows(metrics, "channel")
+    live_rows = _api_rows(metrics, "stream")
+    videos = _api_rows(metrics, "videos")
+    clips = _api_rows(metrics, "clips")
+    live = live_rows[0] if live_rows else None
+    channel = channel_rows[0] if channel_rows else {}
+    user = user_rows[0] if user_rows else {}
+    _record_stream_sample(tid, live)
+
+    tracked = _tracked_sessions(tid)
+    current_session = next((s for s in tracked if live and s["stream_id"] == str(live.get("id"))), None)
+    sample_session = current_session or (tracked[0] if tracked else None)
+    samples = sample_session.get("samples", []) if sample_session else []
+    sampled_values = [int(row["viewers"]) for row in samples]
+    sampled_avg = round(sum(sampled_values) / len(sampled_values)) if sampled_values else None
+    sampled_max = max(sampled_values) if sampled_values else None
+    latest_ten_video_views = sum(int(v.get("view_count") or 0) for v in videos[:10])
+    bits_rows = _api_rows(metrics, "bits")
+    top_bits = max((int(row.get("score") or 0) for row in bits_rows), default=None)
+    recent_followers = _api_total(metrics, "followers")
+    subscribers = _api_total(metrics, "subscriptions")
+
+    display_name = str(user.get("display_name") or user.get("login") or username)
+    st.markdown(
+        f'<div class="sd-radar-card" style="min-height:0;margin:0 0 14px">'
+        f'<div class="sd-radar-card-head">'
+        f'<div><div class="sd-radar-name">{html.escape(display_name)}</div>'
+        f'<div class="sd-radar-login">@{html.escape(str(user.get("login") or username))}</div></div>'
+        f'<span class="sd-radar-live {"on" if live else "off"}"><i></i>{"LIVE" if live else "OFFLINE"}</span>'
+        f'</div>'
+        f'<div class="sd-radar-stream-title">{html.escape(str((live or {}).get("title") or channel.get("title") or "Aktuell kein laufender Stream"))}</div>'
+        f'<div class="sd-radar-meta"><span>🎮 {html.escape(str((live or {}).get("game_name") or channel.get("game_name") or "Keine Kategorie"))}</span>'
+        f'<span>🌐 {html.escape(str(channel.get("broadcaster_language") or "Sprache nicht angegeben").upper())}</span>'
+        f'<span>🗓️ Twitch-Konto seit {html.escape(str(user.get("created_at", "") or "unbekannt")[:10])}</span></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🔴 Aktuelle Zuschauer", f'{int(live.get("viewer_count") or 0):,}'.replace(",", ".") if live else "Offline")
+    c2.metric("👥 Follower gesamt", f"{recent_followers:,}".replace(",", ".") if recent_followers is not None else "—")
+    c3.metric("⭐ Abonnenten", f"{subscribers:,}".replace(",", ".") if subscribers is not None else "Nicht verfügbar")
+    c4.metric("🎬 Views (letzte 10 VODs)", f"{latest_ten_video_views:,}".replace(",", ".") if videos else "—")
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("📊 Ø Zuschauer (gemessen)", f"{sampled_avg:,}".replace(",", ".") if sampled_avg is not None else "Noch keine Messung")
+    s2.metric("🚀 Peak-Zuschauer (gemessen)", f"{sampled_max:,}".replace(",", ".") if sampled_max is not None else "Noch keine Messung")
+    s3.metric("💎 Höchster Bits-Score", f"{top_bits:,}".replace(",", ".") if top_bits is not None else "—")
+    s4.metric("📼 Verfügbare VODs", len(videos))
+
+    st.caption(
+        "Ø- und Peak-Zuschauer sind eigene StreamDex-Messungen und keine rückwirkend importierten Twitch-Analytics. "
+        "Die Messung läuft ungefähr alle fünf Minuten, solange dein Dashboard geöffnet ist."
+    )
+    if live:
+        try:
+            started = datetime.fromisoformat(str(live.get("started_at", "")).replace("Z", "+00:00"))
+            elapsed = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+            st.info(f"🔴 Dein Stream läuft seit etwa {elapsed // 3600} Std. {(elapsed % 3600) // 60} Min.")
+        except (TypeError, ValueError):
+            st.info("🔴 Du bist gerade live auf Twitch.")
+
+    if samples:
+        with st.expander("📈 Zuschauerverlauf aus StreamDex-Messungen", expanded=bool(live)):
+            st.line_chart({"Zuschauer": sampled_values}, height=220)
+            st.caption(f"{len(samples)} Messpunkte in dieser Session · Maximum {sampled_max:,} · Durchschnitt {sampled_avg:,}")
+
+    goals = _api_rows(metrics, "goals")
+    with st.expander("🎯 Creator-Ziele", expanded=bool(goals)):
+        if not goals:
+            st.caption("Aktuell kein Twitch-Creator-Ziel verfügbar oder die Berechtigung fehlt.")
+        for goal in goals:
+            try:
+                current = int(goal.get("current_amount") or 0)
+                target = int(goal.get("target_amount") or 0)
+            except (TypeError, ValueError):
+                current, target = 0, 0
+            label = str(goal.get("description") or goal.get("type") or "Creator-Ziel")
+            st.markdown(f"**{html.escape(label)}** · {current:,} / {target:,}".replace(",", "."))
+            st.progress(min(1.0, current / target) if target > 0 else 0.0)
+
+    trains = _api_rows(metrics, "hypetrain")
+    with st.expander("🚂 Hype Train", expanded=False):
+        train_data = trains[0] if trains else {}
+        current_train = train_data.get("current") if isinstance(train_data, dict) else None
+        record_train = train_data.get("all_time_high") if isinstance(train_data, dict) else None
+        if isinstance(current_train, dict):
+            a, b, c = st.columns(3)
+            a.metric("Aktuelles Level", current_train.get("level", "—"))
+            b.metric("Fortschritt", f'{int(current_train.get("progress") or 0):,} / {int(current_train.get("goal") or 0):,}'.replace(",", "."))
+            c.metric("Punkte gesamt", f'{int(current_train.get("total") or 0):,}'.replace(",", "."))
+            goal = int(current_train.get("goal") or 0)
+            progress = int(current_train.get("progress") or 0)
+            st.progress(min(1.0, progress / goal) if goal > 0 else 0.0)
+        else:
+            st.caption("Aktuell kein Hype Train aktiv.")
+        if isinstance(record_train, dict):
+            st.caption(f"Rekord: Level {record_train.get('level', '—')} · {int(record_train.get('total') or 0):,} Punkte".replace(",", "."))
+
+    with st.expander("💎 Bits-Leaderboard · letzte 30 Tage", expanded=bool(bits_rows)):
+        if bits_rows:
+            st.dataframe(
+                [{"Rang": i + 1, "Name": row.get("user_name") or row.get("user_login") or "Twitch-Nutzer",
+                  "Bits": int(row.get("score") or 0)} for i, row in enumerate(bits_rows)],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.caption("Twitch hat für diesen Zeitraum keine Bits-Daten zurückgegeben oder die Berechtigung fehlt.")
+
+    with st.expander("🎬 Letzte Streams / VODs", expanded=bool(videos)):
+        if videos:
+            st.dataframe(
+                [{"Titel": str(v.get("title") or "Ohne Titel"), "Aufrufe": int(v.get("view_count") or 0),
+                  "Dauer": str(v.get("duration") or "—"), "Erstellt": str(v.get("created_at") or "")[:16].replace("T", " "),
+                  "VOD": str(v.get("url") or "")} for v in videos],
+                use_container_width=True, hide_index=True,
+                column_config={"VOD": st.column_config.LinkColumn("VOD öffnen", display_text="Ansehen")},
+            )
+        else:
+            st.caption("Keine archivierten Streams verfügbar. Prüfe, ob Twitch VODs für deinen Kanal speichert.")
+
+    with st.expander("✂️ Deine Clips · letzte 30 Tage", expanded=False):
+        if clips:
+            st.dataframe(
+                [{"Titel": str(c.get("title") or "Clip"), "Aufrufe": int(c.get("view_count") or 0),
+                  "Erstellt": str(c.get("created_at") or "")[:16].replace("T", " "),
+                  "Clip": str(c.get("url") or "")} for c in clips],
+                use_container_width=True, hide_index=True,
+                column_config={"Clip": st.column_config.LinkColumn("Clip öffnen", display_text="Ansehen")},
+            )
+        else:
+            st.caption("Twitch hat keine Clips aus den letzten 30 Tagen zurückgegeben.")
+
+    charity = _api_rows(metrics, "charity")
+    if charity:
+        campaign = charity[0]
+        with st.expander("💜 Aktuelle Charity-Kampagne", expanded=False):
+            st.markdown(f"**{html.escape(str(campaign.get('charity_name') or 'Charity'))}**")
+            st.write(str(campaign.get("charity_description") or ""))
+            st.metric("Spenden gesammelt", f'{int(campaign.get("current_amount", {}).get("value") or 0):,}'.replace(",", "."))
+            st.caption(f"Ziel: {campaign.get('target_amount', {}).get('value', '—')} · Währung: {campaign.get('current_amount', {}).get('currency', '—')}")
+
+    polls = _api_rows(metrics, "polls")
+    predictions = _api_rows(metrics, "predictions")
+    with st.expander("📊 Umfragen & Vorhersagen", expanded=False):
+        if polls:
+            st.markdown("**Letzte Umfragen**")
+            st.dataframe(
+                [{"Umfrage": str(p.get("title") or "Umfrage"),
+                  "Status": str(p.get("status") or "—"),
+                  "Stimmen": sum(int(x.get("total_votes") or 0) for x in (p.get("choices") or []))}
+                 for p in polls[:10]],
+                use_container_width=True, hide_index=True,
+            )
+        if predictions:
+            st.markdown("**Letzte Vorhersagen**")
+            st.dataframe(
+                [{"Vorhersage": str(p.get("title") or "Vorhersage"), "Status": str(p.get("status") or "—"),
+                  "Punkte": sum(int(x.get("channel_points") or 0) for x in (p.get("outcomes") or []))}
+                 for p in predictions[:10]],
+                use_container_width=True, hide_index=True,
+            )
+        if not polls and not predictions:
+            st.caption("Keine Umfragen oder Vorhersagen verfügbar; eventuell gibt es noch keine oder die Freigabe fehlt.")
+
+    ads = _api_rows(metrics, "ads")
+    if ads:
+        ad = ads[0]
+        with st.expander("📺 Werbeplan", expanded=False):
+            next_ad = str(ad.get("next_ad_at") or "")
+            last_ad = str(ad.get("last_ad_at") or "")
+            a, b, c = st.columns(3)
+            a.metric("Nächste Werbung", next_ad[:16].replace("T", " ") or "Nicht geplant")
+            b.metric("Letzte Werbung", last_ad[:16].replace("T", " ") or "—")
+            c.metric("Werbefrei", f'{int(ad.get("preroll_free_time") or 0)} Sek.')
+
+    recent_sessions = [s for s in tracked if s.get("samples")]
+    if recent_sessions:
+        with st.expander("🗂️ Frühere StreamDex-Messungen", expanded=False):
+            session_rows = []
+            for session in recent_sessions[:10]:
+                values = [int(s["viewers"]) for s in session["samples"]]
+                session_rows.append({
+                    "Stream gestartet": datetime.fromtimestamp(session["started_at_unix"]).strftime("%d.%m.%Y %H:%M") if session["started_at_unix"] else "—",
+                    "Titel": session["title"] or "Ohne Titel",
+                    "Messpunkte": len(values),
+                    "Ø Zuschauer": round(sum(values) / len(values)),
+                    "Peak": max(values),
+                })
+            st.dataframe(session_rows, use_container_width=True, hide_index=True)
+
+
+def render_radar(tid, username, reauth_url=None):
     """Rendert den authentifizierten, kontobezogenen StreamDex Radar."""
     st.markdown(
         """
         <div class="sd-radar-hero">
-          <div class="sd-radar-kicker">STREAMDEX OS / CREATOR RADAR</div>
-          <h1>Dein <span>Streamer-Radar.</span></h1>
-          <p>Live-Status, aktuelle Streams und Community-Statistiken deiner Lieblingskanäle – in einer persönlichen Übersicht.</p>
+          <div class="sd-radar-kicker">STREAMDEX OS / CREATOR ANALYTICS</div>
+          <h1>Dein <span>Streamer-Dashboard.</span></h1>
+          <p>Deine eigenen Twitch-Zahlen: Live-Zuschauer, Follower, Abonnenten, Bits, VOD-Aufrufe, Ziele und dein von StreamDex erfasster Zuschauerverlauf.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -218,6 +637,11 @@ def render_radar(tid, username):
         """,
         unsafe_allow_html=True,
     )
+
+    _render_creator_analytics(tid, username, reauth_url)
+    st.divider()
+    st.markdown("### 👀 Watchlist anderer Kanäle")
+    st.caption("Der bisherige Radar bleibt erhalten: Beobachte hier zusätzlich andere Twitch-Kanäle.")
 
     try:
         watchlist = _load_watchlist(str(tid))
