@@ -220,11 +220,12 @@ def _render_reminders(ref, owner_tid, streams):
             ref.child(f"streams/{row['id']}").update({"reminder_dismissed": True})
             st.rerun()
 
+    reminder_default = now + timedelta(hours=1)
     with st.form(f"planner_new_reminder_{owner_tid}", clear_on_submit=True):
         st.markdown("#### Persönliche Erinnerung hinzufügen")
         title = st.text_input("Was möchtest du nicht vergessen?", max_chars=120, placeholder="z. B. Thumbnail fertigstellen")
-        due_date = st.date_input("Datum", value=now.date(), key=f"planner_rem_date_{owner_tid}")
-        due_time = st.time_input("Uhrzeit", value=(now + timedelta(hours=1)).time().replace(second=0, microsecond=0), key=f"planner_rem_time_{owner_tid}")
+        due_date = st.date_input("Datum", value=reminder_default.date(), key=f"planner_rem_date_{owner_tid}")
+        due_time = st.time_input("Uhrzeit", value=reminder_default.time().replace(second=0, microsecond=0), key=f"planner_rem_time_{owner_tid}")
         note = st.text_input("Notiz (optional)", max_chars=300)
         submit = st.form_submit_button("＋ Erinnerung speichern", type="primary", use_container_width=True)
     if submit:
