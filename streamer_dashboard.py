@@ -1624,15 +1624,6 @@ def render_streamer_dashboard(games):
         render_planner(authed_tid, twitch_username, _twitch_authorization_url()[0])
         return
 
-    if str(st.query_params.get("feedback", "")) == "1":
-        back_col, _ = st.columns([1, 5])
-        if back_col.button("← Zur Dashboard-Übersicht", key="feedback_back_to_dashboard"):
-            st.query_params.clear()
-            st.query_params["dashboard"] = "1"
-            st.rerun()
-        render_feedback_hub(authed_tid, twitch_username)
-        return
-
     # Zusätzliche Creator-Bereiche können auch direkt über die URL geöffnet werden.
     if str(st.query_params.get("legacy", "")) == "1":
         back_col, _ = st.columns([1, 5])
