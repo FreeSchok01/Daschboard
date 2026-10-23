@@ -25,6 +25,9 @@ from planner import render_planner
 from radar import render_radar
 from feedback_hub import render_feedback_hub
 from creator_profile import render_creator_profile
+from legacy import render_legacy
+from clips_manager import render_clips_manager
+from community_events import render_community_integrations
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -170,7 +173,7 @@ def _twitch_authorization_url():
         "client_id": client_id,
         "redirect_uri": TWITCH_REDIRECT_URI,
         "response_type": "code",
-        "scope": "openid moderator:read:followers channel:read:subscriptions bits:read channel:read:goals channel:read:hype_train channel:read:ads channel:read:polls channel:read:predictions channel:read:charity",
+        "scope": "openid moderator:read:followers channel:read:subscriptions bits:read channel:read:goals channel:read:hype_train channel:read:ads channel:read:polls channel:read:predictions channel:read:charity channel:manage:schedule",
         "state": state,
     }
     return f"{TWITCH_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}", None
@@ -640,6 +643,7 @@ _DELETE_PATHS = [
     "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
     "support_read/{t}", "giveaway_log/{t}",
+    "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
     "presence/{t}", "creator_profiles/{t}",
 ]
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
@@ -1602,20 +1606,49 @@ def render_streamer_dashboard(games):
             st.query_params.clear()
             st.query_params["dashboard"] = "1"
             st.rerun()
-        render_planner(authed_tid, twitch_username)
+        render_planner(authed_tid, twitch_username, _twitch_authorization_url()[0])
+        return
+
+    # Zusätzliche Creator-Bereiche können auch direkt über die URL geöffnet werden.
+    if str(st.query_params.get("legacy", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="legacy_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_legacy(authed_tid, twitch_username)
+        return
+    if str(st.query_params.get("clips", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="clips_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_clips_manager(authed_tid, twitch_username)
+        return
+    if str(st.query_params.get("community", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="community_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_community_integrations(authed_tid, twitch_username)
+        render_event_manager(authed_tid, twitch_username)
         return
 
     # Große Kachel-Navigation statt kleiner Reiter
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_radar, t_feedback, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
+        t_over, t_games, t_radar, t_legacy, t_clips, t_feedback, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
             "🏠 Übersicht",
             "🎮 Freigeschaltete Games",
-            "📡 Radar",
+            "📊 StreamDex Insight",
+            "📜 Legacy – Chronik",
+            "🎬 Clips",
             "💬 Feedback",
             "📈 Kanal-Statistiken",
             "📅 Verlauf",
             "🎁 Giveaways",
-            "🎉 Events",
+            "🤝 Community & Events",
             "▣ Planner",
             "♙ Profil",
             "📥 Downloads & Beta",
@@ -1626,6 +1659,14 @@ def render_streamer_dashboard(games):
     # --- StreamDex Radar ---
     with t_radar:
         render_radar(authed_tid, twitch_username, _twitch_authorization_url()[0])
+
+    # --- StreamDex Legacy: private Community-Chronik ---
+    with t_legacy:
+        render_legacy(authed_tid, twitch_username)
+
+    # --- StreamDex Clips: Twitch-Import und private Sammlung ---
+    with t_clips:
+        render_clips_manager(authed_tid, twitch_username)
 
     # --- StreamDex Feedback ---
     with t_feedback:
@@ -1725,13 +1766,16 @@ def render_streamer_dashboard(games):
     with t_gw:
         _render_giveaway_tab(authed_tid)
 
-    # --- Tab Events ---
+    # --- Community- und Event-Integrationen ---
     with t_events:
+        render_community_integrations(authed_tid, twitch_username)
+        st.divider()
+        st.markdown("### 🗓️ Events verwalten")
         render_event_manager(authed_tid, twitch_username)
 
-    # --- Planner: persönliche Stream-Planung und Erinnerungen ---
+    # --- Planner: persönliche Stream-Planung, Erinnerungen und Twitch-Zeitplan ---
     with t_planner:
-        render_planner(authed_tid, twitch_username)
+        render_planner(authed_tid, twitch_username, _twitch_authorization_url()[0])
 
     # --- Creator-Profil: privat bearbeiten, optional veröffentlichen ---
     with t_profile:
