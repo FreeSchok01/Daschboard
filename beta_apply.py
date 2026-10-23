@@ -62,14 +62,14 @@ def _find_tid(name):
 # ----------------------------------------------------------------------------
 # Öffentliche Seite
 # ----------------------------------------------------------------------------
-def _apply_form(cfg):
+def _apply_form(cfg, default_name=""):
     if cfg.get("open", True) is False:
         st.info("Die Bewerbungen sind gerade geschlossen. Schau bald wieder vorbei!")
         return
     st.markdown("Bewirb dich als Beta-Tester. Wenn du freigeschaltet wirst, bekommst du Zugang zum Download "
                 "und den **Beta-Status** (Games ohne Kauf freigeschaltet).")
     with st.form("beta_apply"):
-        name = st.text_input("Dein Twitch-Name", max_chars=25, placeholder="z.B. meinkanal")
+        name = st.text_input("Dein Twitch-Name", value=str(default_name or ""), max_chars=25, placeholder="z.B. meinkanal")
         reason = st.text_area(f"Warum möchtest du Beta-Tester sein? (min. {MIN_REASON} Zeichen)",
                               max_chars=MAX_REASON, height=140)
         a1 = st.checkbox("Ich gebe die Beta-Version und ihre Inhalte **nicht an Dritte weiter**.")
@@ -136,21 +136,93 @@ def _status_view(cfg):
         st.caption("Bitte gib die Beta nicht weiter. Danke!")
 
 
+def render_logged_in_beta_status(tid, twitch_username, beta_info=None, cfg=None):
+    """Zeigt den Beta-Status des bereits angemeldeten Twitch-Kontos ohne Zugangscode-Abfrage."""
+    profile = st.session_state.get("twitch_profile", {}) or {}
+    login_name = str(profile.get("login") or twitch_username or "").strip().lstrip("@")
+    account_label = login_name or str(twitch_username or tid)
+    st.subheader("🧪 Dein Beta-Status")
+    st.caption(f"Angemeldetes Twitch-Konto: @{account_label}")
+
+    if not isinstance(beta_info, dict) or not beta_info:
+        try:
+            beta_info = db.reference(f"shop/beta/{tid}").get() or {}
+        except Exception:
+            beta_info = {}
+
+    if isinstance(beta_info, dict) and beta_info:
+        st.success("Du bist als Beta-Tester freigeschaltet.")
+        scope = "Alle Games" if beta_info.get("scope") == "all" else "Ausgewählte Games"
+        st.caption(f"Freischaltung: {scope}")
+        if beta_info.get("note"):
+            st.write(f"**Hinweis:** {beta_info['note']}")
+        download_url = beta_link(cfg if isinstance(cfg, dict) else _settings())
+        if download_url:
+            st.link_button("⬇️ Beta herunterladen", download_url, type="primary")
+        else:
+            st.info("Dein Beta-Status ist aktiv. Der Download-Link ist derzeit noch nicht hinterlegt.")
+        st.caption("Dein Beta-Status ist mit deinem eingeloggten Twitch-Konto verknüpft.")
+        return
+
+    key = _key(login_name or account_label)
+    application = None
+    if NAME_RE.fullmatch(key):
+        try:
+            application = db.reference(f"beta_applications/{key}").get()
+        except Exception:
+            st.error("Der Bewerbungsstatus konnte gerade nicht geladen werden.")
+            return
+
+    if not isinstance(application, dict):
+        st.info("Für deinen Twitch-Account wurde noch keine Beta-Bewerbung gefunden.")
+        st.caption("Du kannst dich im Tab „Für Beta bewerben“ direkt mit deinem angemeldeten Account bewerben.")
+        return
+
+    status = str(application.get("status") or "pending")
+    st.caption(f"Bewerbung für @{application.get('name') or key}")
+    if status == "pending":
+        st.info("⏳ Deine Beta-Bewerbung ist eingegangen und wird noch geprüft.")
+    elif status == "rejected":
+        st.error("❌ Deine Beta-Bewerbung wurde leider abgelehnt.")
+        if application.get("reject_reason"):
+            st.write(f"**Hinweis:** {application['reject_reason']}")
+    elif status == "approved":
+        st.success("✅ Deine Beta-Bewerbung wurde freigegeben.")
+        if application.get("applied"):
+            st.info("Die Freischaltung wurde bereits zugewiesen. Falls sie in der App noch nicht sichtbar ist, starte die App erneut.")
+        else:
+            st.info("Deine Freigabe wird beim nächsten Start der StreamDex-App mit deinem Konto verknüpft.")
+    else:
+        st.info("Dein Beta-Status ist derzeit nicht verfügbar. Bitte prüfe ihn später erneut.")
+
+
 def render_beta_apply():
-    st.markdown("# 🧪 Streamdex Beta")
-    st.caption("Hilf mit, Streamdex besser zu machen.")
+    """Beta-Seite nur für aktive StreamDex-Sitzungen; Name und Status stammen aus dem Login."""
+    tid = str(st.session_state.get("authenticated_tid") or "")
+    try:
+        started = float(st.session_state.get("authenticated_at") or 0)
+    except (TypeError, ValueError):
+        started = 0
+    age = time.time() - started if started else float("inf")
+    if not tid.isdigit() or not started or age < 0 or age > 2 * 60 * 60:
+        st.warning("Bitte melde dich zuerst über die StreamDex-Startseite mit Twitch an.")
+        return
+
+    st.markdown("# 🧪 StreamDex Beta")
+    st.caption("Deine Bewerbung und dein Beta-Status sind mit deinem eingeloggten Twitch-Konto verknüpft.")
     try:
         cfg = _settings()
-        st.markdown("**Einfach nur ausprobieren?** Die öffentliche Version kann jeder laden:")
-        render_public_downloads(cfg)
-        st.divider()
-        t_apply, t_status = st.tabs(["📝 Bewerben", "🔎 Status & Download"])
+        profile = st.session_state.get("twitch_profile", {}) or {}
+        presence = db.reference(f"presence/{tid}").get() or {}
+        account_name = str(profile.get("login") or presence.get("twitch_username") or tid)
+        beta_info = db.reference(f"shop/beta/{tid}").get() or {}
+        t_apply, t_status = st.tabs(["📝 Bewerben", "🧪 Dein Beta-Status"])
         with t_apply:
-            _apply_form(cfg)
+            _apply_form(cfg, default_name=account_name)
         with t_status:
-            _status_view(cfg)
+            render_logged_in_beta_status(tid, account_name, beta_info, cfg)
     except Exception as e:
-        st.error(f"Gerade nicht erreichbar, bitte später erneut versuchen. ({e})")
+        st.error(f"Beta-Informationen sind gerade nicht erreichbar. ({type(e).__name__})")
 
 
 # ----------------------------------------------------------------------------
