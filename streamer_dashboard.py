@@ -864,6 +864,112 @@ def _render_giveaway_tab(tid):
     st.caption("Gewinnernamen werden bewusst nicht ins Dashboard hochgeladen. Sie bleiben nur in deiner App.")
 
 
+@st.fragment(run_every=60)
+def _render_public_live_streamers():
+    """Publicly show only accounts whose StreamDex client recently checked in AND whose Twitch channel is live."""
+    st.markdown(
+        '<section class="sd-public-tools" id="live-streamers">'
+        '<div class="sd-public-toolshead"><div><h2>🔴 Gerade live auf StreamDex</h2>'
+        '<p>Streamer, deren StreamDex-Tool aktiv verbunden ist und deren Twitch-Stream gerade läuft.</p></div>'
+        '<span class="sd-public-count">LIVE</span></div></section>',
+        unsafe_allow_html=True,
+    )
+    try:
+        presence = db.reference("presence").get() or {}
+        now_ms = int(time.time() * 1000)
+        accounts = {}
+        if isinstance(presence, dict):
+            for tid, record in presence.items():
+                if not isinstance(record, dict) or record.get("status") != "online":
+                    continue
+                try:
+                    last_seen = int(record.get("last_seen") or 0)
+                except (TypeError, ValueError):
+                    continue
+                age_ms = now_ms - last_seen
+                if not last_seen or age_ms < -60_000 or age_ms > ONLINE_STALE_SECONDS * 1000:
+                    continue
+                display_name = str(record.get("twitch_username") or "").strip()
+                login = display_name.lower()
+                if not re.fullmatch(r"[a-z0-9_]{1,25}", login):
+                    continue
+                # Use the most recent active presence record if duplicates exist.
+                if login not in accounts or last_seen > accounts[login]["last_seen"]:
+                    accounts[login] = {
+                        "tid": str(tid),
+                        "login": login,
+                        "name": display_name,
+                        "last_seen": last_seen,
+                    }
+        if not accounts:
+            st.info("Noch ist kein StreamDex-Streamer gleichzeitig mit dem Tool verbunden und auf Twitch live.")
+            return
+
+        logins = sorted(accounts)[:100]
+        client_id, client_secret = _twitch_credentials()
+        token_data = _twitch_http_json(
+            "https://id.twitch.tv/oauth2/token",
+            method="POST",
+            form={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "client_credentials",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        app_token = str(token_data.get("access_token") or "")
+        if not app_token:
+            raise RuntimeError("Twitch App-Token fehlt")
+        query = urllib.parse.urlencode([("user_login", login) for login in logins])
+        live_data = _twitch_http_json(
+            f"https://api.twitch.tv/helix/streams?{query}",
+            headers={"Client-Id": client_id, "Authorization": f"Bearer {app_token}"},
+        )
+        streams = live_data.get("data", [])
+        live_rows = []
+        if isinstance(streams, list):
+            for stream in streams:
+                if not isinstance(stream, dict):
+                    continue
+                login = str(stream.get("user_login") or "").lower()
+                account = accounts.get(login)
+                if account:
+                    live_rows.append({**account, **stream})
+        live_rows.sort(key=lambda row: (int(row.get("viewer_count") or 0), int(row.get("last_seen") or 0)), reverse=True)
+    except Exception:
+        st.info("Die Live-Anzeige ist gerade nicht verfügbar. Bitte lade die Startseite später erneut.")
+        return
+
+    if not live_rows:
+        st.info("Aktuell ist kein StreamDex-Nutzer mit verbundenem Tool auf Twitch live.")
+        return
+
+    st.caption(f"{len(live_rows)} Stream{'s' if len(live_rows) != 1 else ''} live · Aktualisierung ungefähr jede Minute")
+    for start in range(0, min(len(live_rows), 12), 3):
+        cols = st.columns(3, gap="medium")
+        for col, stream in zip(cols, live_rows[start:start + 3]):
+            login = str(stream.get("user_login") or stream["login"])
+            with col:
+                with st.container(border=True):
+                    st.markdown("🔴 **LIVE**")
+                    st.markdown(f"### {stream.get('user_name') or stream['name']}")
+                    st.caption(str(stream.get("game_name") or "Twitch-Stream"))
+                    title = str(stream.get("title") or "").strip()
+                    if title:
+                        st.write(title[:180])
+                    c1, c2 = st.columns(2)
+                    c1.metric("Zuschauer", int(stream.get("viewer_count") or 0))
+                    c2.caption("StreamDex aktiv")
+                    st.link_button(
+                        "▶️ Stream ansehen",
+                        f"https://www.twitch.tv/{urllib.parse.quote(login)}",
+                        key=f"homepage_live_stream_{stream.get('id') or stream['tid']}",
+                        use_container_width=True,
+                    )
+    if len(live_rows) > 12:
+        st.caption(f"Es werden 12 von {len(live_rows)} aktiven Streams angezeigt.")
+
+
 def _render_landing():
     """Öffentliche StreamDex-Startseite im Referenzdesign mit funktionalem Twitch-Login."""
     landing_css = """<style>
@@ -1082,6 +1188,8 @@ def _render_landing():
         '</div></section>',
         unsafe_allow_html=True,
     )
+    _render_public_live_streamers()
+
     st.markdown(
         '<footer class="sd-public-footer"><div class="sd-public-footer-brand"><span class="sd-public-mark">S</span>'
         '<span>StreamDex OS<small>Dein Streaming. Unsere Mission.</small></span></div>'
