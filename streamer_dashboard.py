@@ -70,14 +70,14 @@ def _twitch_auth_config_issues():
     except Exception:
         return [
             "Der Abschnitt [auth] fehlt in Streamlit Cloud → Settings → Secrets.",
-            'Erforderlich sind redirect_uri = "https://streamdex.streamlit.app/oauth2callback" und cookie_secret.'
+            'Erforderlich sind redirect_uri = "https://streamdex.streamlit.app/~/+/oauth2callback" und cookie_secret.'
         ]
 
     for key in ("redirect_uri", "cookie_secret"):
         if not str(auth.get(key, "") or "").strip():
             issues.append(f"[auth] {key} fehlt.")
 
-    expected_redirect = "https://streamdex.streamlit.app/oauth2callback"
+    expected_redirect = "https://streamdex.streamlit.app/~/+/oauth2callback"
     if str(auth.get("redirect_uri", "")).strip() != expected_redirect:
         issues.append(f'redirect_uri muss exakt {expected_redirect} sein.')
 
@@ -119,7 +119,7 @@ def _start_twitch_login():
         st.info("Öffne Streamlit Cloud → Manage app → Settings → Secrets und ergänze die fehlenden Angaben. Die Werte nicht hier im Chat posten.")
         with st.expander("Beispiel für die vollständige Twitch-Konfiguration"):
             st.code('''[auth]
-redirect_uri = "https://streamdex.streamlit.app/oauth2callback"
+redirect_uri = "https://streamdex.streamlit.app/~/+/oauth2callback"
 cookie_secret = "HIER_EINEN_EIGENEN_ZUFAELLIGEN_GEHEIMWERT_EINTRAGEN"
 
 [auth.twitch]
