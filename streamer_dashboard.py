@@ -22,6 +22,7 @@ from downloads import (beta_link, lurk_repo, render_member_downloads, render_pub
 from shop import owned_games, CSS
 from events import render_event_manager
 from planner import render_planner
+from creator_profile import render_creator_profile
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -625,7 +626,7 @@ _DELETE_PATHS = [
     "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
     "support_read/{t}", "giveaway_log/{t}",
-    "presence/{t}",
+    "presence/{t}", "creator_profiles/{t}",
 ]
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
 _KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
@@ -682,6 +683,13 @@ def _delete_account_data(tid):
             removed += 1
     except Exception as e:
         errors.append(f"feedback_inbox: {type(e).__name__}")
+    try:
+        profile = db.reference(f"creator_profiles/{tid}").get() or {}
+        old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
+        if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
+            db.reference(f"creator_profile_slugs/{old_slug}").delete()
+    except Exception as e:
+        errors.append(f"creator_profile_slugs: {type(e).__name__}")
     for path in _DELETE_PATHS:
         p = path.format(t=tid)
         try:
@@ -1068,7 +1076,7 @@ def _render_landing():
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Lurk Tool</b><small>Browser öffnet sich automatisch, wenn ein Stream live geht.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">♙</span><span><b>Profile</b><small>Dein öffentliches Creator-Profil mit allen Infos.</small></span></a>'
+        '<a class="sd-public-tool" href="/?profile=1"><span class="sd-public-tool-icon cyan">♙</span><span><b>Profile</b><small>Dein öffentliches Creator-Profil mit allen Infos.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">⚙</span><span><b>Automation</b><small>Automationen für Chat, Events, Commands und mehr.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▱</span><span><b>Overlay Editor</b><small>Gestalte deine Overlays einfach und professionell.</small></span></a>'
         '</div></section>',
@@ -1294,6 +1302,8 @@ def render_streamer_dashboard(games):
             st.error(notice)
         if str(st.query_params.get("planner", "")) == "1":
             st.info("Der Planner ist Teil deines Streamer-Dashboards. Melde dich unten mit Twitch an und öffne danach den Reiter „▣ Planner“.")
+        if str(st.query_params.get("profile", "")) == "1":
+            st.info("Dein Creator-Profil kannst du nach dem Twitch-Login erstellen und veröffentlichen. Klicke danach erneut auf „Profile“ oder öffne den Reiter „♙ Profil“.")
         _render_landing()
         return
 
@@ -1387,6 +1397,16 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
+    # Direkter Profileditor: nur nach erfolgreichem Streamer-Login öffnen.
+    if str(st.query_params.get("profile", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="profile_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_creator_profile(authed_tid, twitch_username)
+        return
+
     # Direkter Planner-Link: nur nach erfolgreichem Streamer-Login öffnen.
     if str(st.query_params.get("planner", "")) == "1":
         back_col, _ = st.columns([1, 5])
@@ -1399,7 +1419,7 @@ def render_streamer_dashboard(games):
 
     # Große Kachel-Navigation statt kleiner Reiter
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_stats, t_hist, t_gw, t_events, t_planner, t_downloads, t_support, t_acct = st.tabs([
+        t_over, t_games, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
             "🏠 Übersicht",
             "🎮 Freigeschaltete Games",
             "📈 Kanal-Statistiken",
@@ -1407,6 +1427,7 @@ def render_streamer_dashboard(games):
             "🎁 Giveaways",
             "🎉 Events",
             "▣ Planner",
+            "♙ Profil",
             "📥 Downloads & Beta",
             "💬 Support-Chat",
             "🧾 Konto & Datenschutz",
@@ -1513,6 +1534,10 @@ def render_streamer_dashboard(games):
     # --- Planner: persönliche Stream-Planung und Erinnerungen ---
     with t_planner:
         render_planner(authed_tid, twitch_username)
+
+    # --- Creator-Profil: privat bearbeiten, optional veröffentlichen ---
+    with t_profile:
+        render_creator_profile(authed_tid, twitch_username)
 
     # --- Downloads und Beta: nur sichtbar, nachdem ein Login bestätigt wurde ---
     with t_downloads:
