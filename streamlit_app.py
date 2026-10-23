@@ -18,6 +18,7 @@ from firebase_admin import credentials, db
 
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
+from events import render_public_events, render_public_event
 from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
@@ -456,6 +457,18 @@ def support_main():
 def main():
     if "support" in st.query_params:           # Supporter: /?support=1
         support_main()
+        return
+    if "events" in st.query_params:             # Öffentlich: Eventübersicht /?events=1
+        st.set_page_config(page_title="StreamDex Events", page_icon="🎉", layout="wide")
+        init_firebase()
+        apply_theme()
+        render_public_events()
+        return
+    if "event" in st.query_params:               # Öffentlich: Eventseite /?event=<id>
+        st.set_page_config(page_title="StreamDex Event", page_icon="🎉", layout="wide")
+        init_firebase()
+        apply_theme()
+        render_public_event(str(st.query_params.get("event", "")))
         return
     if "beta" in st.query_params:              # Öffentlich: Beta-Bewerbung /?beta=1
         st.set_page_config(page_title="Streamdex Beta", page_icon="🧪")

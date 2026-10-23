@@ -17,6 +17,7 @@ from beta_apply import _apply_form, _status_view
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
                        settings as download_settings, update_notice)
 from shop import owned_games, CSS
+from events import render_event_manager
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -706,7 +707,7 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
-    t_over, t_games, t_stats, t_hist, t_gw, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "🎁 Giveaways", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
+    t_over, t_games, t_stats, t_hist, t_gw, t_events, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "🎁 Giveaways", "🎉 Events", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
 
     # --- Tab 0: Übersicht ---
     with t_over:
@@ -802,7 +803,11 @@ def render_streamer_dashboard(games):
     with t_gw:
         _render_giveaway_tab(authed_tid)
 
-    # --- Tab 4: Support ---
+    # --- Tab Events ---
+    with t_events:
+        render_event_manager(authed_tid, twitch_username)
+
+    # --- Tab 5: Support ---
     with t_support:
         st.subheader("💬 Direkt-Support")
         chat_box = st.container(height=400, border=True)
