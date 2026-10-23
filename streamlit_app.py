@@ -22,7 +22,7 @@ from events import render_public_events, render_public_event
 from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
-from streamer_dashboard import handle_twitch_oauth_callback, render_streamer_dashboard
+from streamer_dashboard import handle_twitch_oauth_callback, has_active_streamer_login, render_streamer_dashboard
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 from theme import apply_theme, header_html
 from vacation import start_vacation_bot, vacation_panel
@@ -478,11 +478,26 @@ def main():
         apply_theme()
         render_public_event(str(st.query_params.get("event", "")))
         return
-    if "beta" in st.query_params:              # Öffentlich: Beta-Bewerbung /?beta=1
-        st.set_page_config(page_title="Streamdex Beta", page_icon="🧪")
+    if "beta" in st.query_params:              # Beta-Bewerbung nur nach Login
+        st.set_page_config(page_title="StreamDex", page_icon="🧪", layout="wide")
+        active_login = has_active_streamer_login()
+        if not active_login:
+            had_session = bool(st.session_state.get("authenticated_tid"))
+            for key in (
+                "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
+                "acct_data", "dashboard_reauth_required",
+            ):
+                st.session_state.pop(key, None)
+            if had_session:
+                st.session_state["session_expired"] = True
         init_firebase()
         apply_theme()
-        render_beta_apply()
+        if active_login:
+            render_beta_apply()
+        else:
+            # Ein direkter Aufruf von /?beta=1 zeigt nur die Login-Seite,
+            # nicht das Bewerbungsformular oder Download-Links.
+            render_streamer_dashboard(GAMES)
         return
     if "skip" in st.query_params:              # Öffentlich: Rundgang überspringen /?skip=1
         st.set_page_config(page_title="Streamdex Rundgang überspringen", page_icon="⏭")
