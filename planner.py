@@ -1,12 +1,17 @@
 """Persönlicher StreamDex Planner: Stream-Termine, Monatskalender und Erinnerungen."""
 import calendar
+import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import streamlit as st
 from firebase_admin import db
+from radar import _app_token, _creator_access_token, _credentials, _helix_get
 
 TZ = ZoneInfo("Europe/Berlin")
 TID_RE = re.compile(r"^[0-9]{1,15}$")
@@ -142,7 +147,7 @@ def _render_stream_form(ref, owner_tid, default_name):
     try:
         _save_stream(ref, {
             "title": title.strip(), "category": category.strip(), "platform": platform,
-            "start_at": start_at.isoformat(), "stream_url": url, "notes": notes.strip(),
+            "start_at": start_at.isoformat(), "duration_minutes": int(duration), "stream_url": url, "notes": notes.strip(),
             "reminder_minutes": int(reminder), "reminder_dismissed": False, "status": "planned",
             "created_at": now.isoformat(), "owner_name": str(default_name or ""),
         })
@@ -278,7 +283,186 @@ def _render_reminders(ref, owner_tid, streams):
             st.caption(f"🔔 {_date_label(remind_at.isoformat())} · {row.get('title', 'Stream')} (Start: {start.strftime('%d.%m. um %H:%M')})")
 
 
-def render_planner(owner_tid, twitch_username=""):
+
+def _load_twitch_schedule(owner_tid):
+    """Read the channel's public Twitch schedule with an app access token."""
+    client_id, client_secret = _credentials()
+    token = _app_token(client_id, client_secret)
+    start_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+    result = _helix_get("schedule", token, {
+        "broadcaster_id": str(owner_tid),
+        "first": 50,
+        "start_time": start_time,
+    })
+    data = result.get("data", {})
+    segments = data.get("segments", []) if isinstance(data, dict) else []
+    return [segment for segment in segments if isinstance(segment, dict)]
+
+
+def _publish_planner_stream_to_twitch(owner_tid, stream):
+    """Publish a single planned appointment to Twitch; requires explicit schedule permission."""
+    token = _creator_access_token(str(owner_tid))
+    if not token:
+        raise RuntimeError("Bitte melde dich erneut über Twitch an und bestätige die Zeitplan-Berechtigung.")
+    scopes = st.session_state.get("twitch_oauth_scopes", [])
+    if "channel:manage:schedule" not in scopes:
+        raise RuntimeError("Deine aktuelle Twitch-Freigabe enthält noch keine Zeitplan-Berechtigung. Verbinde Twitch bitte erneut.")
+    start = _as_datetime(stream.get("start_at"))
+    if not start or start <= datetime.now(TZ):
+        raise RuntimeError("Nur zukünftige Stream-Termine können veröffentlicht werden.")
+    client_id, _ = _credentials()
+    params = urllib.parse.urlencode({"broadcaster_id": str(owner_tid)})
+    url = "https://api.twitch.tv/helix/schedule/segment?" + params
+    body = {
+        "start_time": start.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "duration": max(15, min(720, int(stream.get("duration_minutes") or 120))),
+        "timezone": "Europe/Berlin",
+        "title": str(stream.get("title") or "StreamDex Stream")[:140],
+        "is_recurring": False,
+    }
+    category = str(stream.get("category") or "").strip()
+    if category:
+        try:
+            search = _helix_get("search/categories", token, {"query": category, "first": 1})
+            matches = search.get("data", [])
+            if matches and isinstance(matches[0], dict) and matches[0].get("id"):
+                body["category_id"] = str(matches[0]["id"])
+        except Exception:
+            pass
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Client-Id": client_id,
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise RuntimeError("Twitch hat die Veröffentlichung abgelehnt. Prüfe die Zeitplan-Berechtigung und verbinde Twitch erneut.") from None
+        if exc.code in (400, 409, 422):
+            raise RuntimeError("Twitch konnte den Termin nicht übernehmen. Einmalige Termine sind je nach Affiliate-/Partnerstatus eingeschränkt oder überschneiden sich mit dem Twitch-Zeitplan.") from None
+        raise RuntimeError(f"Twitch-Zeitplan ist gerade nicht erreichbar (HTTP {exc.code}).") from None
+    except (urllib.error.URLError, TimeoutError):
+        raise RuntimeError("Twitch-Zeitplan ist gerade nicht erreichbar. Bitte erneut versuchen.") from None
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        result = {}
+    data = result.get("data", {}) if isinstance(result, dict) else {}
+    segments = data.get("segments", []) if isinstance(data, dict) else []
+    segment_id = str(segments[0].get("id") or "") if segments and isinstance(segments[0], dict) else ""
+    return segment_id
+
+
+def _render_twitch_schedule_integration(ref, owner_tid, streams, twitch_username, reauth_url=None):
+    st.markdown("### 🟣 Twitch-Zeitplan")
+    st.caption("Importiere kommende Termine von Twitch in deinen StreamDex Planner oder veröffentliche lokale Pläne direkt bei Twitch. Änderungen erfolgen erst nach Klick auf die jeweilige Aktion.")
+    if st.button("🔄 Twitch-Zeitplan aktualisieren", key=f"planner_twitch_refresh_{owner_tid}"):
+        _load_twitch_schedule.clear()
+        st.rerun()
+    try:
+        with st.spinner("Twitch-Zeitplan wird geladen …"):
+            segments = _load_twitch_schedule(str(owner_tid))
+    except Exception:
+        segments = []
+        st.warning("Der Twitch-Zeitplan konnte gerade nicht geladen werden. Prüfe die Twitch-API-Zugangsdaten und versuche es erneut.")
+
+    imported_ids = {str(item.get("twitch_schedule_id") or "") for item in streams if item.get("twitch_schedule_id")}
+    if not segments:
+        st.info("Twitch hat aktuell keine kommenden Termine zurückgegeben. Du kannst unten trotzdem einen lokalen Plan an Twitch senden.")
+    else:
+        st.markdown("#### Termine von Twitch importieren")
+        for index, segment in enumerate(segments[:50]):
+            segment_id = str(segment.get("id") or "")
+            start = _as_datetime(segment.get("start_time"))
+            end = _as_datetime(segment.get("end_time"))
+            title = str(segment.get("title") or "Twitch-Stream")
+            category = segment.get("category")
+            if isinstance(category, dict):
+                category_name = str(category.get("name") or "")
+            else:
+                category_name = ""
+            with st.container(border=True):
+                left, right = st.columns([4, 1])
+                left.markdown(f"**{title}**")
+                left.caption(
+                    f"{start.strftime('%d.%m.%Y · %H:%M') if start else 'Termin unbekannt'}"
+                    + (f"–{end.strftime('%H:%M')}" if end else "")
+                    + f" · {category_name or 'Keine Kategorie'}"
+                    + (" · Wiederkehrend" if segment.get("is_recurring") else "")
+                )
+                if segment.get("canceled_until"):
+                    left.caption("Dieser Termin wurde bei Twitch abgesagt.")
+                if segment_id and segment_id in imported_ids:
+                    right.button("✓ Importiert", key=f"planner_twitch_imported_{owner_tid}_{index}", disabled=True, use_container_width=True)
+                elif right.button("⬇ Importieren", key=f"planner_twitch_import_{owner_tid}_{index}", type="primary", use_container_width=True):
+                    if not start:
+                        st.error("Twitch hat keinen gültigen Startzeitpunkt geliefert.")
+                    else:
+                        duration = max(15, min(720, int((end - start).total_seconds() / 60))) if end else 120
+                        _save_stream(ref, {
+                            "title": title[:120],
+                            "category": category_name[:80],
+                            "platform": "Twitch",
+                            "start_at": start.isoformat(),
+                            "duration_minutes": duration,
+                            "stream_url": f"https://www.twitch.tv/{urllib.parse.quote(str(twitch_username or ''))}" if twitch_username else "",
+                            "notes": "Aus dem Twitch-Zeitplan importiert.",
+                            "reminder_minutes": 30,
+                            "reminder_dismissed": False,
+                            "status": "planned",
+                            "created_at": datetime.now(TZ).isoformat(),
+                            "owner_name": str(twitch_username or ""),
+                            "external_source": "twitch",
+                            "twitch_schedule_id": segment_id,
+                        })
+                        st.success("Twitch-Termin wurde in deinen StreamDex Planner importiert.")
+                        st.rerun()
+
+    st.divider()
+    st.markdown("#### StreamDex-Pläne an Twitch senden")
+    now = datetime.now(TZ)
+    pending = [
+        item for item in streams
+        if item.get("platform", "Twitch") == "Twitch"
+        and item.get("status") != "done"
+        and not item.get("twitch_schedule_id")
+        and not item.get("published_to_twitch")
+        and _as_datetime(item.get("start_at"))
+        and _as_datetime(item.get("start_at")) > now
+    ]
+    if not pending:
+        st.caption("Aktuell gibt es keine zukünftigen, noch nicht veröffentlichten Twitch-Pläne.")
+    for index, item in enumerate(sorted(pending, key=lambda x: _as_datetime(x.get("start_at")))[:20]):
+        start = _as_datetime(item.get("start_at"))
+        with st.container(border=True):
+            a, b = st.columns([4, 1])
+            a.markdown(f"**{item.get('title') or 'Stream'}**")
+            a.caption(f"{start.strftime('%d.%m.%Y · %H:%M') if start else 'Termin unbekannt'} · {item.get('category') or 'Keine Kategorie'} · {int(item.get('duration_minutes') or 120)} Minuten")
+            if b.button("Bei Twitch veröffentlichen", key=f"planner_publish_twitch_{owner_tid}_{item['id']}", use_container_width=True):
+                try:
+                    segment_id = _publish_planner_stream_to_twitch(owner_tid, item)
+                    ref.child(f"streams/{item['id']}").update({
+                        "published_to_twitch": True,
+                        "twitch_schedule_id": segment_id,
+                        "twitch_published_at": datetime.now(TZ).isoformat(),
+                    })
+                    st.success("Dein Plan wurde bei Twitch eingetragen.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+    if reauth_url:
+        st.caption("Für die Veröffentlichung braucht StreamDex die separate Twitch-Berechtigung „channel:manage:schedule“.")
+        st.link_button("🟣 Twitch-Zeitplan-Berechtigung erneuern", reauth_url)
+
+
+def render_planner(owner_tid, twitch_username="", reauth_url=None):
     """Rendert den Planner ausschließlich für die angemeldete Twitch-ID."""
     try:
         owner = _owner_ref(owner_tid)
@@ -295,7 +479,7 @@ def render_planner(owner_tid, twitch_username=""):
         "<p style='margin:0;color:#cbd5e1'>Plane deine Streams, behalte den Kalender im Blick und vergiss keine Vorbereitung.</p>"
         "</div>", unsafe_allow_html=True)
     st.caption(f"Angemeldet als **{twitch_username or 'Twitch-Streamer'}** · Alle Einträge sind an dein Twitch-Konto gebunden.")
-    t_calendar, t_create, t_reminders = st.tabs(["📅 Kalender", "＋ Stream planen", "🔔 Erinnerungen"])
+    t_calendar, t_create, t_reminders, t_twitch = st.tabs(["📅 Kalender", "＋ Stream planen", "🔔 Erinnerungen", "🟣 Twitch-Zeitplan"])
     with t_calendar:
         selected = _calendar_grid(owner_tid, streams)
         st.markdown(f"### 📆 {selected.strftime('%A, %d.%m.%Y')}")
@@ -313,3 +497,5 @@ def render_planner(owner_tid, twitch_username=""):
         _render_stream_rows(owner, owner_tid, streams, view_key="all_planned")
     with t_reminders:
         _render_reminders(owner, owner_tid, streams)
+    with t_twitch:
+        _render_twitch_schedule_integration(owner, owner_tid, streams, twitch_username, reauth_url)
