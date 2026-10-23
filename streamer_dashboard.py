@@ -77,25 +77,26 @@ TWITCH_STATE_MAX_AGE_S = 10 * 60
 
 def _twitch_credentials():
     """Liest Client-ID und Client-Secret aus [twitch] oder [auth.twitch]."""
-    section = None
+    candidates = []
     try:
-        section = st.secrets["twitch"]
+        candidates.append(st.secrets["twitch"])
     except Exception:
-        try:
-            section = st.secrets["auth"]["twitch"]
-        except Exception:
-            section = None
-    if section is None:
-        raise ValueError(
-            "Twitch-Zugangsdaten fehlen. In Streamlit Secrets wird [twitch] "
-            "mit client_id und client_secret benötigt."
-        )
+        pass
+    try:
+        candidates.append(st.secrets["auth"]["twitch"])
+    except Exception:
+        pass
 
-    client_id = str(section.get("client_id", "") or "").strip()
-    client_secret = str(section.get("client_secret", "") or "").strip()
-    if not client_id or not client_secret:
-        raise ValueError("Unter [twitch] müssen client_id und client_secret ausgefüllt sein.")
-    return client_id, client_secret
+    for section in candidates:
+        client_id = str(section.get("client_id", "") or "").strip()
+        client_secret = str(section.get("client_secret", "") or "").strip()
+        if client_id and client_secret:
+            return client_id, client_secret
+
+    raise ValueError(
+        "Twitch-Zugangsdaten fehlen. In Streamlit Secrets muss [twitch] oder "
+        "[auth.twitch] jeweils client_id und client_secret enthalten."
+    )
 
 
 def _make_twitch_state(client_secret):
@@ -301,8 +302,12 @@ def _render_twitch_login():
         '<a href="' + safe_url + '" target="_self" rel="noopener" '
         'style="display:block;text-align:center;padding:0.8rem 1rem;border-radius:0.6rem;'
         'background:#9147ff;color:white;text-decoration:none;font-weight:700;font-size:1rem;'
-        'margin:0.4rem 0 1rem 0;">🟣 Mit Twitch anmelden</a>',
+        'margin:0.4rem 0 0.5rem 0;">🟣 Mit Twitch anmelden</a>',
         unsafe_allow_html=True,
+    )
+    st.caption(
+        "Wichtig: In der Twitch Developer Console muss die OAuth Redirect URL exakt "
+        "https://streamdex.streamlit.app/ sein (mit abschließendem Schrägstrich und ohne oauth2callback)."
     )
 
 
