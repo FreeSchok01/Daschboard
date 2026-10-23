@@ -494,6 +494,8 @@ def main():
             had_session = bool(st.session_state.get("authenticated_tid"))
             for key in (
                 "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
+                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+                "twitch_oauth_expires_at", "twitch_oauth_scopes",
                 "acct_data", "dashboard_reauth_required",
             ):
                 st.session_state.pop(key, None)
