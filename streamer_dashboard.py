@@ -1569,7 +1569,7 @@ def render_streamer_dashboard(games):
             st.query_params.clear()
             st.query_params["dashboard"] = "1"
             st.rerun()
-        render_radar(authed_tid, twitch_username)
+        render_radar(authed_tid, twitch_username, _twitch_authorization_url()[0])
         return
 
     # Direkter Profileditor: nur nach erfolgreichem Streamer-Login öffnen.
@@ -1611,7 +1611,7 @@ def render_streamer_dashboard(games):
 
     # --- StreamDex Radar ---
     with t_radar:
-        render_radar(authed_tid, twitch_username)
+        render_radar(authed_tid, twitch_username, _twitch_authorization_url()[0])
 
     # --- Tab 0: Übersicht ---
     with t_over:
