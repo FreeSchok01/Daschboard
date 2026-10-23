@@ -1,9 +1,11 @@
 """Creator profiles for StreamDex: private editor and public creator pages."""
+import html
 import re
 from urllib.parse import quote
 
 import streamlit as st
 from firebase_admin import db
+from radar import fetch_public_live_status
 
 PROFILE_ROOT = "creator_profiles"
 SLUG_ROOT = "creator_profile_slugs"
@@ -152,6 +154,80 @@ def render_creator_profile(tid, twitch_username=""):
         st.info("Dein Profil ist noch privat. Aktiviere „Profil öffentlich veröffentlichen“ und speichere es, um einen öffentlichen Link zu erhalten.")
 
 
+
+@st.fragment(run_every=60)
+def _render_public_live_status(tid, twitch_url=""):
+    """Twitch live status on explicitly public profiles; refreshed about once per minute."""
+    status = fetch_public_live_status(str(tid))
+    channel_url = str(twitch_url or "")
+    if not channel_url.startswith("https://"):
+        channel_url = ""
+    if not status.get("available"):
+        st.info("🟣 Twitch-Live-Status ist gerade nicht verfügbar.")
+        if channel_url:
+            st.link_button("Twitch-Kanal öffnen", channel_url)
+        return
+    if not status.get("live"):
+        st.markdown(
+            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.22);border-radius:14px;"
+            "background:rgba(15,23,42,.65);color:#cbd5e1;font-weight:700'>⚪ Aktuell offline auf Twitch</div>",
+            unsafe_allow_html=True,
+        )
+        if channel_url:
+            st.link_button("🟣 Twitch-Kanal öffnen", channel_url)
+        return
+    st.markdown(
+        "<div style='padding:14px 16px;margin-bottom:12px;border:1px solid rgba(248,113,113,.4);border-radius:14px;"
+        "background:linear-gradient(110deg,rgba(127,29,29,.22),rgba(30,41,59,.72));'>"
+        "<span style='display:inline-flex;align-items:center;gap:8px;font-size:.76rem;font-weight:850;color:#fecaca;"
+        "letter-spacing:.08em'>🔴 LIVE AUF TWITCH</span>"
+        f"<div style='font-weight:800;font-size:1.02rem;color:#f8fafc;margin-top:7px'>{html.escape(str(status.get('title') or 'Live-Stream'))}</div>"
+        f"<div style='font-size:.8rem;color:#cbd5e1;margin-top:5px'>🎮 {html.escape(str(status.get('game') or 'Kategorie nicht angegeben'))}"
+        f" · 👁 {int(status.get('viewers') or 0):,} Zuschauer</div>".replace(",", ".")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    thumb = str(status.get("thumbnail") or "")
+    if thumb.startswith("https://static-cdn.jtvnw.net/"):
+        st.image(thumb, use_container_width=True)
+    if channel_url:
+        st.link_button("▶ Jetzt live ansehen", channel_url, type="primary", use_container_width=True)
+
+
+def _render_public_creator_events(tid):
+    """Show open events created by this creator on their published profile."""
+    try:
+        raw = db.reference("streamdex_events").get() or {}
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    rows = [
+        (event_id, event) for event_id, event in raw.items()
+        if isinstance(event, dict)
+        and str(event.get("owner_tid") or "") == str(tid)
+        and event.get("status") == "open"
+    ]
+    rows.sort(key=lambda pair: int(pair[1].get("created_ts") or 0), reverse=True)
+    st.markdown("### 🎉 Community-Events")
+    if not rows:
+        st.caption("Aktuell hat dieser Creator keine offenen StreamDex-Events.")
+    for event_id, event in rows[:8]:
+        people = event.get("participants") or {}
+        count = len(people) if isinstance(people, dict) else 0
+        with st.container(border=True):
+            st.markdown(f"**{html.escape(str(event.get('title') or 'Community-Event'))}**")
+            st.caption(
+                f"{html.escape(str(event.get('event_type') or 'Community-Event'))} · "
+                f"{html.escape(str(event.get('game') or 'Community'))} · "
+                f"{html.escape(str(event.get('event_date') or 'Termin offen'))} · {count} angemeldet"
+            )
+            st.write(str(event.get("description") or ""))
+            st.link_button("Zum Event anmelden", f"https://streamdex.streamlit.app/?event={quote(str(event_id))}",
+                           key=f"public_creator_event_{tid}_{event_id}", use_container_width=True)
+    st.link_button("🌐 Alle Community-Events", "https://streamdex.streamlit.app/?events=1", use_container_width=True)
+
+
 def render_public_profile(slug):
     """Render only profiles explicitly published in StreamDex."""
     slug = str(slug or "").strip().lower()
@@ -182,6 +258,10 @@ def render_public_profile(slug):
         f"<h1 style='margin:.5rem 0;color:#fff'>{__import__('html').escape(name)}</h1>"
         f"<p style='margin:0;color:#cbd5e1'>{__import__('html').escape(str(profile.get('headline') or ''))}</p>"
         "</div>", unsafe_allow_html=True)
+    twitch_url = str(profile.get("twitch_url") or "")
+    st.markdown("### 📡 Twitch-Live-Status")
+    _render_public_live_status(str(tid), twitch_url)
+    st.divider()
     banner = str(profile.get("banner_url") or "")
     if banner.startswith("https://"):
         st.image(banner, use_container_width=True)
@@ -224,5 +304,7 @@ def render_public_profile(slug):
             st.markdown("### 📅 Stream-Zeitplan")
             st.text(str(profile["schedule"]))
         st.caption("Creator-Profil bei StreamDex OS")
+    st.divider()
+    _render_public_creator_events(str(tid))
     st.divider()
     st.markdown("[⚡ StreamDex – dein Creator Control Center](https://streamdex.streamlit.app/?dashboard=1)")
