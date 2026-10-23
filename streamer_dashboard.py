@@ -65,6 +65,19 @@ TID_RE = re.compile(r"^[0-9]{1,15}$")
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 SESSION_MAX_AGE_S = 2 * 60 * 60   # nach 2 Stunden ist ein neuer Login über die App nötig
 
+def has_active_streamer_login():
+    """True, wenn eine bestätigte Streamer-Sitzung existiert und das Zwei-Stunden-Limit nicht abgelaufen ist."""
+    tid = str(st.session_state.get("authenticated_tid") or "")
+    if not TID_RE.fullmatch(tid):
+        return False
+    try:
+        started = float(st.session_state.get("authenticated_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    age = time.time() - started
+    return started > 0 and 0 <= age <= SESSION_MAX_AGE_S
+
+
 # Twitch OAuth wird direkt abgewickelt, weil Streamlit's st.login() bei dieser
 # Twitch-Konfiguration den Callback mit leeren userinfo-Daten beendet.
 TWITCH_REDIRECT_URI = "https://streamdex.streamlit.app/"
