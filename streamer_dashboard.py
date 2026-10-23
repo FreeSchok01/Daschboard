@@ -315,10 +315,6 @@ def _render_twitch_login():
     # Ein HTML-Link mit target="_self" kann in eingebetteten Ansichten dazu führen,
     # dass Twitch wegen seiner Frame-Schutzrichtlinien die Verbindung ablehnt.
     st.link_button("🟣 Mit Twitch anmelden", url, type="primary", use_container_width=True)
-    st.caption(
-        "Wichtig: In der Twitch Developer Console muss die OAuth Redirect URL exakt "
-        "https://streamdex.streamlit.app/ sein (mit abschließendem Schrägstrich und ohne oauth2callback)."
-    )
 
 
 
