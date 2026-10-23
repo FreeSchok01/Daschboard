@@ -21,6 +21,7 @@ from downloads import (beta_link, lurk_repo, render_member_downloads, render_pub
                        settings as download_settings, update_notice)
 from shop import owned_games, CSS
 from events import render_event_manager
+from planner import render_planner
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -1065,7 +1066,7 @@ def _render_landing():
         '<a class="sd-public-all" href="#tools">Alle Tools anzeigen →</a></div>'
         '<div class="sd-public-toolgrid">'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">🎮</span><span><b>Multi Tool</b><small>Chat Games, Kanalpunkte, Commands, Automationen und mehr.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▣</span><span><b>Planner</b><small>Stream-Planung, Kalender und Erinnerungen.</small></span></a>'
+        '<a class="sd-public-tool" href="/?planner=1"><span class="sd-public-tool-icon">▣</span><span><b>Planner</b><small>Stream-Planung, Kalender und Erinnerungen.</small></span></a>'
         '<a class="sd-public-tool" href="/?events=1"><span class="sd-public-tool-icon">♜</span><span><b>Events</b><small>Community-Events, Turniere und Specials.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Radar</b><small>Live-Status, Statistiken und mehrere Streamer im Blick.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
@@ -1388,15 +1389,26 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
+    # Direkter Planner-Link: nur nach erfolgreichem Streamer-Login öffnen.
+    if str(st.query_params.get("planner", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="planner_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_planner(authed_tid, twitch_username)
+        return
+
     # Große Kachel-Navigation statt kleiner Reiter
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_stats, t_hist, t_gw, t_events, t_downloads, t_support, t_acct = st.tabs([
+        t_over, t_games, t_stats, t_hist, t_gw, t_events, t_planner, t_downloads, t_support, t_acct = st.tabs([
             "🏠 Übersicht",
             "🎮 Freigeschaltete Games",
             "📈 Kanal-Statistiken",
             "📅 Verlauf",
             "🎁 Giveaways",
             "🎉 Events",
+            "▣ Planner",
             "📥 Downloads & Beta",
             "💬 Support-Chat",
             "🧾 Konto & Datenschutz",
@@ -1499,6 +1511,10 @@ def render_streamer_dashboard(games):
     # --- Tab Events ---
     with t_events:
         render_event_manager(authed_tid, twitch_username)
+
+    # --- Planner: persönliche Stream-Planung und Erinnerungen ---
+    with t_planner:
+        render_planner(authed_tid, twitch_username)
 
     # --- Downloads und Beta: nur sichtbar, nachdem ein Login bestätigt wurde ---
     with t_downloads:
