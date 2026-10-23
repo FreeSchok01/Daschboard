@@ -915,7 +915,14 @@ def _render_landing():
     .sd-public-minibars i:nth-child(2){height:38%}.sd-public-minibars i:nth-child(3){height:74%}.sd-public-minibars i:nth-child(4){height:56%}.sd-public-minibars i:nth-child(5){height:95%}.sd-public-minibars i:nth-child(6){height:69%}.sd-public-minibars i:nth-child(7){height:82%}
     .sd-public-float{position:absolute;z-index:3;display:grid;place-items:center;width:38px;height:38px;border:1px solid #8b5cf6;border-radius:11px;color:#d6b4ff;background:#201044;box-shadow:0 0 22px #8b5cf655;font-size:1.1rem}
     .sd-public-f1{top:6%;left:24%}.sd-public-f2{top:36%;left:0;color:#67e8f9;border-color:#22d3ee}.sd-public-f3{bottom:5%;right:12%}.sd-public-f4{top:9%;right:21%;color:#67e8f9;border-color:#22d3ee}
-    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card){display:grid!important;grid-template-columns:minmax(0,3fr) minmax(275px,1fr)!important;gap:18px!important;align-items:start!important}\n    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card)>div{width:auto!important;min-width:0!important;flex:none!important}\n    @media(max-width:1000px){div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card){grid-template-columns:minmax(0,1fr)!important}}\n    .st-key-sd_login_card{margin:0 0 18px!important;padding:18px 17px 14px!important;border:1px solid rgba(139,92,246,.46)!important;border-radius:13px!important;background:linear-gradient(150deg,rgba(14,17,42,.97),rgba(8,12,27,.98))!important;box-shadow:0 10px 35px rgba(0,0,0,.28)!important}
+    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card){
+      display:grid!important;
+      grid-template-columns:minmax(0,3.8fr) minmax(294px,1.08fr)!important;
+      gap:22px!important;align-items:start!important;width:100%!important;margin:0!important
+    }
+    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card)>div{width:100%!important;min-width:0!important;flex:none!important;padding:0!important}
+    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card)>div>div{width:100%!important}
+    @media(max-width:1050px){div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card){grid-template-columns:minmax(0,1fr)!important;gap:12px!important}}\n    .st-key-sd_login_card{margin:0 0 18px!important;padding:18px 17px 14px!important;border:1px solid rgba(139,92,246,.46)!important;border-radius:13px!important;background:linear-gradient(150deg,rgba(14,17,42,.97),rgba(8,12,27,.98))!important;box-shadow:0 10px 35px rgba(0,0,0,.28)!important}
     .st-key-sd_login_card [data-testid="stMarkdownContainer"] h2{font-size:1.18rem!important;margin:0 0 6px!important}
     .st-key-sd_login_card [data-testid="stMarkdownContainer"] p{color:#aeb9db;font-size:.72rem;line-height:1.6}
     .sd-public-login-brand{display:flex;justify-content:center;align-items:center;gap:8px;font-weight:800;font-size:.98rem;margin:0 0 18px;background:linear-gradient(90deg,#fff,#c4b5fd);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
