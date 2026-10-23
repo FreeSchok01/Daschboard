@@ -499,8 +499,8 @@ def main():
         render_shop(GAMES)
         return
 
-    # Standard-Startseite und /?dashboard=1: Streamer-Dashboard mit Twitch-Anmeldung.
-    # Streamlit OIDC leitet nach einem erfolgreichen Login zur App-Startseite zurück.
+    # Standard-Startseite und /?dashboard=1: Streamer-Dashboard mit direktem Twitch-OAuth.
+    # Der Callback wird oben verarbeitet; danach landen erfolgreiche Logins hier.
     if ("dashboard" in st.query_params
             or "streamer" in st.query_params
             or "admin" not in st.query_params):
