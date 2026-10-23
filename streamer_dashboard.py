@@ -62,6 +62,11 @@ TID_RE = re.compile(r"^[0-9]{1,15}$")
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 SESSION_MAX_AGE_S = 2 * 60 * 60   # nach 2 Stunden ist ein neuer Login über die App nötig
 
+def _start_twitch_login():
+    """Startet den sicheren Twitch-Login über Streamlit OpenID Connect."""
+    st.session_state.pop("dashboard_reauth_required", None)
+    st.login("twitch")
+
 
 def _verify_and_consume_token(token: str):
     """Prüft einen Login-Token und löscht ihn atomar (Einmal-Nutzung).
@@ -629,6 +634,8 @@ def render_streamer_dashboard(games):
         if valid_tid:
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
+            st.session_state["auth_method"] = "desktop"
+            st.session_state.pop("dashboard_reauth_required", None)
             # Token aus URL entfernen für saubere Adresse
             st.query_params.clear()
             st.query_params["dashboard"] = "1"
@@ -636,14 +643,28 @@ def render_streamer_dashboard(games):
         else:
             st.error("Der Zugriffs-Link ist ungültig oder abgelaufen. Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
 
+    # 1b. Twitch-Login: Twitch-ID stammt aus dem von Streamlit geprüften OIDC-Token.
+    # Die Twitch-ID wird niemals aus einem frei änderbaren URL-Parameter übernommen.
+    if (st.user.is_logged_in
+            and not st.session_state.get("authenticated_tid")
+            and not st.session_state.get("dashboard_reauth_required")):
+        twitch_id = str(st.user.get("sub") or "")
+        if TID_RE.fullmatch(twitch_id):
+            st.session_state["authenticated_tid"] = twitch_id
+            st.session_state["authenticated_at"] = time.time()
+            st.session_state["auth_method"] = "twitch"
+        else:
+            st.error("Twitch-Anmeldung fehlgeschlagen: Es wurde keine gültige Twitch-ID geliefert.")
+
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
     if authed_tid:
         started = st.session_state.setdefault("authenticated_at", time.time())
         if time.time() - started > SESSION_MAX_AGE_S:
-            for k in ("authenticated_tid", "authenticated_at", "acct_data"):
+            for k in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data"):
                 st.session_state.pop(k, None)
             st.session_state["session_expired"] = True
+            st.session_state["dashboard_reauth_required"] = True
             authed_tid = None
 
     if authed_tid:
@@ -662,10 +683,16 @@ def render_streamer_dashboard(games):
     if not authed_tid:
         if st.session_state.pop("session_expired", False):
             st.warning(f"⏱️ Deine Sitzung ist nach {SESSION_MAX_AGE_S // 3600} Stunden aus Sicherheitsgründen abgelaufen. "
-                       "Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
+                       "Bitte melde dich erneut mit Twitch an oder öffne das Dashboard über deine Streamdex Desktop-App.")
         elif st.session_state.get("acct_deleted") is not None:
             st.session_state.pop("acct_deleted", None)
             st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
+        st.button(
+            "🟣 Mit Twitch anmelden",
+            type="primary",
+            use_container_width=True,
+            on_click=_start_twitch_login,
+        )
         _render_landing()
         return
 
@@ -688,8 +715,12 @@ def render_streamer_dashboard(games):
     top_col1, top_col2 = st.columns([5, 1])
     top_col1.caption(f"Angemeldet als: **{twitch_username}** (`{authed_tid}`)")
     if top_col2.button("🚪 Abmelden", key="dash_logout"):
-        st.session_state.pop("authenticated_tid", None)
-        st.rerun()
+        for key in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data", "dashboard_reauth_required"):
+            st.session_state.pop(key, None)
+        if st.user.is_logged_in:
+            st.logout()
+        else:
+            st.rerun()
 
     st.divider()
 
