@@ -268,7 +268,7 @@ def _creator_metrics(tid, token, force=False):
         "predictions": ("predictions", {"broadcaster_id": str(tid), "first": 20}),
         "charity": ("charity/campaigns", {"broadcaster_id": str(tid)}),
         "videos": ("videos", {"user_id": str(tid), "type": "archive", "first": 10, "sort": "time"}),
-        "clips": ("clips", {"broadcaster_id": str(tid), "first": 10, "started_at": month_ago, "ended_at": now_utc.isoformat(timespec="seconds").replace("+00:00", "Z")}),
+        "clips": ("clips", {"broadcaster_id": str(tid), "first": 10, "started_at": (now_utc - timedelta(days=7)).isoformat(timespec="seconds").replace("+00:00", "Z"), "ended_at": now_utc.isoformat(timespec="seconds").replace("+00:00", "Z")}),
     }
     result = {}
     for key, (path, params) in requests.items():
@@ -523,7 +523,7 @@ def _render_creator_analytics(tid, username, reauth_url=None):
         else:
             st.caption("Keine archivierten Streams verfügbar. Prüfe, ob Twitch VODs für deinen Kanal speichert.")
 
-    with st.expander("✂️ Deine Clips · letzte 30 Tage", expanded=False):
+    with st.expander("✂️ Deine Clips · letzte 7 Tage", expanded=False):
         if clips:
             st.dataframe(
                 [{"Titel": str(c.get("title") or "Clip"), "Aufrufe": int(c.get("view_count") or 0),
