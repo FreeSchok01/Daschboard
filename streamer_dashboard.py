@@ -1,9 +1,12 @@
 """Streamer-Dashboard mit geschütztem Zugriff über Einmal-Tokens."""
+import hashlib
+import hmac
 import html
 import json
 import re
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -62,108 +65,245 @@ TID_RE = re.compile(r"^[0-9]{1,15}$")
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 SESSION_MAX_AGE_S = 2 * 60 * 60   # nach 2 Stunden ist ein neuer Login über die App nötig
 
-def _twitch_auth_config_issues():
-    """Prüft die notwendige Streamlit-OIDC-Konfiguration, ohne Geheimnisse anzuzeigen."""
-    issues = []
+# Twitch OAuth wird direkt abgewickelt, weil Streamlit's st.login() bei dieser
+# Twitch-Konfiguration den Callback mit leeren userinfo-Daten beendet.
+TWITCH_REDIRECT_URI = "https://streamdex.streamlit.app/"
+TWITCH_AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
+TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
+TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
+TWITCH_USERS_URL = "https://api.twitch.tv/helix/users"
+TWITCH_STATE_MAX_AGE_S = 10 * 60
+
+
+def _twitch_credentials():
+    """Liest Client-ID und Client-Secret aus [twitch] oder [auth.twitch]."""
+    section = None
     try:
-        auth = st.secrets["auth"]
+        section = st.secrets["twitch"]
     except Exception:
-        return [
-            "Der Abschnitt [auth] fehlt in Streamlit Cloud → Settings → Secrets.",
-            'Erforderlich sind redirect_uri = "https://streamdex.streamlit.app/~/+/oauth2callback" und cookie_secret.'
-        ]
-
-    for key in ("redirect_uri", "cookie_secret"):
-        if not str(auth.get(key, "") or "").strip():
-            issues.append(f"[auth] {key} fehlt.")
-
-    expected_redirect = "https://streamdex.streamlit.app/~/+/oauth2callback"
-    if str(auth.get("redirect_uri", "")).strip() != expected_redirect:
-        issues.append(f'redirect_uri muss exakt {expected_redirect} sein.')
-
-    try:
-        provider = auth["twitch"]
-    except Exception:
-        provider = None
-
-    if provider is None:
-        issues.append("Der Abschnitt [auth.twitch] fehlt. [twitch] allein reicht für st.login('twitch') nicht.")
-        return issues
-
-    for key in ("client_id", "client_secret", "server_metadata_url"):
-        if not str(provider.get(key, "") or "").strip():
-            issues.append(f"[auth.twitch] {key} fehlt.")
-
-    metadata = str(provider.get("server_metadata_url", "") or "").strip()
-    if metadata and metadata != "https://id.twitch.tv/oauth2/.well-known/openid-configuration":
-        issues.append("server_metadata_url muss die offizielle Twitch-OIDC-Adresse sein.")
-
-    if str(provider.get("token_endpoint_auth_method", "") or "").strip() != "client_secret_post":
-        issues.append('Bitte ergänze unter [auth.twitch]: token_endpoint_auth_method = "client_secret_post".')
-
-    client_kwargs = provider.get("client_kwargs", {})
-    scope = str(client_kwargs.get("scope", "") or "") if hasattr(client_kwargs, "get") else ""
-    if "openid" not in scope.split():
-        issues.append('Unter [auth.twitch] muss client_kwargs = { scope = "openid" } gesetzt sein.')
-
-    # Twitch erwartet "claims" als Authorization-Parameter, nicht innerhalb von client_kwargs.
-    authorize_params = provider.get("authorize_params", {})
-    claims_setting = authorize_params.get("claims", "") if hasattr(authorize_params, "get") else ""
-    if not claims_setting:
-        issues.append("Unter [auth.twitch] fehlt authorize_params mit den Twitch-Claims für das ID-Token.")
-    else:
         try:
-            claims_json = json.loads(str(claims_setting))
+            section = st.secrets["auth"]["twitch"]
         except Exception:
-            claims_json = {}
-            issues.append("authorize_params.claims ist kein gültiges JSON.")
-        id_token_claims = claims_json.get("id_token", {}) if isinstance(claims_json, dict) else {}
-        if not isinstance(id_token_claims, dict) or not {"preferred_username", "picture"}.issubset(id_token_claims):
-            issues.append("authorize_params.claims muss preferred_username und picture im id_token anfordern.")
+            section = None
+    if section is None:
+        raise ValueError(
+            "Twitch-Zugangsdaten fehlen. In Streamlit Secrets wird [twitch] "
+            "mit client_id und client_secret benötigt."
+        )
 
-    return issues
+    client_id = str(section.get("client_id", "") or "").strip()
+    client_secret = str(section.get("client_secret", "") or "").strip()
+    if not client_id or not client_secret:
+        raise ValueError("Unter [twitch] müssen client_id und client_secret ausgefüllt sein.")
+    return client_id, client_secret
 
 
-def _start_twitch_login():
-    """Prüft die OIDC-Secrets und startet danach den Twitch-Login."""
-    issues = _twitch_auth_config_issues()
-    if issues:
-        st.error("Der Twitch-Login ist noch nicht vollständig eingerichtet:")
-        for issue in issues:
-            st.markdown(f"- {issue}")
-        st.info("Öffne Streamlit Cloud → Manage app → Settings → Secrets und ergänze die fehlenden Angaben. Die Werte nicht hier im Chat posten.")
-        with st.expander("Beispiel für die vollständige Twitch-Konfiguration"):
-            st.code("""[auth]
-redirect_uri = "https://streamdex.streamlit.app/~/+/oauth2callback"
-cookie_secret = "HIER_EINEN_EIGENEN_ZUFAELLIGEN_GEHEIMWERT_EINTRAGEN"
+def _make_twitch_state(client_secret):
+    """Erzeugt einen zeitlich begrenzten, signierten OAuth-state-Wert."""
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_urlsafe(24)
+    payload = f"{timestamp}.{nonce}"
+    signature = hmac.new(
+        client_secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}.{signature}"
 
-[auth.twitch]
-client_id = "DEINE_TWITCH_CLIENT_ID"
-client_secret = "DEIN_TWITCH_CLIENT_SECRET"
-server_metadata_url = "https://id.twitch.tv/oauth2/.well-known/openid-configuration"
-token_endpoint_auth_method = "client_secret_post"
-client_kwargs = { scope = "openid" }
-authorize_params = { claims = '{"id_token":{"preferred_username":null,"picture":null}}' }""", language="toml")
+
+def _valid_twitch_state(state, client_secret):
+    """Prüft Signatur und Ablaufzeit des OAuth-state-Werts."""
+    if not isinstance(state, str):
+        return False
+    pieces = state.split(".")
+    if len(pieces) != 3:
+        return False
+
+    timestamp_text, nonce, supplied_signature = pieces
+    if not nonce or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
+        return False
+    try:
+        timestamp = int(timestamp_text)
+    except (TypeError, ValueError):
+        return False
+
+    age = int(time.time()) - timestamp
+    if age < -60 or age > TWITCH_STATE_MAX_AGE_S:
+        return False
+
+    payload = f"{timestamp_text}.{nonce}"
+    expected_signature = hmac.new(
+        client_secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected_signature, supplied_signature)
+
+
+def _twitch_authorization_url():
+    """Liefert (Autorisierungs-URL, Fehlermeldung)."""
+    try:
+        client_id, client_secret = _twitch_credentials()
+    except ValueError as exc:
+        return None, str(exc)
+
+    state = _make_twitch_state(client_secret)
+    params = {
+        "client_id": client_id,
+        "redirect_uri": TWITCH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid",
+        "state": state,
+    }
+    return f"{TWITCH_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}", None
+
+
+def _twitch_http_json(url, method="GET", form=None, headers=None):
+    """Sendet eine Twitch-HTTP-Anfrage und liefert JSON ohne Tokens in Fehlermeldungen."""
+    data = urllib.parse.urlencode(form).encode("utf-8") if form is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers=headers or {},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Twitch antwortet mit HTTP {exc.code}.") from None
+    except urllib.error.URLError:
+        raise RuntimeError("Twitch ist vorübergehend nicht erreichbar.") from None
+    except TimeoutError:
+        raise RuntimeError("Die Verbindung zu Twitch hat zu lange gedauert.") from None
+
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RuntimeError("Twitch hat eine ungültige Antwort gesendet.") from None
+    if not isinstance(result, dict):
+        raise RuntimeError("Twitch hat eine unerwartete Antwort gesendet.")
+    return result
+
+
+def handle_twitch_oauth_callback():
+    """Verarbeitet Twitch ?code=...; gibt False zurück, wenn kein Callback vorliegt."""
+    has_code = "code" in st.query_params
+    has_error = "error" in st.query_params
+    if not has_code and not has_error:
+        return False
+
+    code = str(st.query_params.get("code", "") or "").strip()
+    state = str(st.query_params.get("state", "") or "").strip()
+    provider_error = str(st.query_params.get("error", "") or "").strip()
+
+    def _return_to_dashboard(notice=None):
+        if notice:
+            st.session_state["twitch_login_notice"] = notice
+        st.query_params.clear()
+        st.query_params["dashboard"] = "1"
+        return True
+
+    if provider_error:
+        if provider_error == "access_denied":
+            return _return_to_dashboard("Du hast die Anmeldung bei Twitch abgebrochen.")
+        return _return_to_dashboard(
+            "Twitch hat die Anmeldung abgelehnt. Prüfe die Redirect-URL in der Twitch Developer Console."
+        )
+
+    if not code or not state:
+        return _return_to_dashboard(
+            "Der Twitch-Rückweg war unvollständig. Bitte starte die Anmeldung erneut."
+        )
+
+    try:
+        client_id, client_secret = _twitch_credentials()
+        if not _valid_twitch_state(state, client_secret):
+            return _return_to_dashboard(
+                "Der Twitch-Anmeldelink ist abgelaufen oder ungültig. Bitte klicke erneut auf „Mit Twitch anmelden“."
+            )
+
+        token_data = _twitch_http_json(
+            TWITCH_TOKEN_URL,
+            method="POST",
+            form={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": TWITCH_REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        access_token = str(token_data.get("access_token", "") or "")
+        if not access_token:
+            raise RuntimeError("Twitch hat kein Zugriffstoken zurückgegeben.")
+
+        validation = _twitch_http_json(
+            TWITCH_VALIDATE_URL,
+            headers={"Authorization": f"OAuth {access_token}"},
+        )
+        if str(validation.get("client_id", "")) != client_id:
+            raise RuntimeError("Das Twitch-Token gehört nicht zur konfigurierten Anwendung.")
+
+        twitch_id = str(validation.get("user_id", "") or "")
+        if not TID_RE.fullmatch(twitch_id):
+            raise RuntimeError("Twitch hat keine gültige Benutzer-ID zurückgegeben.")
+
+        user_data = _twitch_http_json(
+            TWITCH_USERS_URL,
+            headers={
+                "Client-Id": client_id,
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+        users = user_data.get("data", [])
+        if not isinstance(users, list) or not users or not isinstance(users[0], dict):
+            raise RuntimeError("Twitch konnte dein Profil nicht zurückgeben.")
+
+        user = users[0]
+        if str(user.get("id", "")) != twitch_id:
+            raise RuntimeError("Die Profil-ID stimmt nicht mit dem validierten Twitch-Token überein.")
+
+        # Keine Access- oder Refresh-Tokens speichern. Wir behalten nur das geprüfte Profil.
+        st.session_state["authenticated_tid"] = twitch_id
+        st.session_state["authenticated_at"] = time.time()
+        st.session_state["auth_method"] = "twitch"
+        st.session_state["twitch_profile"] = {
+            "id": twitch_id,
+            "login": str(user.get("login", "") or ""),
+            "display_name": str(user.get("display_name", "") or user.get("login", "") or twitch_id),
+            "picture": str(user.get("profile_image_url", "") or ""),
+        }
+        st.session_state.pop("dashboard_reauth_required", None)
+        st.session_state.pop("session_expired", None)
+        st.session_state.pop("twitch_login_notice", None)
+        return _return_to_dashboard()
+
+    except Exception as exc:
+        # Keine Secrets, Access-Tokens oder Response-Bodies ins UI schreiben.
+        detail = str(exc)
+        if not detail or any(k in detail.lower() for k in ("client_secret", "access_token", "refresh_token")):
+            detail = "Twitch konnte den Autorisierungscode nicht verifizieren."
+        return _return_to_dashboard(f"Twitch-Anmeldung fehlgeschlagen: {detail[:220]}")
+
+
+def _render_twitch_login():
+    """Rendert einen echten Twitch-Link im selben Browser-Tab."""
+    url, error = _twitch_authorization_url()
+    if error:
+        st.error(error)
+        st.info("In Streamlit Secrets müssen die Twitch-Zugangsdaten unter [twitch] mit client_id und client_secret stehen.")
         return
 
-    st.session_state.pop("dashboard_reauth_required", None)
-    try:
-        st.login("twitch")
-    except Exception as exc:
-        # Fehlermeldung ohne Geheimnisse anzeigen, damit die Ursache erkennbar ist.
-        detail = str(exc)
-        try:
-            provider = st.secrets["auth"]["twitch"]
-            for key in ("client_secret", "client_id"):
-                secret_value = str(provider.get(key, "") or "")
-                if secret_value:
-                    detail = detail.replace(secret_value, "[verborgen]")
-        except Exception:
-            pass
-        st.error(f"Streamlit konnte den Twitch-Login nicht starten ({type(exc).__name__}).")
-        if detail:
-            st.caption(f"Zusatzinfo: {detail[:500]}")
-        st.info("Prüfe außerdem, ob die Client-ID und das Client-Secret zusammengehören und die Callback-URL in der Twitch Developer Console exakt stimmt.")
+    safe_url = html.escape(url, quote=True)
+    st.markdown(
+        '<a href="' + safe_url + '" target="_self" rel="noopener" '
+        'style="display:block;text-align:center;padding:0.8rem 1rem;border-radius:0.6rem;'
+        'background:#9147ff;color:white;text-decoration:none;font-weight:700;font-size:1rem;'
+        'margin:0.4rem 0 1rem 0;">🟣 Mit Twitch anmelden</a>',
+        unsafe_allow_html=True,
+    )
 
 
 
@@ -708,11 +848,11 @@ def _render_landing():
         "Melde dich mit Twitch an, um dein Profil, deine StreamDex-Statistiken, "
         "deine freigeschalteten Funktionen, Support und Community-Events zu verwalten."
     )
-    if not st.user.is_logged_in:
+    if not st.session_state.get("authenticated_tid"):
         st.caption("Status: Noch nicht bei Twitch angemeldet.")
         st.info(
-            "Klicke oben auf **🟣 Mit Twitch anmelden**. Wenn du danach wieder hier landest, "
-            "ist die Twitch-OIDC-Konfiguration noch nicht vollständig oder Twitch hat die Rückleitung abgelehnt."
+            "Klicke oben auf **🟣 Mit Twitch anmelden**. Nach erfolgreicher Anmeldung wird dein Twitch-Profil "
+            "angezeigt und du kannst das Dashboard inklusive Events verwenden."
         )
     st.divider()
     st.markdown("#### Noch mehr aus StreamDex")
@@ -754,19 +894,6 @@ def render_streamer_dashboard(games):
         else:
             st.error("Der Zugriffs-Link ist ungültig oder abgelaufen. Bitte öffne das Dashboard erneut über deine Streamdex Desktop-App.")
 
-    # 1b. Twitch-Login: Twitch-ID stammt aus dem von Streamlit geprüften OIDC-Token.
-    # Die Twitch-ID wird niemals aus einem frei änderbaren URL-Parameter übernommen.
-    if (st.user.is_logged_in
-            and not st.session_state.get("authenticated_tid")
-            and not st.session_state.get("dashboard_reauth_required")):
-        twitch_id = str(st.user.get("sub") or "")
-        if TID_RE.fullmatch(twitch_id):
-            st.session_state["authenticated_tid"] = twitch_id
-            st.session_state["authenticated_at"] = time.time()
-            st.session_state["auth_method"] = "twitch"
-        else:
-            st.error("Twitch-Anmeldung fehlgeschlagen: Es wurde keine gültige Twitch-ID geliefert.")
-
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
     if authed_tid:
@@ -798,32 +925,30 @@ def render_streamer_dashboard(games):
         elif st.session_state.get("acct_deleted") is not None:
             st.session_state.pop("acct_deleted", None)
             st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
+        notice = st.session_state.pop("twitch_login_notice", None)
+        if notice:
+            st.error(notice)
         st.markdown("### 🟣 Twitch-Anmeldung")
-        if st.button(
-            "🟣 Mit Twitch anmelden",
-            type="primary",
-            use_container_width=True,
-            key="twitch_login_button",
-        ):
-            _start_twitch_login()
+        _render_twitch_login()
         _render_landing()
         return
 
-    # Daten des authentifizierten Streamers laden. Bei einem neuen, gültigen Twitch-Login
-    # wird ein minimales Profil angelegt, damit die Events- und Dashboard-Funktionen nutzbar sind.
+    # Daten des authentifizierten Streamers laden. Twitch-Profil stammt aus Helix,
+    # nachdem der OAuth-Code und das User-Access-Token serverseitig validiert wurden.
     presence_ref = db.reference(f"presence/{authed_tid}")
     presence = presence_ref.get() or {}
-    oidc_logged_in = bool(st.user.is_logged_in)
-    oidc_tid = str(st.user.get("sub") or "") if oidc_logged_in else ""
+    oidc_logged_in = st.session_state.get("auth_method") == "twitch"
+    twitch_profile = st.session_state.get("twitch_profile", {}) or {}
+    oidc_tid = str(authed_tid) if oidc_logged_in else ""
     oidc_username = str(
-        st.user.get("preferred_username")
-        or st.user.get("name")
+        twitch_profile.get("display_name")
+        or twitch_profile.get("login")
         or ""
     ).strip()
-    oidc_picture = str(st.user.get("picture") or "").strip()
+    oidc_picture = str(twitch_profile.get("picture") or "").strip()
 
     if not presence:
-        if st.session_state.get("auth_method") == "twitch" and oidc_logged_in and oidc_tid == str(authed_tid):
+        if oidc_logged_in and oidc_tid == str(authed_tid):
             initial_profile = {
                 "twitch_username": oidc_username or str(authed_tid),
                 "status": "offline",
@@ -839,8 +964,6 @@ def render_streamer_dashboard(games):
             st.error("Konto-Daten konnten nicht geladen werden. Bitte melde dich erneut mit Twitch an oder öffne das Dashboard über deine StreamDex Desktop-App.")
             return
 
-    # Wenn ein Name von Twitch geliefert wird und Firebase noch keinen Namen hat,
-    # wird ausschließlich das fehlende Namensfeld ergänzt; vorhandene App-Daten bleiben unberührt.
     if oidc_username and not presence.get("twitch_username"):
         presence_ref.child("twitch_username").set(oidc_username)
         presence["twitch_username"] = oidc_username
@@ -871,12 +994,14 @@ def render_streamer_dashboard(games):
         details_col.caption("Mit StreamDex Desktop-App angemeldet")
 
     if logout_col.button("🚪 Abmelden", key="dash_logout", use_container_width=True):
-        for key in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data", "dashboard_reauth_required"):
+        for key in (
+            "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
+            "acct_data", "dashboard_reauth_required",
+        ):
             st.session_state.pop(key, None)
-        if st.user.is_logged_in:
-            st.logout()
-        else:
-            st.rerun()
+        st.query_params.clear()
+        st.query_params["dashboard"] = "1"
+        st.rerun()
 
     st.divider()
 
