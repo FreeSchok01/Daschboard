@@ -125,14 +125,48 @@ def _timeline(tid):
 
     events = _read("streamdex_events")
     for event_id, event in events.items():
-        if not isinstance(event, dict) or str(event.get("owner_tid") or "") != str(tid):
+        if not isinstance(event, dict):
+            continue
+        owned = str(event.get("owner_tid") or "") == str(tid)
+        # Gemeinsame Chronik zeigt nur offene Events anderer Creator; eigene Events bleiben vollständig sichtbar.
+        if not owned and event.get("status") != "open":
             continue
         people = event.get("participants") or {}
         count = len(people) if isinstance(people, dict) else 0
-        _entry(items, event.get("created_ts") or event.get("created_at"), "Event",
-               f"Community-Event: {event.get('title') or 'Event'}",
-               f"{count} Anmeldungen · {event.get('event_type') or 'Community-Event'}",
-               f"https://streamdex.streamlit.app/?event={event_id}")
+        event_kind = "Event" if owned else "Community"
+        event_title = f"Dein Event: {event.get('title') or 'Event'}" if owned else f"Community-Event: {event.get('title') or 'Event'}"
+        details = f"{count} Anmeldungen · {event.get('event_type') or 'Community-Event'} · {event.get('game') or 'Community'}"
+        if not owned and event.get("owner_name"):
+            details += f" · Veranstalter: {event.get('owner_name')}"
+        _entry(items, event.get("created_ts") or event.get("created_at"), event_kind,
+               event_title, details, f"https://streamdex.streamlit.app/?event={event_id}")
+
+    polls = _read("community_polls")
+    for poll in sorted(polls.values(), key=lambda row: int(row.get("created_at") or 0) if isinstance(row, dict) and str(row.get("created_at") or "").isdigit() else 0, reverse=True)[:50]:
+        if not isinstance(poll, dict):
+            continue
+        votes = poll.get("votes") or {}
+        vote_count = len(votes) if isinstance(votes, dict) else 0
+        options = poll.get("options") or []
+        option_count = len(options) if isinstance(options, (dict, list)) else 0
+        status = "Geschlossen" if poll.get("closed") else "Offen"
+        _entry(items, poll.get("created_at"), "Umfrage",
+               f"Community-Umfrage: {poll.get('question') or 'Umfrage'}",
+               f"{status} · {option_count} Antwortmöglichkeiten · {vote_count} Stimmen · {poll.get('created_by_name') or 'Community'}",
+               "https://streamdex.streamlit.app/?feedback=1")
+
+    try:
+        public_suggestions = db.reference("feedback_inbox").order_by_child("ts").limit_to_last(100).get() or {}
+    except Exception:
+        public_suggestions = {}
+    if isinstance(public_suggestions, dict):
+        for suggestion in public_suggestions.values():
+            if not isinstance(suggestion, dict) or not suggestion.get("community_visible"):
+                continue
+            _entry(items, suggestion.get("ts"), "Community-Idee",
+                   f"Community-Idee: {suggestion.get('title') or 'Vorschlag'}",
+                   f"{suggestion.get('category') or 'Allgemein'} · {suggestion.get('author_name') or 'Community'} · {suggestion.get('status') or 'neu'}",
+                   "https://streamdex.streamlit.app/?feedback=1")
 
     clips = _read(f"streamdex_clips/{tid}")
     for clip in clips.values():
