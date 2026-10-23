@@ -1292,6 +1292,8 @@ def render_streamer_dashboard(games):
         notice = st.session_state.pop("twitch_login_notice", None)
         if notice:
             st.error(notice)
+        if str(st.query_params.get("planner", "")) == "1":
+            st.info("Der Planner ist Teil deines Streamer-Dashboards. Melde dich unten mit Twitch an und öffne danach den Reiter „▣ Planner“.")
         _render_landing()
         return
 
