@@ -45,7 +45,7 @@ def render_community_integrations(tid, username=""):
     st.markdown("### 🔗 Verbundene Community-Bereiche")
     b1, b2, b3 = st.columns(3)
     b1.link_button("🌐 Öffentliche Event-Übersicht", PUBLIC_BASE + "?events=1", use_container_width=True)
-    b2.link_button("💬 Feedback & Umfragen", PUBLIC_BASE + "?dashboard=1", use_container_width=True)
+    b2.link_button("💬 Feedback & Umfragen", PUBLIC_BASE + "?feedback=1", use_container_width=True)
     b3.link_button("▣ Stream Planner", PUBLIC_BASE + "?planner=1", use_container_width=True)
 
     st.markdown("### 📣 Offene Events aus der StreamDex-Community")
