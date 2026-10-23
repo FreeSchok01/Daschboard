@@ -1015,6 +1015,7 @@ STREAMER_DASHBOARD_CSS = """<style>
   .sd-hero-tags{margin-top:16px}
   .st-key-sd_login_card{padding:16px}
 }
+</style>"""
 
 
 def render_streamer_dashboard(games):
