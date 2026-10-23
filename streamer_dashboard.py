@@ -101,6 +101,11 @@ def _twitch_auth_config_issues():
     if str(provider.get("token_endpoint_auth_method", "") or "").strip() != "client_secret_post":
         issues.append('Bitte ergänze unter [auth.twitch]: token_endpoint_auth_method = "client_secret_post".')
 
+    client_kwargs = provider.get("client_kwargs", {})
+    claims_setting = str(client_kwargs.get("claims", "") or "") if hasattr(client_kwargs, "get") else ""
+    if "preferred_username" not in claims_setting or "picture" not in claims_setting:
+        issues.append("client_kwargs muss die Twitch-Claims preferred_username und picture anfordern, damit dein Name und Profilbild oben angezeigt werden.")
+
     return issues
 
 
