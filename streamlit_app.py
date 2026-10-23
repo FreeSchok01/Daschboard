@@ -482,25 +482,24 @@ def main():
         apply_theme()
         render_tour_skip()
         return
-    if "dashboard" in st.query_params or "streamer" in st.query_params:  # Öffentlich: Streamer-Dashboard /?dashboard=1
-        st.set_page_config(page_title="Streamdex Dashboard", page_icon="📊", layout="wide")
-        init_firebase()
-        apply_theme()
-        render_streamer_dashboard(GAMES)
-        return
-    if "admin" not in st.query_params:         # Öffentlich: Shop. Admin: /?admin=1
-        # Streamlit OIDC leitet nach erfolgreichem Login zur App-Startseite zurück.
-        # Ohne weitere URL-Parameter öffnen wir dann das Streamer-Dashboard.
-        if st.user.is_logged_in and not st.query_params:
-            st.set_page_config(page_title="Streamdex Dashboard", page_icon="📊", layout="wide")
-            init_firebase()
-            apply_theme()
-            render_streamer_dashboard(GAMES)
-            return
+    # Öffentlicher Shop nur bei ausdrücklichem Aufruf oder für Shop-Kauf-/Freischaltlinks.
+    # Die normale Startseite soll die Streamer-Funktion zeigen, nicht den Shop.
+    if "shop" in st.query_params or "u" in st.query_params or "gift" in st.query_params:
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
         init_firebase()
         apply_theme()
         render_shop(GAMES)
+        return
+
+    # Standard-Startseite und /?dashboard=1: Streamer-Dashboard mit Twitch-Anmeldung.
+    # Streamlit OIDC leitet nach einem erfolgreichen Login zur App-Startseite zurück.
+    if ("dashboard" in st.query_params
+            or "streamer" in st.query_params
+            or "admin" not in st.query_params):
+        st.set_page_config(page_title="Streamdex Dashboard", page_icon="📊", layout="wide")
+        init_firebase()
+        apply_theme()
+        render_streamer_dashboard(GAMES)
         return
 
     st.set_page_config(page_title="TwitchHub Admin", page_icon="🛟", layout="wide")
