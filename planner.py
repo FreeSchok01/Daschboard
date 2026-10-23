@@ -368,7 +368,7 @@ def _publish_planner_stream_to_twitch(owner_tid, stream):
 
 def _render_twitch_schedule_integration(ref, owner_tid, streams, twitch_username, reauth_url=None):
     st.markdown("### 🟣 Twitch-Zeitplan")
-    st.caption("Importiere kommende Termine von Twitch in deinen StreamDex Planner oder veröffentliche lokale Pläne direkt bei Twitch. Änderungen erfolgen erst nach Klick auf die jeweilige Aktion.")
+    st.caption("Importiere kommende Termine von Twitch in deinen StreamDex Planner oder veröffentliche lokale Pläne direkt bei Twitch. Einmalige Twitch-Termine können je nach Affiliate-/Partnerstatus eingeschränkt sein; Änderungen erfolgen erst nach Klick auf die jeweilige Aktion.")
     if st.button("🔄 Twitch-Zeitplan aktualisieren", key=f"planner_twitch_refresh_{owner_tid}"):
         _load_twitch_schedule.clear()
         st.rerun()
