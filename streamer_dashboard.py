@@ -941,8 +941,80 @@ STREAMER_DASHBOARD_CSS = """<style>
 .st-key-sd_profile_header .sd-profile-status{display:inline-flex;align-items:center;gap:6px;margin:3px 0 0;padding:4px 9px;border-radius:99px;border:1px solid rgba(148,163,184,.16);background:rgba(15,23,42,.65);font-size:.7rem;font-weight:700;color:#cbd5e1}
 .st-key-sd_profile_header .sd-profile-status.online{color:#86efac;border-color:rgba(34,197,94,.25);background:rgba(34,197,94,.08)}
 .st-key-sd_profile_header .sd-profile-status.offline{color:#cbd5e1}
-@media(max-width:760px){.sd-feature-grid{grid-template-columns:1fr;gap:10px}.sd-feature-card{padding:15px}.sd-hero{border-radius:19px}.sd-hero-tags{margin-top:16px}.st-key-sd_login_card{padding:16px}}
-</style>"""
+
+/* Große Kachel-Navigation: drei breite Buttons pro Reihe im Streamer-Dashboard. */
+.st-key-sd_main_nav [data-baseweb="tab-list"],
+.st-key-sd_main_nav [role="tablist"]{
+  display:grid!important;
+  grid-template-columns:repeat(3,minmax(0,1fr))!important;
+  gap:12px!important;
+  width:100%!important;
+  overflow:visible!important;
+  padding:8px 0 20px!important;
+  border:0!important;
+  scrollbar-width:none;
+}
+.st-key-sd_main_nav [data-baseweb="tab-list"]::-webkit-scrollbar,
+.st-key-sd_main_nav [role="tablist"]::-webkit-scrollbar{display:none!important}
+.st-key-sd_main_nav button[data-baseweb="tab"],
+.st-key-sd_main_nav button[role="tab"]{
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  width:100%!important;
+  min-width:0!important;
+  min-height:84px!important;
+  height:100%!important;
+  padding:17px 14px!important;
+  white-space:normal!important;
+  text-align:center!important;
+  border-radius:18px!important;
+  border:1px solid rgba(148,163,184,.18)!important;
+  background:linear-gradient(145deg,rgba(15,23,42,.96),rgba(20,29,49,.94))!important;
+  color:#cbd5e1!important;
+  box-shadow:0 10px 24px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.035)!important;
+  transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,background .16s ease!important;
+}
+.st-key-sd_main_nav button[data-baseweb="tab"] p,
+.st-key-sd_main_nav button[role="tab"] p,
+.st-key-sd_main_nav button[role="tab"] span,
+.st-key-sd_main_nav button[role="tab"] div{
+  font-size:.94rem!important;
+  line-height:1.35!important;
+  font-weight:800!important;
+  white-space:normal!important;
+  text-align:center!important;
+  color:inherit!important;
+}
+.st-key-sd_main_nav button[data-baseweb="tab"]:hover,
+.st-key-sd_main_nav button[role="tab"]:hover{
+  transform:translateY(-2px)!important;
+  border-color:rgba(168,85,247,.65)!important;
+  box-shadow:0 15px 30px rgba(0,0,0,.25),0 0 18px rgba(168,85,247,.12)!important;
+}
+.st-key-sd_main_nav button[role="tab"][aria-selected="true"]{
+  background:linear-gradient(135deg,rgba(126,34,206,.96),rgba(8,145,178,.9))!important;
+  border-color:rgba(196,181,253,.86)!important;
+  color:#fff!important;
+  box-shadow:0 12px 28px rgba(88,28,135,.27),inset 0 1px 0 rgba(255,255,255,.18)!important;
+}
+.st-key-sd_main_nav [data-baseweb="tab-highlight"],
+.st-key-sd_main_nav [data-baseweb="tab-border"]{display:none!important}
+@media(max-width:850px){
+  .st-key-sd_main_nav [data-baseweb="tab-list"],
+  .st-key-sd_main_nav [role="tablist"]{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important}
+  .st-key-sd_main_nav button[data-baseweb="tab"],
+  .st-key-sd_main_nav button[role="tab"]{min-height:76px!important;padding:14px 10px!important;border-radius:15px!important}
+  .st-key-sd_main_nav button[role="tab"] p,
+  .st-key-sd_main_nav button[role="tab"] span{font-size:.86rem!important}
+}
+@media(max-width:760px){
+  .sd-feature-grid{grid-template-columns:1fr;gap:10px}
+  .sd-feature-card{padding:15px}
+  .sd-hero{border-radius:19px}
+  .sd-hero-tags{margin-top:16px}
+  .st-key-sd_login_card{padding:16px}
+}
 
 
 def render_streamer_dashboard(games):
@@ -1111,7 +1183,19 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
-    t_over, t_games, t_stats, t_hist, t_gw, t_events, t_downloads, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "🎁 Giveaways", "🎉 Events", "📥 Downloads & Beta", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
+    # Große Kachel-Navigation statt kleiner Reiter
+    with st.container(key="sd_main_nav"):
+        t_over, t_games, t_stats, t_hist, t_gw, t_events, t_downloads, t_support, t_acct = st.tabs([
+            "🏠 Übersicht",
+            "🎮 Freigeschaltete Games",
+            "📈 Kanal-Statistiken",
+            "📅 Verlauf",
+            "🎁 Giveaways",
+            "🎉 Events",
+            "📥 Downloads & Beta",
+            "💬 Support-Chat",
+            "🧾 Konto & Datenschutz",
+        ])
 
     # --- Tab 0: Übersicht ---
     with t_over:
