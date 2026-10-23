@@ -152,7 +152,7 @@ def _render_stream_form(ref, owner_tid, default_name):
         st.error("Der Stream konnte nicht gespeichert werden. Bitte prüfe die Firebase-Verbindung.")
 
 
-def _render_stream_rows(ref, owner_tid, streams, selected_date=None):
+def _render_stream_rows(ref, owner_tid, streams, selected_date=None, view_key="list"):
     visible = []
     for row in streams:
         start = _as_datetime(row.get("start_at"))
@@ -175,22 +175,22 @@ def _render_stream_rows(ref, owner_tid, streams, selected_date=None):
                 if row.get("notes"):
                     st.write(row["notes"])
                 if str(row.get("stream_url", "")).startswith("https://"):
-                    st.link_button("🔗 Stream öffnen", row["stream_url"])
+                    st.link_button("🔗 Stream öffnen", row["stream_url"], key=f"planner_link_{owner_tid}_{view_key}_{stream_id}")
             with action_col:
-                if not is_done and st.button("✓", key=f"planner_done_{owner_tid}_{stream_id}", help="Als erledigt markieren", use_container_width=True):
+                if not is_done and st.button("✓", key=f"planner_done_{owner_tid}_{view_key}_{stream_id}", help="Als erledigt markieren", use_container_width=True):
                     ref.child(f"streams/{stream_id}").update({"status": "done"})
                     st.rerun()
-                if st.button("🗑", key=f"planner_delete_{owner_tid}_{stream_id}", help="Termin löschen", use_container_width=True):
+                if st.button("🗑", key=f"planner_delete_{owner_tid}_{view_key}_{stream_id}", help="Termin löschen", use_container_width=True):
                     st.session_state[f"planner_confirm_delete_{owner_tid}_{stream_id}"] = True
-            confirm_key = f"planner_confirm_delete_{owner_tid}_{stream_id}"
+            confirm_key = f"planner_confirm_delete_{owner_tid}_{view_key}_{stream_id}"
             if st.session_state.get(confirm_key):
                 st.warning("Diesen Stream-Termin endgültig löschen?")
                 yes_col, no_col = st.columns(2)
-                if yes_col.button("Ja, löschen", key=f"planner_confirm_yes_{owner_tid}_{stream_id}", type="primary"):
+                if yes_col.button("Ja, löschen", key=f"planner_confirm_yes_{owner_tid}_{view_key}_{stream_id}", type="primary"):
                     ref.child(f"streams/{stream_id}").delete()
                     st.session_state.pop(confirm_key, None)
                     st.rerun()
-                if no_col.button("Abbrechen", key=f"planner_confirm_no_{owner_tid}_{stream_id}"):
+                if no_col.button("Abbrechen", key=f"planner_confirm_no_{owner_tid}_{view_key}_{stream_id}"):
                     st.session_state.pop(confirm_key, None)
                     st.rerun()
 
@@ -299,17 +299,17 @@ def render_planner(owner_tid, twitch_username=""):
     with t_calendar:
         selected = _calendar_grid(owner_tid, streams)
         st.markdown(f"### 📆 {selected.strftime('%A, %d.%m.%Y')}")
-        _render_stream_rows(owner, owner_tid, streams, selected)
+        _render_stream_rows(owner, owner_tid, streams, selected, view_key="selected_day")
         st.divider()
         st.markdown("#### Nächste Streams")
         now = datetime.now(TZ)
         next_streams = [s for s in streams if _as_datetime(s.get("start_at")) and _as_datetime(s.get("start_at")) >= now and s.get("status") != "done"]
         next_streams.sort(key=lambda s: _as_datetime(s.get("start_at")))
-        _render_stream_rows(owner, owner_tid, next_streams[:8])
+        _render_stream_rows(owner, owner_tid, next_streams[:8], view_key="upcoming")
     with t_create:
         _render_stream_form(owner, owner_tid, twitch_username)
         st.divider()
         st.markdown("#### Deine geplanten Streams")
-        _render_stream_rows(owner, owner_tid, streams)
+        _render_stream_rows(owner, owner_tid, streams, view_key="all_planned")
     with t_reminders:
         _render_reminders(owner, owner_tid, streams)
