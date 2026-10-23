@@ -22,7 +22,7 @@ from events import render_public_events, render_public_event
 from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
-from streamer_dashboard import render_streamer_dashboard
+from streamer_dashboard import handle_twitch_oauth_callback, render_streamer_dashboard
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 from theme import apply_theme, header_html
 from vacation import start_vacation_bot, vacation_panel
@@ -455,6 +455,14 @@ def support_main():
 
 
 def main():
+    # Twitch leitet den Authorization-Code an die App-Startseite zurück.
+    # Callback vor allen anderen Routen verarbeiten, damit Code und State nie als Shop-URL landen.
+    if "code" in st.query_params or "error" in st.query_params:
+        st.set_page_config(page_title="StreamDex Twitch Login", page_icon="🟣", layout="wide")
+        if handle_twitch_oauth_callback():
+            st.rerun()
+        return
+
     if "support" in st.query_params:           # Supporter: /?support=1
         support_main()
         return
