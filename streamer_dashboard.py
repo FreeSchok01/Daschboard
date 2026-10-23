@@ -989,7 +989,7 @@ def _render_public_live_streamers():
             with col:
                 with st.container(key=f"sd-live-card-{safe_id}", border=True):
                     if thumb:
-                        st.image(thumb, use_container_width=True, key=f"homepage_live_thumbnail_{safe_id}")
+                        st.image(thumb, use_container_width=True)
                     st.markdown('<span class="sd-live-badge"><span class="sd-live-dot"></span> LIVE AUF TWITCH</span>', unsafe_allow_html=True)
                     st.markdown(f'<div class="sd-live-title">{html.escape(name)}</div>', unsafe_allow_html=True)
                     st.markdown(f'<div class="sd-live-game">🎮 {html.escape(game)}</div>', unsafe_allow_html=True)
