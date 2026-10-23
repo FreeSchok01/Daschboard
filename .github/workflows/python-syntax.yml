@@ -19,4 +19,4 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile application modules
-        run: python -m py_compile streamlit_app.py streamer_dashboard.py beta_apply.py downloads.py planner.py
+        run: python -m py_compile streamlit_app.py streamer_dashboard.py beta_apply.py downloads.py planner.py creator_profile.py
