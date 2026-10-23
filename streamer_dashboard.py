@@ -887,7 +887,8 @@ def _render_public_live_streamers():
                 except (TypeError, ValueError):
                     continue
                 age_ms = now_ms - last_seen
-                if not last_seen or age_ms < -60_000 or age_ms > 150_000  # same 150-second heartbeat limit as the admin dashboard:
+                # Same 150-second heartbeat limit as the admin dashboard.
+                if not last_seen or age_ms < -60_000 or age_ms > 150_000:
                     continue
                 display_name = str(record.get("twitch_username") or "").strip()
                 login = display_name.lower()
