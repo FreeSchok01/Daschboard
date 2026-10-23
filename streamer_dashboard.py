@@ -463,25 +463,29 @@ def _mark_support_read(tid, msgs):
 # nach Firebase gemeldet und deshalb bewusst NICHT angezeigt (keine Dummy-Werte).
 # ----------------------------------------------------------------------------
 OVERVIEW_CSS = """<style>
-.sdx-grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:4px 0 16px}
-.sdx-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px}
-.sdx-metric,.sdx-card{background:rgba(15,23,42,.85);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:16px}
-.sdx-label{font-family:'JetBrains Mono',monospace;font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
-.sdx-value{font-size:1.7rem;font-weight:800;margin-top:4px;color:#f8fafc}
-.sdx-sub{font-size:.78rem;color:#64748b;margin-top:2px}
-.sdx-ok{color:#22c55e}.sdx-off{color:#94a3b8}
-.sdx-title{font-weight:800;font-size:1rem;margin-bottom:10px;color:#f8fafc}
-.sdx-bar-row{margin:9px 0}
-.sdx-bar-head{display:flex;justify-content:space-between;font-size:.82rem;color:#cbd5e1;margin-bottom:3px}
-.sdx-bar{height:8px;border-radius:6px;background:rgba(255,255,255,.06);overflow:hidden}
-.sdx-bar>div{height:100%;border-radius:6px;background:linear-gradient(90deg,#a855f7,#06b6d4)}
+.sdx-grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:14px;margin:6px 0 18px}
+.sdx-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:16px}
+.sdx-metric,.sdx-card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(15,23,42,.96),rgba(11,18,35,.94));border:1px solid rgba(148,163,184,.16);border-radius:18px;padding:18px;box-shadow:0 12px 32px rgba(0,0,0,.2);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.sdx-metric:before{content:"";position:absolute;inset:0 0 auto;height:2px;background:linear-gradient(90deg,#a855f7,#06b6d4);opacity:.9}
+.sdx-metric:hover,.sdx-card:hover{transform:translateY(-2px);border-color:rgba(168,85,247,.34);box-shadow:0 16px 38px rgba(0,0,0,.28)}
+.sdx-label{font-family:'JetBrains Mono',monospace;font-size:.68rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.09em}
+.sdx-value{font-size:clamp(1.45rem,2.4vw,1.9rem);line-height:1.2;font-weight:800;letter-spacing:-.04em;margin-top:8px;color:#f8fafc;overflow-wrap:anywhere}
+.sdx-sub{font-size:.78rem;line-height:1.5;color:#94a3b8;margin-top:6px}
+.sdx-ok{color:#4ade80}.sdx-off{color:#94a3b8}
+.sdx-title{display:flex;align-items:center;gap:8px;font-size:1rem;font-weight:800;margin-bottom:14px;color:#f8fafc;letter-spacing:-.02em}
+.sdx-bar-row{margin:13px 0}
+.sdx-bar-head{display:flex;justify-content:space-between;gap:12px;font-size:.82rem;color:#cbd5e1;margin-bottom:6px}
+.sdx-bar-head span:last-child{font-family:'JetBrains Mono',monospace;color:#f8fafc}
+.sdx-bar{height:7px;border-radius:99px;background:rgba(148,163,184,.12);overflow:hidden}
+.sdx-bar>div{height:100%;border-radius:99px;background:linear-gradient(90deg,#a855f7,#22d3ee);box-shadow:0 0 12px rgba(168,85,247,.25)}
 .sdx-chips{display:flex;flex-wrap:wrap;gap:8px}
-.sdx-chip{padding:4px 10px;border-radius:20px;font-size:.78rem;font-weight:700;border:1px solid}
-.sdx-chip.on{color:#22c55e;background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3)}
-.sdx-chip.off{color:#f87171;background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.25)}
-.sdx-kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.85rem;color:#f8fafc}
-.sdx-kv:last-child{border-bottom:0}.sdx-kv span:first-child{color:#64748b}
-.sdx-empty{font-size:.85rem;color:#64748b}
+.sdx-chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:99px;font-size:.75rem;font-weight:700;border:1px solid rgba(148,163,184,.16);background:rgba(15,23,42,.55)}
+.sdx-chip.on{color:#86efac;background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.24)}
+.sdx-chip.off{color:#cbd5e1;background:rgba(148,163,184,.06);border-color:rgba(148,163,184,.15)}
+.sdx-kv{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:10px 0;border-bottom:1px solid rgba(148,163,184,.12);font-size:.83rem;color:#f8fafc}
+.sdx-kv span:first-child{color:#94a3b8;flex:1}.sdx-kv span:last-child{text-align:right;overflow-wrap:anywhere;max-width:62%}
+.sdx-kv:last-child{border-bottom:0}.sdx-empty{font-size:.85rem;color:#94a3b8;padding:8px 0}
+@media(max-width:640px){.sdx-metric,.sdx-card{padding:15px;border-radius:15px}.sdx-grid2{grid-template-columns:minmax(0,1fr)}.sdx-value{font-size:1.55rem}}
 </style>"""
 
 ACTIVITY_KEYS = ["checkins", "slot_spins", "megaslot_spins", "fish_catches", "harvests", "raids", "viewers"]
@@ -844,19 +848,29 @@ def _render_giveaway_tab(tid):
 
 def _render_landing():
     """Öffentliche Streamer-Startseite mit Twitch-Login und optionalen Downloads."""
-    st.subheader("Dein Streamer-Bereich")
-    st.write(
-        "Melde dich mit Twitch an, um dein Profil, deine StreamDex-Statistiken, "
-        "deine freigeschalteten Funktionen, Support und Community-Events zu verwalten."
+    st.markdown(
+        '<div class="sd-section-heading"><div class="sd-section-kicker">CREATOR TOOLS</div>'
+        '<h2>Alles für deinen Stream an einem Ort</h2>'
+        '<p>Statistiken, Freischaltungen und Community-Funktionen – übersichtlich in deinem StreamDex-Bereich.</p></div>',
+        unsafe_allow_html=True,
     )
-    if not st.session_state.get("authenticated_tid"):
-        st.caption("Status: Noch nicht bei Twitch angemeldet.")
-        st.info(
-            "Klicke oben auf **🟣 Mit Twitch anmelden**. Nach erfolgreicher Anmeldung wird dein Twitch-Profil "
-            "angezeigt und du kannst das Dashboard inklusive Events verwenden."
-        )
+    st.markdown(
+        '<div class="sd-feature-grid">'
+        '<div class="sd-feature-card"><div class="sd-feature-icon">📊</div><div class="sd-feature-title">Deine Übersicht</div>'
+        '<div class="sd-feature-copy">Behalte Kanal-Aktivität, Giveaways und freigeschaltete Games im Blick.</div></div>'
+        '<div class="sd-feature-card"><div class="sd-feature-icon">🎉</div><div class="sd-feature-title">Community & Events</div>'
+        '<div class="sd-feature-copy">Organisiere Community-Events und verwalte Anmeldungen direkt im Dashboard.</div></div>'
+        '<div class="sd-feature-card"><div class="sd-feature-icon">🧰</div><div class="sd-feature-title">Deine Tools</div>'
+        '<div class="sd-feature-copy">Finde Downloads, Beta-Informationen und Support an einem Ort.</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     st.divider()
-    st.markdown("#### Noch mehr aus StreamDex")
+    st.markdown(
+        '<div class="sd-section-heading"><div class="sd-section-kicker">MEHR ENTDECKEN</div>'
+        '<h2>Noch mehr aus StreamDex</h2></div>',
+        unsafe_allow_html=True,
+    )
     try:
         cfg = download_settings()
         t_dl, t_apply, t_status = st.tabs(["⬇️ Downloads", "📝 Für Beta bewerben", "🔎 Beta-Status & Download"])
@@ -874,8 +888,45 @@ def _render_landing():
         st.rerun()
 
 
+STREAMER_DASHBOARD_CSS = """<style>
+/* Scoped to the streamer dashboard. Admin and data/auth logic stay untouched. */
+.sd-hero{position:relative;isolation:isolate;overflow:hidden;margin:0 0 18px;padding:clamp(22px,3.4vw,36px);border:1px solid rgba(168,85,247,.3);border-radius:24px;background:linear-gradient(115deg,rgba(15,23,42,.98) 0%,rgba(35,25,71,.94) 52%,rgba(8,47,73,.9) 100%);box-shadow:0 20px 55px rgba(0,0,0,.26),inset 0 1px 0 rgba(255,255,255,.06)}
+.sd-hero:before{content:"";position:absolute;z-index:-1;top:-155px;right:-65px;width:390px;height:390px;border-radius:50%;background:radial-gradient(circle,rgba(6,182,212,.19),rgba(168,85,247,.12) 42%,transparent 70%);pointer-events:none}
+.sd-hero:after{content:"";position:absolute;z-index:-1;right:14%;bottom:-190px;width:330px;height:260px;border-radius:50%;background:radial-gradient(circle,rgba(168,85,247,.18),transparent 70%);pointer-events:none}
+.sd-hero-kicker{display:flex;align-items:center;gap:9px;color:#c4b5fd;font-family:'JetBrains Mono',monospace;font-size:.69rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.sd-hero-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:#22d3ee;box-shadow:0 0 12px rgba(34,211,238,.9)}
+.sd-hero-slash{color:#64748b}
+.sd-hero-title{margin:15px 0 8px!important;font-size:clamp(1.85rem,4vw,2.8rem)!important;line-height:1.12!important;letter-spacing:-.055em!important;color:#fff}
+.sd-hero-description{max-width:680px;margin:0!important;font-size:clamp(.94rem,1.5vw,1.08rem);line-height:1.7;color:#cbd5e1}
+.sd-hero-tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.sd-hero-tags span{display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border:1px solid rgba(255,255,255,.1);border-radius:99px;background:rgba(15,23,42,.48);color:#e2e8f0;font-size:.75rem;font-weight:700;backdrop-filter:blur(8px)}
+.sd-section-heading{margin:4px 0 18px}
+.sd-section-kicker{margin-bottom:5px;color:#a78bfa;font:700 .67rem 'JetBrains Mono',monospace;letter-spacing:.13em}
+.sd-section-heading h2{margin:0 0 6px!important;color:#f8fafc;font-size:1.35rem!important;letter-spacing:-.035em}
+.sd-section-heading p{margin:0;color:#94a3b8;max-width:760px;line-height:1.65;font-size:.9rem}
+.sd-feature-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin:18px 0 26px}
+.sd-feature-card{min-width:0;padding:18px;border-radius:17px;border:1px solid rgba(148,163,184,.14);background:linear-gradient(145deg,rgba(15,23,42,.92),rgba(11,18,35,.82));box-shadow:0 10px 28px rgba(0,0,0,.16);transition:transform .18s ease,border-color .18s ease}
+.sd-feature-card:hover{transform:translateY(-3px);border-color:rgba(168,85,247,.42)}
+.sd-feature-icon{display:grid;place-items:center;width:42px;height:42px;margin-bottom:14px;border-radius:13px;border:1px solid rgba(168,85,247,.25);background:linear-gradient(135deg,rgba(168,85,247,.2),rgba(6,182,212,.12));font-size:1.25rem}
+.sd-feature-title{margin-bottom:6px;font-weight:800;color:#f8fafc;font-size:.94rem}
+.sd-feature-copy{font-size:.81rem;color:#94a3b8;line-height:1.65}
+.st-key-sd_login_card{margin:0 0 22px;padding:20px 22px 14px;border:1px solid rgba(168,85,247,.24);border-radius:18px;background:linear-gradient(140deg,rgba(30,27,75,.44),rgba(15,23,42,.88));box-shadow:0 14px 35px rgba(0,0,0,.18)}
+.st-key-sd_login_card [data-testid="stMarkdownContainer"] h2{margin:0 0 7px;font-size:1.2rem!important}
+.st-key-sd_login_card [data-testid="stMarkdownContainer"] p{color:#cbd5e1}
+.st-key-sd_profile_header{margin:0 0 18px;padding:13px 16px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(120deg,rgba(15,23,42,.95),rgba(30,27,75,.7));box-shadow:0 12px 30px rgba(0,0,0,.18)}
+.st-key-sd_profile_header [data-testid="stImage"] img{border-radius:16px;border:2px solid rgba(168,85,247,.45);box-shadow:0 0 20px rgba(168,85,247,.16)}
+.st-key-sd_profile_header h3{margin:0 0 3px;font-size:1.25rem!important;letter-spacing:-.03em}
+.st-key-sd_profile_header [data-testid="stCaptionContainer"]{font-size:.76rem}
+.st-key-sd_profile_header .sd-profile-status{display:inline-flex;align-items:center;gap:6px;margin:3px 0 0;padding:4px 9px;border-radius:99px;border:1px solid rgba(148,163,184,.16);background:rgba(15,23,42,.65);font-size:.7rem;font-weight:700;color:#cbd5e1}
+.st-key-sd_profile_header .sd-profile-status.online{color:#86efac;border-color:rgba(34,197,94,.25);background:rgba(34,197,94,.08)}
+.st-key-sd_profile_header .sd-profile-status.offline{color:#cbd5e1}
+@media(max-width:760px){.sd-feature-grid{grid-template-columns:1fr;gap:10px}.sd-feature-card{padding:15px}.sd-hero{border-radius:19px}.sd-hero-tags{margin-top:16px}.st-key-sd_login_card{padding:16px}}
+</style>"""
+
+
 def render_streamer_dashboard(games):
     st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown(STREAMER_DASHBOARD_CSS, unsafe_allow_html=True)
     hero = st.empty()   # Kopfbereich wird erst gefüllt, wenn klar ist, ob jemand angemeldet ist
 
 
@@ -909,14 +960,22 @@ def render_streamer_dashboard(games):
 
     if authed_tid:
         hero.markdown(
-            '<div class="hero"><h1>📊 Streamer Dashboard</h1><p>Verwalte deine Freischaltungen, Statistiken und Support-Tickets.</p></div>',
+            '<div class="sd-hero">'
+            '<div class="sd-hero-kicker"><span class="sd-hero-dot"></span> STREAMDEX OS <span class="sd-hero-slash">/</span> CREATOR CONTROL CENTER</div>'
+            '<h1 class="sd-hero-title">Dein Streamer-Dashboard</h1>'
+            '<p class="sd-hero-description">Dein Stream. Deine Zahlen. Deine Community – alles an einem Ort.</p>'
+            '<div class="sd-hero-tags"><span>📈 Kanal-Insights</span><span>🎮 Deine Tools</span><span>🎉 Community-Events</span><span>💬 Direkter Support</span></div>'
+            '</div>',
             unsafe_allow_html=True,
         )
     else:
         hero.markdown(
-            '<div class="hero"><h1>👋 Willkommen bei StreamDex OS</h1>'
-            '<p>Dein Toolkit für Streams: Games, Giveaways, Statistiken und Support. '
-            'Lade die App herunter oder bewirb dich für die Beta.</p></div>',
+            '<div class="sd-hero sd-hero-welcome">'
+            '<div class="sd-hero-kicker"><span class="sd-hero-dot"></span> STREAMDEX OS <span class="sd-hero-slash">/</span> CREATOR SPACE</div>'
+            '<h1 class="sd-hero-title">Willkommen bei StreamDex OS</h1>'
+            '<p class="sd-hero-description">Das zentrale Control Center für deinen Stream – von Statistiken bis Community-Events.</p>'
+            '<div class="sd-hero-tags"><span>🟣 Twitch-Login</span><span>📊 Statistiken</span><span>🎉 Events & Community</span><span>🧰 Downloads & Beta</span></div>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
@@ -930,8 +989,14 @@ def render_streamer_dashboard(games):
         notice = st.session_state.pop("twitch_login_notice", None)
         if notice:
             st.error(notice)
-        st.markdown("### 🟣 Twitch-Anmeldung")
-        _render_twitch_login()
+        with st.container(key="sd_login_card"):
+            st.markdown(
+                '<div class="sd-section-kicker">DEIN ACCOUNT</div>'
+                '<h2>Mit Twitch anmelden</h2>'
+                '<p>Verbinde deinen Twitch-Account, um dein persönliches Dashboard und deine Community-Events zu verwalten.</p>',
+                unsafe_allow_html=True,
+            )
+            _render_twitch_login()
         _render_landing()
         return
 
@@ -979,31 +1044,35 @@ def render_streamer_dashboard(games):
     beta_info = db.reference(f"shop/beta/{authed_tid}").get() or {}
     stats_data = db.reference(f"stats/{authed_tid}").get() or {}
 
-    # Profil oben im Dashboard
-    profile_col, details_col, logout_col = st.columns([0.8, 4.7, 1.4], vertical_alignment="center")
-    if oidc_picture:
-        try:
-            profile_col.image(oidc_picture, width=56)
-        except Exception:
+    # Profilkopf: Name, Anmeldestatus und Abmelden bleiben funktional erhalten.
+    with st.container(key="sd_profile_header"):
+        profile_col, details_col, logout_col = st.columns([0.75, 4.85, 1.4], vertical_alignment="center")
+        if oidc_picture:
+            try:
+                profile_col.image(oidc_picture, width=60)
+            except Exception:
+                profile_col.markdown("🟣")
+        else:
             profile_col.markdown("🟣")
-    else:
-        profile_col.markdown("🟣")
-    details_col.markdown(f"### {twitch_username}")
-    details_col.caption(f"Twitch-Profil · ID {authed_tid}")
-    if oidc_logged_in:
-        details_col.caption("Mit Twitch angemeldet")
-    else:
-        details_col.caption("Mit StreamDex Desktop-App angemeldet")
 
-    if logout_col.button("🚪 Abmelden", key="dash_logout", use_container_width=True):
-        for key in (
-            "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
-            "acct_data", "dashboard_reauth_required",
-        ):
-            st.session_state.pop(key, None)
-        st.query_params.clear()
-        st.query_params["dashboard"] = "1"
-        st.rerun()
+        details_col.markdown(f"### {twitch_username}")
+        details_col.markdown(
+            f'<span class="sd-profile-status {"online" if is_online else "offline"}">'
+            f'{"● ONLINE" if is_online else "● OFFLINE"}</span>',
+            unsafe_allow_html=True,
+        )
+        details_col.caption(f"Twitch-Profil · ID {authed_tid}")
+        details_col.caption("Mit Twitch angemeldet" if oidc_logged_in else "Mit StreamDex Desktop-App angemeldet")
+
+        if logout_col.button("🚪 Abmelden", key="dash_logout", use_container_width=True):
+            for key in (
+                "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
+                "acct_data", "dashboard_reauth_required",
+            ):
+                st.session_state.pop(key, None)
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
 
     st.divider()
 
