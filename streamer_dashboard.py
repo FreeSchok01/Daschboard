@@ -286,7 +286,7 @@ def handle_twitch_oauth_callback():
         if str(user.get("id", "")) != twitch_id:
             raise RuntimeError("Die Profil-ID stimmt nicht mit dem validierten Twitch-Token überein.")
 
-        # Keine Access- oder Refresh-Tokens speichern. Wir behalten nur das geprüfte Profil.
+        # Tokens werden nicht dauerhaft in Firebase gespeichert; sie verbleiben nur in der laufenden Sitzung.
         st.session_state["authenticated_tid"] = twitch_id
         st.session_state["authenticated_at"] = time.time()
         st.session_state["auth_method"] = "twitch"
