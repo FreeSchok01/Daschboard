@@ -689,6 +689,12 @@ def _collect_account_data(tid):
     fb = _load_feedback(tid)
     if fb:
         out["feedback_inbox (nur deine Einträge)"] = fb
+    events = _safe_get("streamdex_events")
+    if isinstance(events, dict):
+        own_events = {key: value for key, value in events.items()
+                      if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)}
+        if own_events:
+            out["streamdex_events (eigene Events)"] = own_events
     return out
 
 
@@ -708,6 +714,15 @@ def _delete_account_data(tid):
             db.reference(f"creator_profile_slugs/{old_slug}").delete()
     except Exception as e:
         errors.append(f"creator_profile_slugs: {type(e).__name__}")
+    try:
+        global_events = _safe_get("streamdex_events")
+        if isinstance(global_events, dict):
+            for event_id, event in global_events.items():
+                if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
+                    db.reference(f"streamdex_events/{event_id}").delete()
+                    removed += 1
+    except Exception as e:
+        errors.append(f"streamdex_events: {type(e).__name__}")
     for path in _DELETE_PATHS:
         p = path.format(t=tid)
         try:
@@ -1580,7 +1595,7 @@ def render_streamer_dashboard(games):
         return
 
     # Direkter Radar-Link: nur für angemeldete Streamer öffnen.
-    if str(st.query_params.get("radar", "")) == "1":
+    if str(st.query_params.get("radar", "")) == "1" or str(st.query_params.get("insight", "")) == "1":
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="radar_back_to_dashboard"):
             st.query_params.clear()
@@ -1607,6 +1622,15 @@ def render_streamer_dashboard(games):
             st.query_params["dashboard"] = "1"
             st.rerun()
         render_planner(authed_tid, twitch_username, _twitch_authorization_url()[0])
+        return
+
+    if str(st.query_params.get("feedback", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="feedback_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_feedback_hub(authed_tid, twitch_username)
         return
 
     # Zusätzliche Creator-Bereiche können auch direkt über die URL geöffnet werden.
