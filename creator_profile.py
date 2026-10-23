@@ -127,7 +127,7 @@ def render_creator_profile(tid, twitch_username=""):
                 "content_style": content_style.strip(),
                 **{key: str(value or "").strip() for key, value in values.items() if key not in ("avatar_url", "banner_url")},
                 "published": bool(published),
-                "updated_at": db.SERVER_TIMESTAMP,
+                "updated_at": {".sv": "timestamp"},
             }
             updates = {f"{PROFILE_ROOT}/{tid}": profile}
             old_slug = str(saved.get("slug") or "")
