@@ -946,30 +946,71 @@ def _render_public_live_streamers():
         st.info("Aktuell ist kein StreamDex-Nutzer mit verbundenem Tool auf Twitch live.")
         return
 
-    st.caption(f"{len(live_rows)} Stream{'s' if len(live_rows) != 1 else ''} live · Aktualisierung ungefähr jede Minute")
+    st.markdown(
+        """
+        <style>
+        .sd-live-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 17px;padding:12px 15px;border-radius:12px;border:1px solid rgba(100,116,139,.24);background:linear-gradient(100deg,rgba(20,28,52,.9),rgba(13,24,43,.8))}
+        .sd-live-count{font-size:.8rem;font-weight:700;color:#dbeafe}
+        .sd-live-refresh{font-size:.72rem;color:#94a3b8}
+        .sd-live-badge{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(248,113,113,.3);border-radius:99px;padding:5px 9px;background:rgba(127,29,29,.24);font-size:.68rem;font-weight:850;letter-spacing:.07em;color:#fecaca}
+        .sd-live-dot{width:7px;height:7px;display:inline-block;border-radius:50%;background:#f87171;box-shadow:0 0 10px rgba(248,113,113,.8)}
+        .sd-live-title{font-size:.91rem;font-weight:750;line-height:1.45;color:#f1f5f9;margin:8px 0 5px}
+        .sd-live-game{font-size:.73rem;color:#c4b5fd;margin-bottom:7px}
+        .sd-live-card-copy{font-size:.78rem;color:#aab7d0;line-height:1.5;min-height:36px}
+        [class*="st-key-sd-live-card-"] [data-testid="stVerticalBlockBorderWrapper"]{border:1px solid rgba(100,116,139,.27)!important;border-radius:18px!important;background:linear-gradient(160deg,rgba(16,24,46,.98),rgba(10,17,32,.98))!important;box-shadow:0 12px 28px rgba(0,0,0,.18)!important;padding:10px!important;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+        [class*="st-key-sd-live-card-"] [data-testid="stVerticalBlockBorderWrapper"]:hover{border-color:rgba(168,85,247,.55)!important;box-shadow:0 18px 38px rgba(0,0,0,.27),0 0 20px rgba(139,92,246,.09)!important;transform:translateY(-2px)}
+        [class*="st-key-sd-live-card-"] [data-testid="stImage"] img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:11px;border:1px solid rgba(148,163,184,.16)}
+        [class*="st-key-sd-live-card-"] [data-testid="stMetric"]{background:rgba(30,41,59,.38);border:1px solid rgba(148,163,184,.1);border-radius:10px;padding:8px 10px}
+        [class*="st-key-sd-live-card-"] [data-testid="stMetricLabel"]{font-size:.68rem}
+        [class*="st-key-sd-live-card-"] [data-testid="stMetricValue"]{font-size:1.12rem}
+        @media(max-width:760px){.sd-live-toolbar{align-items:flex-start;flex-direction:column;gap:5px}}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="sd-live-toolbar"><span class="sd-live-count">🔴 {len(live_rows)} '
+        f'Live-Streamer auf StreamDex</span><span class="sd-live-refresh">↻ Aktualisiert sich ungefähr jede Minute</span></div>',
+        unsafe_allow_html=True,
+    )
     for start in range(0, min(len(live_rows), 12), 3):
         cols = st.columns(3, gap="medium")
         for col, stream in zip(cols, live_rows[start:start + 3]):
             login = str(stream.get("user_login") or stream["login"])
+            stream_id = str(stream.get("id") or stream["tid"])
+            safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", stream_id)[:80]
+            name = str(stream.get("user_name") or stream["name"])
+            game = str(stream.get("game_name") or "Twitch-Stream")
+            title = str(stream.get("title") or "").strip()
+            thumb = str(stream.get("thumbnail_url") or "")
+            thumb = thumb.replace("{width}", "640").replace("{height}", "360")
+            if not thumb.startswith("https://static-cdn.jtvnw.net/"):
+                thumb = ""
             with col:
-                with st.container(border=True):
-                    st.markdown("🔴 **LIVE**")
-                    st.markdown(f"### {stream.get('user_name') or stream['name']}")
-                    st.caption(str(stream.get("game_name") or "Twitch-Stream"))
-                    title = str(stream.get("title") or "").strip()
-                    if title:
-                        st.write(title[:180])
-                    c1, c2 = st.columns(2)
-                    c1.metric("Zuschauer", int(stream.get("viewer_count") or 0))
-                    c2.caption("StreamDex aktiv")
+                with st.container(key=f"sd-live-card-{safe_id}", border=True):
+                    if thumb:
+                        st.image(thumb, use_container_width=True, key=f"homepage_live_thumbnail_{safe_id}")
+                    st.markdown('<span class="sd-live-badge"><span class="sd-live-dot"></span> LIVE AUF TWITCH</span>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="sd-live-title">{html.escape(name)}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="sd-live-game">🎮 {html.escape(game)}</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="sd-live-card-copy">{html.escape(title[:180]) if title else "Live-Stream auf Twitch"}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    viewers_col, tool_col = st.columns(2, gap="small")
+                    viewers_col.metric("Zuschauer", int(stream.get("viewer_count") or 0))
+                    tool_col.markdown(
+                        '<div style="padding:8px 0;font-size:.69rem;color:#86efac;font-weight:750">● STREAMDEX AKTIV</div>',
+                        unsafe_allow_html=True,
+                    )
                     st.link_button(
-                        "▶️ Stream ansehen",
+                        "▶️ Jetzt ansehen",
                         f"https://www.twitch.tv/{urllib.parse.quote(login)}",
-                        key=f"homepage_live_stream_{stream.get('id') or stream['tid']}",
+                        key=f"homepage_live_stream_{safe_id}",
                         use_container_width=True,
                     )
     if len(live_rows) > 12:
-        st.caption(f"Es werden 12 von {len(live_rows)} aktiven Streams angezeigt.")
+        st.caption(f"Es werden 12 von {len(live_rows)} aktiven Streams angezeigt.");
 
 
 def _render_landing():
