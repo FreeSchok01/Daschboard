@@ -102,9 +102,24 @@ def _twitch_auth_config_issues():
         issues.append('Bitte ergänze unter [auth.twitch]: token_endpoint_auth_method = "client_secret_post".')
 
     client_kwargs = provider.get("client_kwargs", {})
-    claims_setting = str(client_kwargs.get("claims", "") or "") if hasattr(client_kwargs, "get") else ""
-    if "preferred_username" not in claims_setting or "picture" not in claims_setting:
-        issues.append("client_kwargs muss die Twitch-Claims preferred_username und picture anfordern, damit dein Name und Profilbild oben angezeigt werden.")
+    scope = str(client_kwargs.get("scope", "") or "") if hasattr(client_kwargs, "get") else ""
+    if "openid" not in scope.split():
+        issues.append('Unter [auth.twitch] muss client_kwargs = { scope = "openid" } gesetzt sein.')
+
+    # Twitch erwartet "claims" als Authorization-Parameter, nicht innerhalb von client_kwargs.
+    authorize_params = provider.get("authorize_params", {})
+    claims_setting = authorize_params.get("claims", "") if hasattr(authorize_params, "get") else ""
+    if not claims_setting:
+        issues.append("Unter [auth.twitch] fehlt authorize_params mit den Twitch-Claims für das ID-Token.")
+    else:
+        try:
+            claims_json = json.loads(str(claims_setting))
+        except Exception:
+            claims_json = {}
+            issues.append("authorize_params.claims ist kein gültiges JSON.")
+        id_token_claims = claims_json.get("id_token", {}) if isinstance(claims_json, dict) else {}
+        if not isinstance(id_token_claims, dict) or not {"preferred_username", "picture"}.issubset(id_token_claims):
+            issues.append("authorize_params.claims muss preferred_username und picture im id_token anfordern.")
 
     return issues
 
@@ -118,7 +133,7 @@ def _start_twitch_login():
             st.markdown(f"- {issue}")
         st.info("Öffne Streamlit Cloud → Manage app → Settings → Secrets und ergänze die fehlenden Angaben. Die Werte nicht hier im Chat posten.")
         with st.expander("Beispiel für die vollständige Twitch-Konfiguration"):
-            st.code('''[auth]
+            st.code("""[auth]
 redirect_uri = "https://streamdex.streamlit.app/~/+/oauth2callback"
 cookie_secret = "HIER_EINEN_EIGENEN_ZUFAELLIGEN_GEHEIMWERT_EINTRAGEN"
 
@@ -127,7 +142,8 @@ client_id = "DEINE_TWITCH_CLIENT_ID"
 client_secret = "DEIN_TWITCH_CLIENT_SECRET"
 server_metadata_url = "https://id.twitch.tv/oauth2/.well-known/openid-configuration"
 token_endpoint_auth_method = "client_secret_post"
-client_kwargs = { scope = "openid", claims = '{"id_token":{"preferred_username":null,"picture":null},"userinfo":{"preferred_username":null,"picture":null}}' }''', language="toml")
+client_kwargs = { scope = "openid" }
+authorize_params = { claims = '{"id_token":{"preferred_username":null,"picture":null}}' }""", language="toml")
         return
 
     st.session_state.pop("dashboard_reauth_required", None)
