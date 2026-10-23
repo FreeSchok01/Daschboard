@@ -24,6 +24,7 @@ from events import render_event_manager
 from planner import render_planner
 from radar import render_radar
 from feedback_hub import render_feedback_hub
+from streamdex_suite import render_streamdex_suite
 from creator_profile import render_creator_profile
 from legacy import render_legacy
 from clips_manager import render_clips_manager
@@ -1257,6 +1258,15 @@ def _render_landing():
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Lurk Tool</b><small>Browser öffnet sich automatisch, wenn ein Stream live geht.</small></span></a>'
         '<a class="sd-public-tool" href="/?feedback=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
+        '<a class="sd-public-tool" href="/?ideas=1"><span class="sd-public-tool-icon">💡</span><span><b>StreamDex Ideas</b><small>Ideen sammeln, priorisieren und umsetzen.</small></span></a>'
+        '<a class="sd-public-tool" href="/?bracket=1"><span class="sd-public-tool-icon">🏆</span><span><b>StreamDex Bracket</b><small>Turnierbäume und Match-Ergebnisse.</small></span></a>'
+        '<a class="sd-public-tool" href="/?wheel=1"><span class="sd-public-tool-icon cyan">🎡</span><span><b>StreamDex Wheel</b><small>Glücksrad für Entscheidungen und Giveaways.</small></span></a>'
+        '<a class="sd-public-tool" href="/?wishlist=1"><span class="sd-public-tool-icon">🎁</span><span><b>StreamDex Wishlist</b><small>Community-Wünsche und Abstimmungen.</small></span></a>'
+        '<a class="sd-public-tool" href="/?quiz=1"><span class="sd-public-tool-icon cyan">🧠</span><span><b>StreamDex Quiz</b><small>Quizräume erstellen, teilen und spielen.</small></span></a>'
+        '<a class="sd-public-tool" href="/?clips=1"><span class="sd-public-tool-icon">🎬</span><span><b>StreamDex Clips</b><small>Highlights sammeln, taggen und wiederfinden.</small></span></a>'
+        '<a class="sd-public-tool" href="/?goals=1"><span class="sd-public-tool-icon cyan">🎯</span><span><b>StreamDex Goals</b><small>Ziele setzen und Fortschritt verfolgen.</small></span></a>'
+        '<a class="sd-public-tool" href="/?modlog=1"><span class="sd-public-tool-icon">🛡️</span><span><b>StreamDex ModLog</b><small>Moderationsaktionen sauber protokollieren.</small></span></a>'
+        '<a class="sd-public-tool" href="/?modteam=1"><span class="sd-public-tool-icon cyan">👥</span><span><b>StreamDex ModTeam</b><small>Rollen, Zuständigkeiten und Aufgaben planen.</small></span></a>'
         '<a class="sd-public-tool" href="/?profile=1"><span class="sd-public-tool-icon cyan">♙</span><span><b>Profile</b><small>Dein öffentliches Creator-Profil mit allen Infos.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">⚙</span><span><b>Automation</b><small>Automationen für Chat, Events, Commands und mehr.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▱</span><span><b>Overlay Editor</b><small>Gestalte deine Overlays einfach und professionell.</small></span></a>'
@@ -1489,6 +1499,10 @@ def render_streamer_dashboard(games):
             st.info("Dein Creator-Profil kannst du nach dem Twitch-Login erstellen und veröffentlichen. Klicke danach erneut auf „Profile“ oder öffne den Reiter „♙ Profil“.")
         if str(st.query_params.get("feedback", "")) == "1":
             st.info("Melde dich mit Twitch an, um Vorschläge einzureichen, Community-Umfragen zu erstellen und abzustimmen.")
+        for _suite_key, _suite_label in (("ideas", "StreamDex Ideas"), ("bracket", "StreamDex Bracket"), ("wheel", "StreamDex Wheel"), ("wishlist", "StreamDex Wishlist"), ("quiz", "StreamDex Quiz"), ("clips", "StreamDex Clips"), ("goals", "StreamDex Goals"), ("modlog", "StreamDex ModLog"), ("modteam", "StreamDex ModTeam")):
+            if str(st.query_params.get(_suite_key, "")) == "1":
+                st.info(f"Melde dich mit Twitch an, um {_suite_label} zu öffnen.")
+                break
         _render_landing()
         return
 
@@ -1594,6 +1608,18 @@ def render_streamer_dashboard(games):
         render_feedback_hub(authed_tid, twitch_username)
         return
 
+    # Direkte Links zu den StreamDex-Suite-Werkzeugen.
+    _suite_routes = ("ideas", "bracket", "wheel", "wishlist", "quiz", "clips", "goals", "modlog", "modteam")
+    _active_suite_tool = next((name for name in _suite_routes if str(st.query_params.get(name, "")) == "1"), None)
+    if _active_suite_tool:
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key=f"suite_back_{_active_suite_tool}"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_streamdex_suite(authed_tid, twitch_username, _active_suite_tool)
+        return
+
     # Direkter Radar-Link: nur für angemeldete Streamer öffnen.
     if str(st.query_params.get("radar", "")) == "1" or str(st.query_params.get("insight", "")) == "1":
         back_col, _ = st.columns([1, 5])
@@ -1653,13 +1679,14 @@ def render_streamer_dashboard(games):
 
     # Große Kachel-Navigation statt kleiner Reiter
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_radar, t_legacy, t_clips, t_feedback, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
+        t_over, t_games, t_radar, t_legacy, t_clips, t_feedback, t_suite, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
             "🏠 Übersicht",
             "🎮 Freigeschaltete Games",
             "📊 StreamDex Insight",
             "📜 Legacy – Chronik",
             "🎬 Clips",
             "💬 Feedback",
+            "🧩 Ideas & Tools",
             "📈 Kanal-Statistiken",
             "📅 Verlauf",
             "🎁 Giveaways",
@@ -1686,6 +1713,10 @@ def render_streamer_dashboard(games):
     # --- StreamDex Feedback ---
     with t_feedback:
         render_feedback_hub(authed_tid, twitch_username)
+
+    # --- StreamDex Ideas und Werkzeug-Hub ---
+    with t_suite:
+        render_streamdex_suite(authed_tid, twitch_username, "ideas")
 
     # --- Tab 0: Übersicht ---
     with t_over:
