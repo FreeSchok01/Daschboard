@@ -880,7 +880,7 @@ def _render_landing():
     )
 
 
-def _render_member_downloads_and_beta(beta_info=None):
+def _render_member_downloads_and_beta(authed_tid, twitch_username, beta_info=None):
     """Downloads, Beta-Bewerbung und Status sind ausschließlich im authentifizierten Dashboard sichtbar."""
     st.markdown(
         '<div class="sd-section-heading"><div class="sd-section-kicker">MITGLIEDERBEREICH</div>'
@@ -1303,7 +1303,7 @@ def render_streamer_dashboard(games):
 
     # --- Downloads und Beta: nur sichtbar, nachdem ein Login bestätigt wurde ---
     with t_downloads:
-        _render_member_downloads_and_beta(beta_info)
+        _render_member_downloads_and_beta(authed_tid, twitch_username, beta_info)
 
     # --- Tab 5: Support ---
     with t_support:
