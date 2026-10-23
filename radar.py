@@ -374,6 +374,35 @@ def _tracked_sessions(tid):
     return sorted(sessions, key=lambda row: row["started_at_unix"], reverse=True)
 
 
+def _record_daily_snapshot(tid, followers, subscribers, live):
+    """Speichert pro UTC-Tag einen Vergleichspunkt, damit Trends erst ab jetzt entstehen."""
+    try:
+        root = db.reference(f"radar_analytics/{tid}/daily_snapshots")
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day_ref = root.child(day)
+        if not day_ref.get():
+            snapshot = {"date": day, "ts": int(time.time())}
+            if followers is not None:
+                snapshot["followers"] = int(followers)
+            if subscribers is not None:
+                snapshot["subscribers"] = int(subscribers)
+            if live:
+                snapshot["viewer_count"] = int(live.get("viewer_count") or 0)
+            day_ref.set(snapshot)
+        raw = root.get() or {}
+        if not isinstance(raw, dict):
+            return []
+        # Begrenze die gespeicherte Verlaufshistorie auf ein Jahr.
+        dates = sorted(str(key) for key in raw if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(key)))
+        for old_day in dates[:-365]:
+            root.child(old_day).delete()
+        rows = [value for key, value in raw.items() if key in dates and isinstance(value, dict)]
+        rows.sort(key=lambda row: str(row.get("date") or ""))
+        return rows
+    except Exception:
+        return []
+
+
 @st.fragment(run_every=300)
 def _render_creator_analytics(tid, username, reauth_url=None):
     """Eigene Twitch-Kennzahlen plus transparent markierte StreamDex-Messwerte."""
@@ -424,6 +453,18 @@ def _render_creator_analytics(tid, username, reauth_url=None):
     top_bits = max((int(row.get("score") or 0) for row in bits_rows), default=None)
     recent_followers = _api_total(metrics, "followers")
     subscribers = _api_total(metrics, "subscriptions")
+    snapshot_history = _record_daily_snapshot(tid, recent_followers, subscribers, live)
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    prior_snapshots = [row for row in snapshot_history if str(row.get("date") or "") < today_utc]
+    previous_snapshot = prior_snapshots[-1] if prior_snapshots else {}
+    follower_delta = (
+        recent_followers - int(previous_snapshot["followers"])
+        if recent_followers is not None and previous_snapshot.get("followers") is not None else None
+    )
+    subscriber_delta = (
+        subscribers - int(previous_snapshot["subscribers"])
+        if subscribers is not None and previous_snapshot.get("subscribers") is not None else None
+    )
 
     display_name = str(user.get("display_name") or user.get("login") or username)
     st.markdown(
@@ -451,6 +492,12 @@ def _render_creator_analytics(tid, username, reauth_url=None):
     s2.metric("🚀 Peak-Zuschauer (gemessen)", f"{sampled_max:,}".replace(",", ".") if sampled_max is not None else "Noch keine Messung")
     s3.metric("💎 Höchster Bits-Score", f"{top_bits:,}".replace(",", ".") if top_bits is not None else "—")
     s4.metric("📼 Verfügbare VODs", len(videos))
+
+    d1, d2 = st.columns(2)
+    d1.metric("➕ Follower seit Tagesvergleich", f"{follower_delta:+,}".replace(",", ".") if follower_delta is not None else "Wird aufgebaut")
+    d2.metric("➕ Abos seit Tagesvergleich", f"{subscriber_delta:+,}".replace(",", ".") if subscriber_delta is not None else "Wird aufgebaut")
+    if previous_snapshot:
+        st.caption(f"Vergleich mit der letzten älteren Tagesmessung: {previous_snapshot.get('date', '—')} UTC. Die Verlaufshistorie beginnt ab der Nutzung von StreamDex.")
 
     st.caption(
         "Ø- und Peak-Zuschauer sind eigene StreamDex-Messungen und keine rückwirkend importierten Twitch-Analytics. "
@@ -534,6 +581,21 @@ def _render_creator_analytics(tid, username, reauth_url=None):
             )
         else:
             st.caption("Twitch hat keine Clips aus den letzten 30 Tagen zurückgegeben.")
+
+    with st.expander("📈 Verlauf deiner Follower & Abos", expanded=False):
+        valid_follower_snapshots = [row for row in snapshot_history if row.get("followers") is not None]
+        if len(valid_follower_snapshots) >= 2:
+            valid_follower_snapshots = valid_follower_snapshots[-30:]
+            st.line_chart({"Follower": [int(row["followers"]) for row in valid_follower_snapshots]}, height=200)
+            st.dataframe(
+                [{"Tag (UTC)": row.get("date", "—"),
+                  "Follower": int(row["followers"]) if row.get("followers") is not None else "—",
+                  "Abos": int(row["subscribers"]) if row.get("subscribers") is not None else "—"}
+                 for row in reversed(valid_follower_snapshots)],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.caption("Die Verlaufskurve entsteht automatisch aus täglichen Messpunkten. Nach ein paar Tagen werden die ersten Veränderungen sichtbar.")
 
     charity = _api_rows(metrics, "charity")
     if charity:
