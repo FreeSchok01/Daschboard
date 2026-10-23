@@ -169,6 +169,37 @@ def _fetch_channels(logins_tuple):
     return [indexed[name] for name in logins if name in indexed]
 
 
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_public_live_status(tid):
+    """Public Twitch live state for a published StreamDex creator profile."""
+    try:
+        tid = str(tid or "")
+        if not re.fullmatch(r"[0-9]{1,15}", tid):
+            return {"available": False, "live": False}
+        client_id, client_secret = _credentials()
+        token = _app_token(client_id, client_secret)
+        url = TWITCH_STREAMS_URL + "?" + urllib.parse.urlencode({"user_id": tid})
+        result = _http_json(url, headers={"Client-Id": client_id, "Authorization": f"Bearer {token}"})
+        rows = result.get("data", [])
+        if not isinstance(rows, list) or not rows:
+            return {"available": True, "live": False}
+        stream = rows[0]
+        if not isinstance(stream, dict):
+            return {"available": True, "live": False}
+        return {
+            "available": True,
+            "live": True,
+            "title": str(stream.get("title") or ""),
+            "game": str(stream.get("game_name") or ""),
+            "viewers": int(stream.get("viewer_count") or 0),
+            "started_at": str(stream.get("started_at") or ""),
+            "thumbnail": str(stream.get("thumbnail_url") or "").replace("{width}", "640").replace("{height}", "360"),
+            "language": str(stream.get("language") or ""),
+        }
+    except Exception:
+        return {"available": False, "live": False}
+
+
 def _fmt_started(value):
     try:
         from datetime import datetime
