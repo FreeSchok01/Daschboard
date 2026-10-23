@@ -880,7 +880,7 @@ def _render_landing():
     )
 
 
-def _render_member_downloads_and_beta():
+def _render_member_downloads_and_beta(beta_info=None):
     """Downloads, Beta-Bewerbung und Status sind ausschließlich im authentifizierten Dashboard sichtbar."""
     st.markdown(
         '<div class="sd-section-heading"><div class="sd-section-kicker">MITGLIEDERBEREICH</div>'
@@ -895,11 +895,12 @@ def _render_member_downloads_and_beta():
             st.markdown("#### StreamDex herunterladen")
             st.caption("Die Download-Links sind nur nach der Anmeldung verfügbar.")
             render_public_downloads(cfg)
-            b = beta_link(cfg)
-            if b:
+            if beta_info:
                 st.divider()
-                st.markdown("#### Beta-Version")
+                st.markdown("#### Deine Beta-Version")
                 render_member_downloads(cfg)
+            else:
+                st.caption("Der Beta-Download erscheint hier, sobald du für die Beta freigeschaltet bist.")
         with t_apply:
             _apply_form(cfg)
         with t_status:
@@ -1212,7 +1213,7 @@ def render_streamer_dashboard(games):
 
     # --- Downloads und Beta: nur sichtbar, nachdem ein Login bestätigt wurde ---
     with t_downloads:
-        _render_member_downloads_and_beta()
+        _render_member_downloads_and_beta(beta_info)
 
     # --- Tab 5: Support ---
     with t_support:
