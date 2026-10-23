@@ -128,6 +128,7 @@ def _render_stream_form(ref, owner_tid, default_name):
                                     format_func=lambda n: "Keine" if n == 0 else ("24 Stunden" if n == 1440 else f"{n} Minuten"),
                                     index=2, key=f"planner_reminder_{owner_tid}")
             stream_url = st.text_input("Stream-Link (optional)", placeholder="https://www.twitch.tv/deinkanal", max_chars=300)
+            duration = st.selectbox("Streamdauer", [30, 45, 60, 90, 120, 180, 240], index=4, format_func=lambda n: f"{n} Minuten", key=f"planner_duration_{owner_tid}")
         notes = st.text_area("Notizen / Ankündigung", placeholder="Was möchtest du vorbereiten oder ankündigen?", max_chars=1200)
         submitted = st.form_submit_button("＋ Stream speichern", type="primary", use_container_width=True)
     if not submitted:
@@ -289,11 +290,16 @@ def _load_twitch_schedule(owner_tid):
     client_id, client_secret = _credentials()
     token = _app_token(client_id, client_secret)
     start_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
-    result = _helix_get("schedule", token, {
-        "broadcaster_id": str(owner_tid),
-        "first": 50,
-        "start_time": start_time,
-    })
+    try:
+        result = _helix_get("schedule", token, {
+            "broadcaster_id": str(owner_tid),
+            "first": 50,
+            "start_time": start_time,
+        })
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return []
+        raise
     data = result.get("data", {})
     segments = data.get("segments", []) if isinstance(data, dict) else []
     return [segment for segment in segments if isinstance(segment, dict)]
@@ -457,7 +463,8 @@ def _render_twitch_schedule_integration(ref, owner_tid, streams, twitch_username
                     st.rerun()
                 except Exception as exc:
                     st.error(str(exc))
-    if reauth_url:
+    granted_scopes = st.session_state.get("twitch_oauth_scopes", [])
+    if reauth_url and "channel:manage:schedule" not in granted_scopes:
         st.caption("Für die Veröffentlichung braucht StreamDex die separate Twitch-Berechtigung „channel:manage:schedule“.")
         st.link_button("🟣 Twitch-Zeitplan-Berechtigung erneuern", reauth_url)
 
