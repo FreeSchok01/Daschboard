@@ -131,6 +131,149 @@ a:hover{color:#67e8f9}
  button[data-baseweb="tab"]{padding:8px 11px!important}
  div[data-testid="stMetric"]{padding:11px}
 }
+
+/* ---------- Gemeinsames StreamDex-OS-Layout für Dashboard, Admin und Support ---------- */
+/* Diese Regeln bilden die gleiche visuelle Sprache ab wie die öffentliche Landingpage. */
+.block-container,[data-testid="stMainBlockContainer"]{
+  width:100%!important;max-width:none!important;
+  padding-left:clamp(1rem,2.35vw,2.5rem)!important;
+  padding-right:clamp(1rem,2.35vw,2.5rem)!important;
+  padding-bottom:2.5rem!important;
+}
+div[data-testid="stAppViewContainer"]>.main{background:transparent}
+[data-testid="stMainBlockContainer"]>div{max-width:none}
+.stApp{
+  background-color:#070a18;
+  background-image:
+    radial-gradient(ellipse at 6% 0%,rgba(139,92,246,.12) 0%,transparent 33%),
+    radial-gradient(ellipse at 94% 40%,rgba(34,211,238,.065) 0%,transparent 34%),
+    linear-gradient(135deg,#070a18 0%,#090e20 52%,#080d1c 100%);
+  background-attachment:fixed;
+}
+header[data-testid="stHeader"]{
+  background:rgba(7,10,24,.76);backdrop-filter:blur(16px);
+  border-bottom:1px solid rgba(148,163,184,.14);
+}
+h1{font-size:clamp(1.65rem,2.6vw,2.3rem);line-height:1.13}
+h2{font-size:clamp(1.1rem,1.8vw,1.4rem)!important}
+h3{font-size:1.04rem!important}
+[data-testid="stVerticalBlockBorderWrapper"]{
+  overflow:hidden;
+}
+div[data-testid="stHorizontalBlock"]{gap:clamp(.6rem,1.3vw,1.1rem)}
+[data-testid="stMarkdownContainer"]>p{line-height:1.65}
+[data-testid="stCaptionContainer"]{font-size:.77rem}
+
+/* Tabs werden zu klaren, responsiven Navigationskarten. Dashboard-Navigation
+   hat bereits eine eigene, spezifischere Variante in streamer_dashboard.py. */
+div[data-baseweb="tab-list"],div[role="tablist"]{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(145px,1fr))!important;
+  gap:10px!important;
+  width:100%!important;
+  align-items:stretch!important;
+  overflow:visible!important;
+  padding:5px 0 16px!important;
+  border:0!important;
+  scrollbar-width:none;
+}
+div[data-baseweb="tab-list"]::-webkit-scrollbar,div[role="tablist"]::-webkit-scrollbar{display:none}
+button[data-baseweb="tab"],button[role="tab"]{
+  display:flex!important;align-items:center!important;justify-content:center!important;
+  width:100%!important;min-width:0!important;min-height:48px!important;height:100%!important;
+  white-space:normal!important;text-align:center!important;
+  padding:11px 12px!important;border-radius:11px!important;
+  border:1px solid rgba(48,61,103,.78)!important;
+  background:linear-gradient(145deg,rgba(13,19,40,.9),rgba(9,14,29,.95))!important;
+  color:#aeb9d8!important;box-shadow:0 6px 18px rgba(0,0,0,.12)!important;
+  transition:transform .16s ease,border-color .16s ease,background .16s ease!important;
+}
+button[data-baseweb="tab"] p,button[role="tab"] p,button[role="tab"] span,button[role="tab"] div{
+  white-space:normal!important;text-align:center!important;color:inherit!important;
+  font-size:.78rem!important;font-weight:750!important;line-height:1.35!important;
+}
+button[data-baseweb="tab"]:hover,button[role="tab"]:hover{
+  transform:translateY(-1px)!important;border-color:rgba(167,139,250,.7)!important;
+  color:#fff!important;background:linear-gradient(145deg,rgba(38,29,71,.96),rgba(11,23,43,.98))!important;
+}
+button[role="tab"][aria-selected="true"]{
+  color:#fff!important;border-color:rgba(196,181,253,.7)!important;
+  background:linear-gradient(110deg,rgba(124,58,237,.95),rgba(79,70,229,.92) 62%,rgba(8,127,156,.86))!important;
+  box-shadow:0 8px 23px rgba(91,73,232,.19),inset 0 1px 0 rgba(255,255,255,.08)!important;
+}
+div[data-baseweb="tab-highlight"],div[data-baseweb="tab-border"]{display:none!important}
+
+/* Admin-Toolradio und Abmelde-/Aktionsbuttons angleichen. */
+.st-key-os_nav div[role="radiogroup"]{gap:10px!important;align-items:stretch}
+.st-key-os_nav label{
+  border:1px solid rgba(48,61,103,.78)!important;
+  background:linear-gradient(145deg,rgba(13,19,40,.9),rgba(9,14,29,.95))!important;
+  border-radius:11px!important;min-height:42px;padding:10px 12px!important;
+}
+.st-key-os_nav label:has(input:checked){
+  background:linear-gradient(110deg,rgba(124,58,237,.65),rgba(8,127,156,.35))!important;
+  border-color:rgba(196,181,253,.7)!important;
+}
+.stButton>button,.stLinkButton>a,.stFormSubmitButton>button{
+  min-height:38px;border-radius:10px!important;
+}
+.stButton>button[kind="primary"],.stFormSubmitButton>button[kind="primary"],.stLinkButton>a[kind="primary"]{
+  background:linear-gradient(105deg,#8b5cf6,#635bdf 58%,#087f9c)!important;
+}
+.stButton>button:focus-visible,.stLinkButton>a:focus-visible{
+  outline:2px solid #22d3ee!important;outline-offset:2px!important;
+}
+
+/* Support-Chats und Listen bekommen denselben Kartenrhythmus. */
+div[data-testid="stChatMessage"]{
+  max-width:100%;border-radius:13px;padding:12px 14px;
+  box-shadow:0 6px 18px rgba(0,0,0,.1);
+}
+div[data-testid="stChatInput"]{
+  border-radius:13px!important;
+}
+div[data-testid="stAlert"]{
+  border-radius:12px!important;
+}
+div[data-testid="stDataFrame"],div[data-testid="stDataEditor"],[data-testid="stTable"]{
+  border:1px solid rgba(148,163,184,.15)!important;border-radius:12px!important;overflow:hidden;
+}
+div[data-testid="stExpander"] details{
+  border-radius:12px!important;overflow:hidden;
+}
+.stTextInput input,.stTextArea textarea,.stNumberInput input,.stDateInput input,.stTimeInput input{
+  min-height:40px;
+}
+.stTextArea textarea{min-height:90px}
+section[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,rgba(9,13,29,.99),rgba(7,10,24,.98))!important;
+  border-right:1px solid rgba(148,163,184,.14);
+}
+section[data-testid="stSidebar"] button{
+  border-radius:10px!important;
+}
+a{color:#b7a1ff}
+a:hover{color:#67e8f9}
+@media(max-width:900px){
+  .block-container,[data-testid="stMainBlockContainer"]{
+    padding-left:1.15rem!important;padding-right:1.15rem!important;
+  }
+  div[data-baseweb="tab-list"],div[role="tablist"]{
+    grid-template-columns:repeat(auto-fit,minmax(125px,1fr))!important;gap:8px!important;
+  }
+}
+@media(max-width:640px){
+  .block-container,[data-testid="stMainBlockContainer"]{
+    padding:1rem .7rem 3rem!important;
+  }
+  div[data-baseweb="tab-list"],div[role="tablist"]{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:7px!important;
+  }
+  button[data-baseweb="tab"],button[role="tab"]{
+    min-height:44px!important;padding:9px 8px!important;border-radius:9px!important;
+  }
+}
+
 </style>"""
 
 
