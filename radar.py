@@ -266,20 +266,20 @@ def render_radar(tid, username):
         channels = []
         st.error(str(exc))
 
-    # Stats bleiben pro StreamDex-Konto; für fremde Kanäle werden keine privaten Werte gezeigt.
-    stat_map = {}
-    if channels:
-        try:
-            raw_stats = db.reference("stats").get() or {}
-            stat_map = raw_stats if isinstance(raw_stats, dict) else {}
-        except Exception:
-            stat_map = {}
-
     live_channels = [c for c in channels if c["live"]]
     offline_channels = [c for c in channels if not c["live"]]
+    total_viewers = sum(c["viewers"] for c in live_channels)
+    category_counts = {}
+    for channel in live_channels:
+        if channel["game"]:
+            category_counts[channel["game"]] = category_counts.get(channel["game"], 0) + 1
+    top_category = max(category_counts, key=category_counts.get) if category_counts else "—"
     c_live.metric("🔴 Gerade live", len(live_channels))
     c_all.metric("👥 In deiner Liste", len(watchlist))
-    c_refresh.caption(f"Zuletzt geprüft: {time.strftime('%H:%M:%S')}")
+    c_refresh.metric("👁 Zuschauer gesamt", f"{total_viewers:,}".replace(",", "."))
+    col_category = st.columns(1)[0]
+    col_category.metric("🎮 Häufigste Kategorie", top_category)
+    st.caption(f"Zuletzt geprüft: {time.strftime('%H:%M:%S')} · {len(offline_channels)} offline")
 
     q_col, f_col = st.columns([3, 1])
     query = q_col.text_input("🔎 Watchlist durchsuchen", placeholder="Kanalname, Spiel oder Streamtitel …", key="sd_radar_search")
@@ -333,17 +333,6 @@ def render_radar(tid, username):
                         st.caption("Aktuell kein laufender Twitch-Stream.")
                         st.link_button("Twitch-Kanal öffnen", channel["url"], use_container_width=True)
 
-                    # Statistiken aus StreamDex nur anzeigen, falls Twitch-ID mit vorhandenen Stats existiert.
-                    sdata = stat_map.get(channel["id"])
-                    if isinstance(sdata, dict) and sdata:
-                        count = sum(int(sdata.get(k) or 0) for k in ("giveaways", "giveaway_participants", "checkins", "slot_spins", "megaslot_spins", "fish_catches", "harvests", "raids") if str(sdata.get(k) or 0).isdigit())
-                        with st.expander("📊 StreamDex-Statistiken"):
-                            st.metric("Erfasste Aktionen", count)
-                            for key, label in STAT_LABELS.items():
-                                val = sdata.get(key)
-                                if val is not None:
-                                    st.caption(f"{label}: {val}")
-
                     if st.button("Entfernen", key=f"sd_radar_remove_{tid}_{channel['login']}", use_container_width=True):
                         try:
                             _save_watchlist(str(tid), [n for n in watchlist if n != channel["login"]])
@@ -353,7 +342,7 @@ def render_radar(tid, username):
                             st.error(f"Entfernen fehlgeschlagen: {exc}")
 
     st.caption(
-        "Live-Status und Zuschauerzahlen kommen direkt von Twitch. StreamDex-Statistiken werden nur angezeigt, "
-        "wenn für den jeweiligen Kanal bereits entsprechende StreamDex-Daten gespeichert sind. "
-        "Die Daten aktualisieren sich beim Neuladen; die Anzeige ist kein sekundengenauer Liveticker."
+        "Live-Status, Streamtitel, Kategorie und Zuschauerzahlen kommen direkt von Twitch. "
+        "Die Gesamtzahlen beziehen sich auf die Kanäle deiner privaten Watchlist; sie sind keine offiziellen Kanal-Analytics. "
+        "Die Daten werden beim Aktualisieren neu abgerufen und sind kein sekundengenauer Liveticker."
     )
