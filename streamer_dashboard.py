@@ -112,15 +112,37 @@ def _start_twitch_login():
         for issue in issues:
             st.markdown(f"- {issue}")
         st.info("Öffne Streamlit Cloud → Manage app → Settings → Secrets und ergänze die fehlenden Angaben. Die Werte nicht hier im Chat posten.")
+        with st.expander("Beispiel für die vollständige Twitch-Konfiguration"):
+            st.code('''[auth]
+redirect_uri = "https://streamdex.streamlit.app/oauth2callback"
+cookie_secret = "HIER_EINEN_EIGENEN_ZUFAELLIGEN_GEHEIMWERT_EINTRAGEN"
+
+[auth.twitch]
+client_id = "DEINE_TWITCH_CLIENT_ID"
+client_secret = "DEIN_TWITCH_CLIENT_SECRET"
+server_metadata_url = "https://id.twitch.tv/oauth2/.well-known/openid-configuration"
+token_endpoint_auth_method = "client_secret_post"
+client_kwargs = { scope = "openid", claims = '{"id_token":{"preferred_username":null,"picture":null},"userinfo":{"preferred_username":null,"picture":null}}' }''', language="toml")
         return
 
     st.session_state.pop("dashboard_reauth_required", None)
     try:
         st.login("twitch")
     except Exception as exc:
-        # Keine Zugangsdaten oder kompletten Fehlerobjekte im UI ausgeben.
+        # Fehlermeldung ohne Geheimnisse anzeigen, damit die Ursache erkennbar ist.
+        detail = str(exc)
+        try:
+            provider = st.secrets["auth"]["twitch"]
+            for key in ("client_secret", "client_id"):
+                secret_value = str(provider.get(key, "") or "")
+                if secret_value:
+                    detail = detail.replace(secret_value, "[verborgen]")
+        except Exception:
+            pass
         st.error(f"Streamlit konnte den Twitch-Login nicht starten ({type(exc).__name__}).")
-        st.info("Prüfe, ob Client-ID und Client-Secret in [auth.twitch] zueinander gehören und die Callback-URL in der Twitch Developer Console exakt stimmt.")
+        if detail:
+            st.caption(f"Zusatzinfo: {detail[:500]}")
+        st.info("Prüfe außerdem, ob die Client-ID und das Client-Secret zusammengehören und die Callback-URL in der Twitch Developer Console exakt stimmt.")
 
 
 
@@ -775,7 +797,7 @@ def render_streamer_dashboard(games):
             }
 
             def _create_profile_if_missing(current):
-                return current if isinstance(current, dict) else initial_profile
+                return current if isinstance(current, dict) and current else initial_profile
 
             presence_ref.transaction(_create_profile_if_missing)
             presence = presence_ref.get() or initial_profile
