@@ -83,6 +83,8 @@ def _app_token(client_id, client_secret):
 
 def _normalize_login(value):
     value = str(value or "").strip()
+    if "://" not in value and ("twitch.tv/" in value.lower()):
+        value = "https://" + value
     if "://" in value:
         parsed = urllib.parse.urlparse(value)
         value = parsed.path.strip("/").split("/")[0]
