@@ -134,6 +134,13 @@ def _timeline(tid):
                f"{count} Anmeldungen · {event.get('event_type') or 'Community-Event'}",
                f"https://streamdex.streamlit.app/?event={event_id}")
 
+    clips = _read(f"streamdex_clips/{tid}")
+    for clip in clips.values():
+        if not isinstance(clip, dict):
+            continue
+        _entry(items, clip.get("imported_at"), "Clip", f"Clip importiert: {clip.get('title') or 'Twitch-Clip'}",
+               f"{clip.get('creator_name') or 'Twitch'} · {clip.get('view_count', 0)} Aufrufe", str(clip.get("url") or ""))
+
     profile = _read(f"creator_profiles/{tid}")
     if profile and profile.get("updated_at"):
         _entry(items, profile.get("updated_at"), "Profil", "Creator-Profil aktualisiert",
