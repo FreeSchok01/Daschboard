@@ -25,6 +25,8 @@ LABELS = {
 def _read(path):
     try:
         value = db.reference(path).get() or {}
+        if isinstance(value, list):
+            return {str(index): row for index, row in enumerate(value) if row is not None}
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
