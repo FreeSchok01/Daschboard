@@ -18,6 +18,7 @@ from firebase_admin import credentials, db
 
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
+from creator_profile import render_public_profile
 from events import render_public_events, render_public_event
 from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
@@ -461,6 +462,14 @@ def main():
         st.set_page_config(page_title="StreamDex Twitch Login", page_icon="🟣", layout="wide")
         if handle_twitch_oauth_callback():
             st.rerun()
+        return
+
+    if "profile" in st.query_params and str(st.query_params.get("profile", "")) != "1":
+        # Öffentliche Creator-Seite: nur ausdrücklich veröffentlichte Profile anzeigen.
+        st.set_page_config(page_title="StreamDex Creator-Profil", page_icon="♙", layout="wide")
+        init_firebase()
+        apply_theme()
+        render_public_profile(str(st.query_params.get("profile", "")))
         return
 
     if "support" in st.query_params:           # Supporter: /?support=1
