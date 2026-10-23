@@ -297,14 +297,10 @@ def _render_twitch_login():
         st.info("In Streamlit Secrets müssen die Twitch-Zugangsdaten unter [twitch] mit client_id und client_secret stehen.")
         return
 
-    safe_url = html.escape(url, quote=True)
-    st.markdown(
-        '<a href="' + safe_url + '" target="_self" rel="noopener" '
-        'style="display:block;text-align:center;padding:0.8rem 1rem;border-radius:0.6rem;'
-        'background:#9147ff;color:white;text-decoration:none;font-weight:700;font-size:1rem;'
-        'margin:0.4rem 0 0.5rem 0;">🟣 Mit Twitch anmelden</a>',
-        unsafe_allow_html=True,
-    )
+    # Der native Streamlit-Link öffnet Twitch als normale Browser-Seite/neuen Tab.
+    # Ein HTML-Link mit target="_self" kann in eingebetteten Ansichten dazu führen,
+    # dass Twitch wegen seiner Frame-Schutzrichtlinien die Verbindung ablehnt.
+    st.link_button("🟣 Mit Twitch anmelden", url, type="primary", use_container_width=True)
     st.caption(
         "Wichtig: In der Twitch Developer Console muss die OAuth Redirect URL exakt "
         "https://streamdex.streamlit.app/ sein (mit abschließendem Schrägstrich und ohne oauth2callback)."
