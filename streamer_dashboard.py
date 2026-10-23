@@ -686,9 +686,20 @@ def _render_giveaway_tab(tid):
 
 
 def _render_landing():
-    """Startseite ohne Token: Downloads und Beta-Bewerbung (statt nur 'Zugriff gesperrt')."""
-    st.info("🔒 Dein persönliches Dashboard öffnest du direkt in der **Streamdex Desktop-App** (sicherer Login per Token). "
-            "Noch keine App? Hier kannst du sie laden oder dich für die Beta bewerben.")
+    """Öffentliche Streamer-Startseite mit Twitch-Login und optionalen Downloads."""
+    st.subheader("Dein Streamer-Bereich")
+    st.write(
+        "Melde dich mit Twitch an, um dein Profil, deine StreamDex-Statistiken, "
+        "deine freigeschalteten Funktionen, Support und Community-Events zu verwalten."
+    )
+    if not st.user.is_logged_in:
+        st.caption("Status: Noch nicht bei Twitch angemeldet.")
+        st.info(
+            "Klicke oben auf **🟣 Mit Twitch anmelden**. Wenn du danach wieder hier landest, "
+            "ist die Twitch-OIDC-Konfiguration noch nicht vollständig oder Twitch hat die Rückleitung abgelehnt."
+        )
+    st.divider()
+    st.markdown("#### Noch mehr aus StreamDex")
     try:
         cfg = download_settings()
         t_dl, t_apply, t_status = st.tabs(["⬇️ Downloads", "📝 Für Beta bewerben", "🔎 Beta-Status & Download"])
@@ -699,9 +710,10 @@ def _render_landing():
         with t_status:
             _status_view(cfg)
     except Exception as e:
-        st.error(f"Gerade nicht erreichbar, bitte später erneut versuchen. ({e})")
+        st.error(f"Downloads und Beta-Informationen sind gerade nicht erreichbar. ({type(e).__name__})")
     if st.session_state.get("authenticated_tid") and st.button("Sitzung zurücksetzen"):
-        st.session_state.pop("authenticated_tid", None)
+        for key in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data"):
+            st.session_state.pop(key, None)
         st.rerun()
 
 
@@ -770,6 +782,7 @@ def render_streamer_dashboard(games):
         elif st.session_state.get("acct_deleted") is not None:
             st.session_state.pop("acct_deleted", None)
             st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
+        st.markdown("### 🟣 Twitch-Anmeldung")
         if st.button(
             "🟣 Mit Twitch anmelden",
             type="primary",
