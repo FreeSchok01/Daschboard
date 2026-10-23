@@ -891,6 +891,7 @@ def render_streamer_dashboard(games):
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
             st.session_state["auth_method"] = "desktop"
+            st.session_state.pop("twitch_profile", None)
             st.session_state.pop("dashboard_reauth_required", None)
             # Token aus URL entfernen für saubere Adresse
             st.query_params.clear()
@@ -904,7 +905,7 @@ def render_streamer_dashboard(games):
     if authed_tid:
         started = st.session_state.setdefault("authenticated_at", time.time())
         if time.time() - started > SESSION_MAX_AGE_S:
-            for k in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data"):
+            for k in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
                 st.session_state.pop(k, None)
             st.session_state["session_expired"] = True
             st.session_state["dashboard_reauth_required"] = True
