@@ -873,7 +873,7 @@ def _render_landing():
     except Exception as e:
         st.error(f"Downloads und Beta-Informationen sind gerade nicht erreichbar. ({type(e).__name__})")
     if st.session_state.get("authenticated_tid") and st.button("Sitzung zurücksetzen"):
-        for key in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data"):
+        for key in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
             st.session_state.pop(key, None)
         st.rerun()
 
