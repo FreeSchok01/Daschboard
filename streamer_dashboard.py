@@ -860,22 +860,175 @@ def _render_giveaway_tab(tid):
 
 
 def _render_landing():
-    """Öffentliche Startseite ohne Downloads oder Beta-Formulare für abgemeldete Besucher."""
+    """Öffentliche StreamDex-Startseite im Referenzdesign mit funktionalem Twitch-Login."""
+    landing_css = """<style>
+    .sd-public-nav{display:flex;align-items:center;gap:28px;min-height:54px;padding:0 2px 13px;margin:0 0 0;border-bottom:1px solid rgba(148,163,184,.17);color:#dce4ff}
+    .sd-public-brand{display:flex;align-items:center;gap:10px;margin-right:40px;font-size:1.05rem;font-weight:800;white-space:nowrap}
+    .sd-public-mark{display:grid;place-items:center;width:31px;height:31px;border-radius:9px;background:linear-gradient(135deg,#bb4dff,#4f46e5);color:#fff;font-size:19px;font-weight:900;box-shadow:0 0 18px #7c3aed55}
+    .sd-public-brand span:last-child{background:linear-gradient(90deg,#fff,#c4b5fd);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .sd-public-brand em{font-style:normal;color:#a78bfa;-webkit-text-fill-color:#a78bfa}
+    .sd-public-links{display:flex;align-items:center;gap:clamp(14px,3vw,40px);font-size:.75rem}
+    .sd-public-links a,.sd-public-sun{color:#bac5e5;text-decoration:none}
+    .sd-public-links a:hover{color:#fff}
+    .sd-public-sun{margin-left:auto;font-size:1.2rem}
+    .sd-public-hero{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);gap:8px;align-items:center;min-height:390px;position:relative;margin:0;padding:17px 0 18px;overflow:hidden}
+    .sd-public-copy{position:relative;z-index:2;padding:18px 8px 20px 0}
+    .sd-public-pill{display:inline-flex;border:1px solid rgba(139,92,246,.5);border-radius:99px;background:rgba(76,29,149,.16);padding:6px 12px;color:#c4a5ff;font-size:.62rem;letter-spacing:.09em;font-weight:800}
+    .sd-public-title{font-size:clamp(2rem,3.25vw,2.85rem)!important;line-height:1.08!important;letter-spacing:-.05em!important;margin:15px 0 17px!important;color:#f4f6ff!important;font-weight:800!important}
+    .sd-public-title span{color:#b45cff;background:linear-gradient(90deg,#c15bff,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .sd-public-description{color:#c0c9e2;font-size:.82rem;line-height:1.85;max-width:520px}
+    .sd-public-cta{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-top:19px}
+    .sd-public-cta a{display:inline-flex;align-items:center;gap:9px;padding:12px 16px;text-decoration:none;border-radius:9px;font-size:.72rem;font-weight:800}
+    .sd-public-cta .main{color:#fff;background:linear-gradient(105deg,#a044f2,#4936ee);border:1px solid #8f5aff;box-shadow:0 7px 22px #6934e933}
+    .sd-public-cta .alt{color:#dce4ff;background:rgba(8,13,30,.55);border:1px solid #303b60}
+    .sd-public-trust{display:flex;gap:13px 18px;flex-wrap:wrap;margin-top:27px;color:#aeb9db;font-size:.61rem}
+    .sd-public-trust span::first-letter{color:#b78aff}
+    .sd-public-art{height:330px;min-width:0;position:relative;isolation:isolate;overflow:hidden;background:radial-gradient(ellipse at 53% 50%,rgba(87,42,196,.45),transparent 54%)}
+    .sd-public-art:before{content:"";position:absolute;inset:9% 6% 12%;border:1px solid rgba(99,102,241,.28);border-radius:50%;transform:rotate(-18deg);box-shadow:0 0 60px rgba(90,45,220,.25)}
+    .sd-public-art:after{content:"";position:absolute;inset:23% -4% 27%;border:1px solid rgba(34,211,238,.42);border-radius:50%;transform:rotate(22deg)}
+    .sd-public-orbit{position:absolute;inset:14% 11%;border:1px solid rgba(139,92,246,.35);border-radius:50%;transform:rotate(35deg)}
+    .sd-public-neon{position:absolute;right:6%;top:3%;padding:10px 12px;border:1px solid #7c3aed;border-radius:6px;color:#d9b4ff;background:#210d42;font-size:.65rem;letter-spacing:.13em;box-shadow:0 0 24px #a855f766;transform:rotate(-8deg)}
+    .sd-public-screen{position:absolute;z-index:2;left:10%;top:18%;width:82%;height:66%;border:1px solid #8b5cf6;border-radius:12px;background:linear-gradient(130deg,rgba(8,15,34,.98),rgba(19,17,53,.95));box-shadow:0 0 0 4px #8b5cf61a,0 0 45px #6d28d966;transform:perspective(900px) rotateY(-8deg) rotateX(2deg);overflow:hidden}
+    .sd-public-screenbar{display:flex;align-items:center;gap:7px;height:30px;padding:0 10px;border-bottom:1px solid #30305e;background:#151a3a;color:#bcbfea;font-size:.52rem}
+    .sd-public-screenlogo{display:grid;place-items:center;width:16px;height:16px;border-radius:5px;background:linear-gradient(135deg,#c05aff,#4f46e5);color:white;font-weight:900}
+    .sd-public-windowdots{margin-left:auto;color:#817bb5}
+    .sd-public-screenbody{display:grid;grid-template-columns:27px 1fr;height:calc(100% - 30px)}
+    .sd-public-screenside{padding:12px 7px;border-right:1px solid #28294d;color:#bb8cff;line-height:2.4;font-size:.64rem}
+    .sd-public-screenmain{padding:12px 10px}
+    .sd-public-screenmain small{display:block;color:#8e9aba;font-size:.47rem;letter-spacing:.12em}
+    .sd-public-screenmain strong{display:block;margin:4px 0 10px;font-size:.92rem;color:#f2f4ff}
+    .sd-public-ministats{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+    .sd-public-ministats span{padding:7px 5px;border:1px solid #2c355b;border-radius:5px;background:#111b37;font-size:.46rem;color:#9ba8ca}
+    .sd-public-ministats b{display:block;font-size:.75rem;color:#f2f4ff;margin-top:5px}
+    .sd-public-minibars{display:flex;align-items:end;gap:5px;height:47px;margin-top:9px}
+    .sd-public-minibars i{display:block;flex:1;height:55%;border-radius:3px 3px 0 0;background:linear-gradient(#bf66ff,#5145e8)}
+    .sd-public-minibars i:nth-child(2){height:38%}.sd-public-minibars i:nth-child(3){height:74%}.sd-public-minibars i:nth-child(4){height:56%}.sd-public-minibars i:nth-child(5){height:95%}.sd-public-minibars i:nth-child(6){height:69%}.sd-public-minibars i:nth-child(7){height:82%}
+    .sd-public-float{position:absolute;z-index:3;display:grid;place-items:center;width:38px;height:38px;border:1px solid #8b5cf6;border-radius:11px;color:#d6b4ff;background:#201044;box-shadow:0 0 22px #8b5cf655;font-size:1.1rem}
+    .sd-public-f1{top:6%;left:24%}.sd-public-f2{top:36%;left:0;color:#67e8f9;border-color:#22d3ee}.sd-public-f3{bottom:5%;right:12%}.sd-public-f4{top:9%;right:21%;color:#67e8f9;border-color:#22d3ee}
+    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card){display:grid!important;grid-template-columns:minmax(0,3fr) minmax(275px,1fr)!important;gap:18px!important;align-items:start!important}\n    div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card)>div{width:auto!important;min-width:0!important;flex:none!important}\n    @media(max-width:1000px){div[data-testid="stHorizontalBlock"]:has(.st-key-sd_login_card){grid-template-columns:minmax(0,1fr)!important}}\n    .st-key-sd_login_card{margin:0 0 18px!important;padding:18px 17px 14px!important;border:1px solid rgba(139,92,246,.46)!important;border-radius:13px!important;background:linear-gradient(150deg,rgba(14,17,42,.97),rgba(8,12,27,.98))!important;box-shadow:0 10px 35px rgba(0,0,0,.28)!important}
+    .st-key-sd_login_card [data-testid="stMarkdownContainer"] h2{font-size:1.18rem!important;margin:0 0 6px!important}
+    .st-key-sd_login_card [data-testid="stMarkdownContainer"] p{color:#aeb9db;font-size:.72rem;line-height:1.6}
+    .sd-public-login-brand{display:flex;justify-content:center;align-items:center;gap:8px;font-weight:800;font-size:.98rem;margin:0 0 18px;background:linear-gradient(90deg,#fff,#c4b5fd);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .sd-public-login-note{color:#8e9aba;font-size:.62rem;line-height:1.6;text-align:center;margin:9px 0}
+    .sd-public-separator{display:flex;align-items:center;gap:10px;color:#8792b2;font-size:.62rem;margin:12px 0}
+    .sd-public-separator:before,.sd-public-separator:after{content:"";height:1px;background:#273152;flex:1}
+    .sd-public-benefits{border-top:1px solid rgba(148,163,184,.17);border-bottom:1px solid rgba(148,163,184,.17);padding:22px 0 23px;display:grid;grid-template-columns:1.18fr repeat(4,minmax(0,1fr));gap:12px;align-items:stretch}
+    .sd-public-benefit-intro{padding:8px 10px 8px 0}
+    .sd-public-benefit-intro h2{font-size:1.32rem!important;letter-spacing:-.04em!important;margin:0 0 7px!important;color:#eff2ff}
+    .sd-public-benefit-intro p{font-size:.7rem;line-height:1.7;color:#a6b1d0;margin:0}
+    .sd-public-benefit{border:1px solid rgba(48,61,103,.8);border-radius:11px;background:linear-gradient(145deg,rgba(13,19,40,.88),rgba(9,14,29,.94));padding:15px 13px}
+    .sd-public-benefit-icon{font-size:1.55rem;color:#b56cff;margin-bottom:10px;text-shadow:0 0 15px #8b5cf655}
+    .sd-public-benefit b{display:block;color:#edf0ff;font-size:.68rem;margin-bottom:8px}
+    .sd-public-benefit p{font-size:.59rem;line-height:1.6;color:#9aa6c8;margin:0}
+    .sd-public-tools{padding:20px 5px 25px}
+    .sd-public-toolshead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:15px}
+    .sd-public-toolshead h2{font-size:1.3rem!important;margin:0 0 5px!important;letter-spacing:-.04em!important;color:#edf0ff}
+    .sd-public-toolshead p{margin:0;font-size:.72rem;color:#a6b1d0}
+    .sd-public-count{font-size:.62rem;color:#baa3ff;background:#24154b;border:1px solid #3e2876;padding:5px 8px;border-radius:5px;margin-left:8px;white-space:nowrap}
+    .sd-public-all{color:#bda1ff;text-decoration:none;font-size:.65rem;white-space:nowrap}
+    .sd-public-toolgrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}
+    .sd-public-tool{display:flex;align-items:flex-start;gap:10px;min-height:80px;padding:12px 10px;border:1px solid #222e52;border-radius:10px;background:linear-gradient(145deg,rgba(12,18,38,.94),rgba(8,13,28,.98));color:#edf1ff;text-decoration:none;transition:transform .16s,border-color .16s}
+    .sd-public-tool:hover{border-color:#7c5ad5;transform:translateY(-2px);color:#fff}
+    .sd-public-tool-icon{flex:0 0 35px;width:35px;height:35px;display:grid;place-items:center;border-radius:50%;font-size:1.12rem;color:#c99aff;background:radial-gradient(circle,#49217e,#1d123d 72%);box-shadow:0 0 17px #7839b82a}
+    .sd-public-tool-icon.cyan{color:#51dcf5;background:radial-gradient(circle,#124b69,#0b1d35 72%)}
+    .sd-public-tool b{display:block;font-size:.66rem;margin:3px 0 5px}
+    .sd-public-tool small{display:block;color:#a0accd;font-size:.57rem;line-height:1.5}
+    .sd-public-footer{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 -1rem;padding:16px 22px;background:radial-gradient(ellipse at left,#35126f 0,transparent 48%),linear-gradient(95deg,#10082a,#080e23 60%,#111037);border-top:1px solid #30205f}
+    .sd-public-footer-brand{display:flex;align-items:center;gap:9px;color:#f0efff;font-weight:800;font-size:.82rem}
+    .sd-public-footer-brand small{display:block;font-size:.58rem;color:#a6b1d0;font-weight:400;margin-top:3px}
+    .sd-public-footer-mid{display:flex;gap:17px;flex-wrap:wrap;color:#a6b1d0;font-size:.58rem}
+    .sd-public-footer-cta{color:#fff!important;background:linear-gradient(100deg,#8b3df0,#5038ed);border:1px solid #865bfa;border-radius:8px;padding:10px 13px;text-decoration:none;font-size:.65rem;font-weight:800;white-space:nowrap}
+    @media(max-width:1180px){.sd-public-hero{grid-template-columns:minmax(0,1fr);padding-bottom:10px}.sd-public-art{height:280px;margin-top:-8px}.sd-public-benefits{grid-template-columns:repeat(4,minmax(0,1fr))}.sd-public-benefit-intro{grid-column:1/-1}.sd-public-toolgrid{grid-template-columns:repeat(3,minmax(0,1fr))}.sd-public-login-note{font-size:.7rem}}
+    @media(max-width:760px){.sd-public-nav{gap:12px;flex-wrap:wrap}.sd-public-brand{margin-right:auto}.sd-public-links{order:3;width:100%;justify-content:space-between;gap:10px;font-size:.68rem}.sd-public-hero{min-height:0}.sd-public-title{font-size:2.1rem!important}.sd-public-art{height:250px}.sd-public-benefits{grid-template-columns:repeat(2,minmax(0,1fr))}.sd-public-benefit-intro{grid-column:1/-1}.sd-public-toolgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.sd-public-footer{align-items:flex-start;flex-direction:column}.sd-public-footer-mid{display:none}.sd-public-toolshead{align-items:flex-start}.st-key-sd_login_card{padding:17px!important}}
+    @media(max-width:430px){.sd-public-toolgrid{grid-template-columns:1fr}.sd-public-benefits{grid-template-columns:1fr 1fr}.sd-public-art{height:220px}.sd-public-title{font-size:1.9rem!important}.sd-public-cta a{padding:11px 12px}}
+    </style>"""
+    st.markdown(landing_css, unsafe_allow_html=True)
+
     st.markdown(
-        '<div class="sd-section-heading"><div class="sd-section-kicker">CREATOR TOOLS</div>'
-        '<h2>Alles für deinen Stream an einem Ort</h2>'
-        '<p>Melde dich an, um dein persönliches Dashboard, Downloads und die Beta-Bewerbung freizuschalten.</p></div>',
+        '<div class="sd-public-nav" id="top">'
+        '<div class="sd-public-brand"><span class="sd-public-mark">S</span><span>StreamDex <em>OS</em></span></div>'
+        '<nav class="sd-public-links"><a href="#top">Home</a><a href="#features">Features</a><a href="#tools">Tools</a>'
+        '<a href="#tools">Preise</a><a href="#faq">FAQ</a></nav><a class="sd-public-sun" href="#top" title="StreamDex OS">☼</a></div>',
+        unsafe_allow_html=True,
+    )
+
+    hero_left, login_right = st.columns([2.75, 1.0], gap="medium")
+    with hero_left:
+        st.markdown(
+            '<div class="sd-public-hero">'
+            '<div class="sd-public-copy">'
+            '<span class="sd-public-pill">DEIN STREAMING-OS</span>'
+            '<h1 class="sd-public-title">Alles, was du für deinen<br><span>Stream</span> brauchst – an einem Ort.</h1>'
+            '<p class="sd-public-description">StreamDex OS ist deine zentrale Plattform für alle Streaming-Tools. Plane, manage, automatisiere und begeistere deine Community – einfach, flexibel und komplett auf dich zugeschnitten.</p>'
+            '<div class="sd-public-cta"><a class="main" href="#sd-login-anchor">♧&nbsp; Jetzt kostenlos starten&nbsp; →</a>'
+            '<a class="alt" href="#features">▷&nbsp; Mehr erfahren</a></div>'
+            '<div class="sd-public-trust"><span>▦ Alle Tools in einer Plattform</span><span>♙ Ein Login. Alles verfügbar.</span><span>⟳ Regelmäßige Updates</span><span>♡ Für Streamer. Von Streamern.</span></div>'
+            '</div>'
+            '<div class="sd-public-art"><div class="sd-public-orbit"></div><div class="sd-public-neon">GOOD<br>VIBES</div>'
+            '<div class="sd-public-float sd-public-f1">▦</div><div class="sd-public-float sd-public-f2">♧</div>'
+            '<div class="sd-public-float sd-public-f3">◈</div><div class="sd-public-float sd-public-f4">🎮</div>'
+            '<div class="sd-public-screen"><div class="sd-public-screenbar"><span class="sd-public-screenlogo">S</span> StreamDex OS <span class="sd-public-windowdots">•••</span></div>'
+            '<div class="sd-public-screenbody"><div class="sd-public-screenside">⌂<br>▦<br>♙<br>⚙</div>'
+            '<div class="sd-public-screenmain"><small>DEIN WORKSPACE</small><strong>Willkommen zurück!</strong>'
+            '<div class="sd-public-ministats"><span>Follower<b>12.4K</b></span><span>Zuschauer<b>284</b></span><span>Onlinezeit<b>152h</b></span></div>'
+            '<div class="sd-public-minibars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div></div></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    with login_right:
+        with st.container(key="sd_login_card"):
+            st.markdown(
+                '<div class="sd-public-login-brand"><span class="sd-public-mark">S</span> StreamDex OS</div>'
+                '<h2>Willkommen zurück!</h2>'
+                '<p>Melde dich an, um auf deine Tools zuzugreifen.</p>'
+                '<div id="sd-login-anchor"></div>',
+                unsafe_allow_html=True,
+            )
+            _render_twitch_login()
+            st.markdown(
+                '<div class="sd-public-separator">sicher anmelden</div>'
+                '<div class="sd-public-login-note">Ein geschützter Login über Twitch. Dein StreamDex-Dashboard wartet auf dich.</div>'
+                '<div class="sd-public-login-note" id="faq">Du hast Fragen? Schau in die Anleitungen oder besuche unseren Support.</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown(
+        '<section class="sd-public-benefits" id="features">'
+        '<div class="sd-public-benefit-intro"><h2>Mehr als nur ein Tool</h2>'
+        '<p>StreamDex OS bietet dir eine wachsende Sammlung an Tools, die dir helfen, deinen Stream zu optimieren, deine Community zu stärken und deine Ideen umzusetzen.</p></div>'
+        '<div class="sd-public-benefit"><div class="sd-public-benefit-icon">ϟ</div><b>Zeitsparend</b><p>Automatisiere wiederkehrende Aufgaben und konzentriere dich auf das Wesentliche.</p></div>'
+        '<div class="sd-public-benefit"><div class="sd-public-benefit-icon">♧</div><b>Community</b><p>Mehr Interaktion, mehr Engagement, mehr Spaß.</p></div>'
+        '<div class="sd-public-benefit"><div class="sd-public-benefit-icon">⚙</div><b>Flexibel</b><p>Passe alles an deine Bedürfnisse an – von Commands bis zu Events.</p></div>'
+        '<div class="sd-public-benefit"><div class="sd-public-benefit-icon">⬡</div><b>Sicher</b><p>Deine Daten bleiben in deinen besten Händen.</p></div>'
+        '</section>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<section class="sd-public-tools" id="tools"><div class="sd-public-toolshead"><div><h2>'
+        'Unsere Tools – Dein Vorteil <span class="sd-public-count">30+ Tools</span></h2>'
+        '<p>Von der Stream-Planung bis zur Community-Verwaltung – alles, was du brauchst.</p></div>'
+        '<a class="sd-public-all" href="#tools">Alle Tools anzeigen →</a></div>'
+        '<div class="sd-public-toolgrid">'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">🎮</span><span><b>Multi Tool</b><small>Chat Games, Kanalpunkte, Commands, Automationen und mehr.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▣</span><span><b>Planner</b><small>Stream-Planung, Kalender und Erinnerungen.</small></span></a>'
+        '<a class="sd-public-tool" href="/?events=1"><span class="sd-public-tool-icon">♜</span><span><b>Events</b><small>Community-Events, Turniere und Specials.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Radar</b><small>Live-Status, Statistiken und mehrere Streamer im Blick.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Lurk Tool</b><small>Browser öffnet sich automatisch, wenn ein Stream live geht.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">♙</span><span><b>Profile</b><small>Dein öffentliches Creator-Profil mit allen Infos.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">⚙</span><span><b>Automation</b><small>Automationen für Chat, Events, Commands und mehr.</small></span></a>'
+        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▱</span><span><b>Overlay Editor</b><small>Gestalte deine Overlays einfach und professionell.</small></span></a>'
+        '</div></section>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="sd-feature-grid">'
-        '<div class="sd-feature-card"><div class="sd-feature-icon">📊</div><div class="sd-feature-title">Deine Übersicht</div>'
-        '<div class="sd-feature-copy">Kanal-Aktivität, Giveaways und freigeschaltete Games – nach der Anmeldung.</div></div>'
-        '<div class="sd-feature-card"><div class="sd-feature-icon">🎉</div><div class="sd-feature-title">Community & Events</div>'
-        '<div class="sd-feature-copy">Organisiere Community-Events und verwalte Anmeldungen im Dashboard.</div></div>'
-        '<div class="sd-feature-card"><div class="sd-feature-icon">🧰</div><div class="sd-feature-title">Downloads & Beta</div>'
-        '<div class="sd-feature-copy">Die Downloads und das Bewerbungsformular werden erst nach dem Login angezeigt.</div></div>'
-        '</div>',
+        '<footer class="sd-public-footer"><div class="sd-public-footer-brand"><span class="sd-public-mark">S</span>'
+        '<span>StreamDex OS<small>Dein Streaming. Unsere Mission.</small></span></div>'
+        '<div class="sd-public-footer-mid"><span>⟳ Kontinuierliche Weiterentwicklung</span><span>▣ Twitch & mehr Integrationen</span><span>♡ Für alle Streamer</span></div>'
+        '<a class="sd-public-footer-cta" href="#sd-login-anchor">Jetzt starten →</a></footer>',
         unsafe_allow_html=True,
     )
 
@@ -1079,6 +1232,7 @@ def render_streamer_dashboard(games):
         )
 
     if not authed_tid:
+        hero.empty()  # Die Dashboard-Headline wird durch die öffentliche Referenz-Landingpage ersetzt.
         if st.session_state.pop("session_expired", False):
             st.warning(f"⏱️ Deine Sitzung ist nach {SESSION_MAX_AGE_S // 3600} Stunden aus Sicherheitsgründen abgelaufen. "
                        "Bitte melde dich erneut mit Twitch an oder öffne das Dashboard über deine Streamdex Desktop-App.")
@@ -1088,14 +1242,6 @@ def render_streamer_dashboard(games):
         notice = st.session_state.pop("twitch_login_notice", None)
         if notice:
             st.error(notice)
-        with st.container(key="sd_login_card"):
-            st.markdown(
-                '<div class="sd-section-kicker">DEIN ACCOUNT</div>'
-                '<h2>Mit Twitch anmelden</h2>'
-                '<p>Verbinde deinen Twitch-Account, um dein persönliches Dashboard und deine Community-Events zu verwalten.</p>',
-                unsafe_allow_html=True,
-            )
-            _render_twitch_login()
         _render_landing()
         return
 
