@@ -254,8 +254,7 @@ def render_radar(tid, username):
                 except Exception as exc:
                     st.error(f"Speichern nicht möglich: {exc}")
 
-    c_refresh, c_live, c_all = st.columns([1, 1, 2])
-    if c_refresh.button("🔄 Live-Daten aktualisieren", use_container_width=True, key="sd_radar_refresh"):
+    if st.button("🔄 Live-Daten aktualisieren", use_container_width=False, key="sd_radar_refresh"):
         _fetch_channels.clear()
         st.rerun()
 
@@ -274,11 +273,11 @@ def render_radar(tid, username):
         if channel["game"]:
             category_counts[channel["game"]] = category_counts.get(channel["game"], 0) + 1
     top_category = max(category_counts, key=category_counts.get) if category_counts else "—"
-    c_live.metric("🔴 Gerade live", len(live_channels))
-    c_all.metric("👥 In deiner Liste", len(watchlist))
-    c_refresh.metric("👁 Zuschauer gesamt", f"{total_viewers:,}".replace(",", "."))
-    col_category = st.columns(1)[0]
-    col_category.metric("🎮 Häufigste Kategorie", top_category)
+    m_live, m_list, m_viewers, m_category = st.columns(4)
+    m_live.metric("🔴 Gerade live", len(live_channels))
+    m_list.metric("👥 In deiner Liste", len(watchlist))
+    m_viewers.metric("👁 Zuschauer gesamt", f"{total_viewers:,}".replace(",", "."))
+    m_category.metric("🎮 Häufigste Kategorie", top_category)
     st.caption(f"Zuletzt geprüft: {time.strftime('%H:%M:%S')} · {len(offline_channels)} offline")
 
     q_col, f_col = st.columns([3, 1])
