@@ -489,6 +489,14 @@ def main():
         render_streamer_dashboard(GAMES)
         return
     if "admin" not in st.query_params:         # Öffentlich: Shop. Admin: /?admin=1
+        # Streamlit OIDC leitet nach erfolgreichem Login zur App-Startseite zurück.
+        # Ohne weitere URL-Parameter öffnen wir dann das Streamer-Dashboard.
+        if st.user.is_logged_in and not st.query_params:
+            st.set_page_config(page_title="Streamdex Dashboard", page_icon="📊", layout="wide")
+            init_firebase()
+            apply_theme()
+            render_streamer_dashboard(GAMES)
+            return
         st.set_page_config(page_title="Streamdex Shop", page_icon="🛒")
         init_firebase()
         apply_theme()
