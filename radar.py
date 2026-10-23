@@ -692,9 +692,9 @@ def render_radar(tid, username, reauth_url=None):
     st.markdown(
         """
         <div class="sd-radar-hero">
-          <div class="sd-radar-kicker">STREAMDEX OS / CREATOR ANALYTICS</div>
-          <h1>Dein <span>Streamer-Dashboard.</span></h1>
-          <p>Deine eigenen Twitch-Zahlen: Live-Zuschauer, Follower, Abonnenten, Bits, VOD-Aufrufe, Ziele und dein von StreamDex erfasster Zuschauerverlauf.</p>
+          <div class="sd-radar-kicker">STREAMDEX INSIGHT / STATISTIKEN & AUSWERTUNGEN</div>
+          <h1>Dein <span>StreamDex Insight.</span></h1>
+          <p>Analysiere Live-Zuschauer, Follower, Abonnenten, Bits, VOD-Aufrufe, Ziele und den von StreamDex erfassten Verlauf deines Kanals.</p>
         </div>
         """,
         unsafe_allow_html=True,
