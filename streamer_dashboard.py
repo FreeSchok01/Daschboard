@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import db
 
-from beta_apply import _apply_form, _status_view
+from beta_apply import _apply_form, render_logged_in_beta_status
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
                        settings as download_settings, update_notice)
 from shop import owned_games, CSS
@@ -901,10 +901,15 @@ def _render_member_downloads_and_beta(beta_info=None):
                 render_member_downloads(cfg)
             else:
                 st.caption("Der Beta-Download erscheint hier, sobald du für die Beta freigeschaltet bist.")
+        account_name = str(
+            (st.session_state.get("twitch_profile", {}) or {}).get("login")
+            or twitch_username
+            or ""
+        )
         with t_apply:
-            _apply_form(cfg)
+            _apply_form(cfg, default_name=account_name)
         with t_status:
-            _status_view(cfg)
+            render_logged_in_beta_status(authed_tid, account_name, beta_info, cfg)
     except Exception as e:
         st.error(f"Downloads und Beta-Informationen sind gerade nicht erreichbar. ({type(e).__name__})")
 
