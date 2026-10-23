@@ -23,6 +23,7 @@ from shop import owned_games, CSS
 from events import render_event_manager
 from planner import render_planner
 from radar import render_radar
+from feedback_hub import render_feedback_hub
 from creator_profile import render_creator_profile
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -1236,7 +1237,7 @@ def _render_landing():
         '<a class="sd-public-tool" href="/?radar=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Radar</b><small>Live-Status, Statistiken und mehrere Streamer im Blick.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Lurk Tool</b><small>Browser öffnet sich automatisch, wenn ein Stream live geht.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
+        '<a class="sd-public-tool" href="/?feedback=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
         '<a class="sd-public-tool" href="/?profile=1"><span class="sd-public-tool-icon cyan">♙</span><span><b>Profile</b><small>Dein öffentliches Creator-Profil mit allen Infos.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">⚙</span><span><b>Automation</b><small>Automationen für Chat, Events, Commands und mehr.</small></span></a>'
         '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▱</span><span><b>Overlay Editor</b><small>Gestalte deine Overlays einfach und professionell.</small></span></a>'
@@ -1467,6 +1468,8 @@ def render_streamer_dashboard(games):
             st.info("Der Planner ist Teil deines Streamer-Dashboards. Melde dich unten mit Twitch an und öffne danach den Reiter „▣ Planner“.")
         if str(st.query_params.get("profile", "")) == "1":
             st.info("Dein Creator-Profil kannst du nach dem Twitch-Login erstellen und veröffentlichen. Klicke danach erneut auf „Profile“ oder öffne den Reiter „♙ Profil“.")
+        if str(st.query_params.get("feedback", "")) == "1":
+            st.info("Melde dich mit Twitch an, um Vorschläge einzureichen, Community-Umfragen zu erstellen und abzustimmen.")
         _render_landing()
         return
 
@@ -1562,6 +1565,16 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
+    # Direkter Feedback-Link: nur für angemeldete Streamer öffnen.
+    if str(st.query_params.get("feedback", "")) == "1":
+        back_col, _ = st.columns([1, 5])
+        if back_col.button("← Zur Dashboard-Übersicht", key="feedback_back_to_dashboard"):
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
+            st.rerun()
+        render_feedback_hub(authed_tid, twitch_username)
+        return
+
     # Direkter Radar-Link: nur für angemeldete Streamer öffnen.
     if str(st.query_params.get("radar", "")) == "1":
         back_col, _ = st.columns([1, 5])
@@ -1594,10 +1607,11 @@ def render_streamer_dashboard(games):
 
     # Große Kachel-Navigation statt kleiner Reiter
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_radar, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
+        t_over, t_games, t_radar, t_feedback, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
             "🏠 Übersicht",
             "🎮 Freigeschaltete Games",
             "📡 Radar",
+            "💬 Feedback",
             "📈 Kanal-Statistiken",
             "📅 Verlauf",
             "🎁 Giveaways",
@@ -1612,6 +1626,10 @@ def render_streamer_dashboard(games):
     # --- StreamDex Radar ---
     with t_radar:
         render_radar(authed_tid, twitch_username, _twitch_authorization_url()[0])
+
+    # --- StreamDex Feedback ---
+    with t_feedback:
+        render_feedback_hub(authed_tid, twitch_username)
 
     # --- Tab 0: Übersicht ---
     with t_over:
