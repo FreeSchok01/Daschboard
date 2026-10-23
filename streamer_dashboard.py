@@ -62,10 +62,66 @@ TID_RE = re.compile(r"^[0-9]{1,15}$")
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 SESSION_MAX_AGE_S = 2 * 60 * 60   # nach 2 Stunden ist ein neuer Login über die App nötig
 
+def _twitch_auth_config_issues():
+    """Prüft die notwendige Streamlit-OIDC-Konfiguration, ohne Geheimnisse anzuzeigen."""
+    issues = []
+    try:
+        auth = st.secrets["auth"]
+    except Exception:
+        return [
+            "Der Abschnitt [auth] fehlt in Streamlit Cloud → Settings → Secrets.",
+            'Erforderlich sind redirect_uri = "https://streamdex.streamlit.app/oauth2callback" und cookie_secret.'
+        ]
+
+    for key in ("redirect_uri", "cookie_secret"):
+        if not str(auth.get(key, "") or "").strip():
+            issues.append(f"[auth] {key} fehlt.")
+
+    expected_redirect = "https://streamdex.streamlit.app/oauth2callback"
+    if str(auth.get("redirect_uri", "")).strip() != expected_redirect:
+        issues.append(f'redirect_uri muss exakt {expected_redirect} sein.')
+
+    try:
+        provider = auth["twitch"]
+    except Exception:
+        provider = None
+
+    if provider is None:
+        issues.append("Der Abschnitt [auth.twitch] fehlt. [twitch] allein reicht für st.login('twitch') nicht.")
+        return issues
+
+    for key in ("client_id", "client_secret", "server_metadata_url"):
+        if not str(provider.get(key, "") or "").strip():
+            issues.append(f"[auth.twitch] {key} fehlt.")
+
+    metadata = str(provider.get("server_metadata_url", "") or "").strip()
+    if metadata and metadata != "https://id.twitch.tv/oauth2/.well-known/openid-configuration":
+        issues.append("server_metadata_url muss die offizielle Twitch-OIDC-Adresse sein.")
+
+    if str(provider.get("token_endpoint_auth_method", "") or "").strip() != "client_secret_post":
+        issues.append('Bitte ergänze unter [auth.twitch]: token_endpoint_auth_method = "client_secret_post".')
+
+    return issues
+
+
 def _start_twitch_login():
-    """Startet den sicheren Twitch-Login über Streamlit OpenID Connect."""
+    """Prüft die OIDC-Secrets und startet danach den Twitch-Login."""
+    issues = _twitch_auth_config_issues()
+    if issues:
+        st.error("Der Twitch-Login ist noch nicht vollständig eingerichtet:")
+        for issue in issues:
+            st.markdown(f"- {issue}")
+        st.info("Öffne Streamlit Cloud → Manage app → Settings → Secrets und ergänze die fehlenden Angaben. Die Werte nicht hier im Chat posten.")
+        return
+
     st.session_state.pop("dashboard_reauth_required", None)
-    st.login("twitch")
+    try:
+        st.login("twitch")
+    except Exception as exc:
+        # Keine Zugangsdaten oder kompletten Fehlerobjekte im UI ausgeben.
+        st.error(f"Streamlit konnte den Twitch-Login nicht starten ({type(exc).__name__}).")
+        st.info("Prüfe, ob Client-ID und Client-Secret in [auth.twitch] zueinander gehören und die Callback-URL in der Twitch Developer Console exakt stimmt.")
+
 
 
 def _verify_and_consume_token(token: str):
@@ -687,22 +743,53 @@ def render_streamer_dashboard(games):
         elif st.session_state.get("acct_deleted") is not None:
             st.session_state.pop("acct_deleted", None)
             st.success("✅ Deine Daten wurden gelöscht und du wurdest abgemeldet.")
-        st.button(
+        if st.button(
             "🟣 Mit Twitch anmelden",
             type="primary",
             use_container_width=True,
-            on_click=_start_twitch_login,
-        )
+            key="twitch_login_button",
+        ):
+            _start_twitch_login()
         _render_landing()
         return
 
-    # Daten des authentifizierten Streamers laden
-    presence = db.reference(f"presence/{authed_tid}").get() or {}
-    if not presence:
-        st.error("Konto-Daten konnten nicht geladen werden.")
-        return
+    # Daten des authentifizierten Streamers laden. Bei einem neuen, gültigen Twitch-Login
+    # wird ein minimales Profil angelegt, damit die Events- und Dashboard-Funktionen nutzbar sind.
+    presence_ref = db.reference(f"presence/{authed_tid}")
+    presence = presence_ref.get() or {}
+    oidc_logged_in = bool(st.user.is_logged_in)
+    oidc_tid = str(st.user.get("sub") or "") if oidc_logged_in else ""
+    oidc_username = str(
+        st.user.get("preferred_username")
+        or st.user.get("name")
+        or ""
+    ).strip()
+    oidc_picture = str(st.user.get("picture") or "").strip()
 
-    twitch_username = presence.get("twitch_username", authed_tid)
+    if not presence:
+        if st.session_state.get("auth_method") == "twitch" and oidc_logged_in and oidc_tid == str(authed_tid):
+            initial_profile = {
+                "twitch_username": oidc_username or str(authed_tid),
+                "status": "offline",
+                "registered_via": "twitch_web_login",
+            }
+
+            def _create_profile_if_missing(current):
+                return current if isinstance(current, dict) else initial_profile
+
+            presence_ref.transaction(_create_profile_if_missing)
+            presence = presence_ref.get() or initial_profile
+        else:
+            st.error("Konto-Daten konnten nicht geladen werden. Bitte melde dich erneut mit Twitch an oder öffne das Dashboard über deine StreamDex Desktop-App.")
+            return
+
+    # Wenn ein Name von Twitch geliefert wird und Firebase noch keinen Namen hat,
+    # wird ausschließlich das fehlende Namensfeld ergänzt; vorhandene App-Daten bleiben unberührt.
+    if oidc_username and not presence.get("twitch_username"):
+        presence_ref.child("twitch_username").set(oidc_username)
+        presence["twitch_username"] = oidc_username
+
+    twitch_username = presence.get("twitch_username") or oidc_username or authed_tid
     app_version = presence.get("app_version", "?")
     last_seen = presence.get("last_seen")
     is_online = presence.get("status") == "online" and last_seen and (time.time() * 1000 - last_seen) < 150000
@@ -711,10 +798,23 @@ def render_streamer_dashboard(games):
     beta_info = db.reference(f"shop/beta/{authed_tid}").get() or {}
     stats_data = db.reference(f"stats/{authed_tid}").get() or {}
 
-    # Header & Abmelden-Button
-    top_col1, top_col2 = st.columns([5, 1])
-    top_col1.caption(f"Angemeldet als: **{twitch_username}** (`{authed_tid}`)")
-    if top_col2.button("🚪 Abmelden", key="dash_logout"):
+    # Profil oben im Dashboard
+    profile_col, details_col, logout_col = st.columns([0.8, 4.7, 1.4], vertical_alignment="center")
+    if oidc_picture:
+        try:
+            profile_col.image(oidc_picture, width=56)
+        except Exception:
+            profile_col.markdown("🟣")
+    else:
+        profile_col.markdown("🟣")
+    details_col.markdown(f"### {twitch_username}")
+    details_col.caption(f"Twitch-Profil · ID {authed_tid}")
+    if oidc_logged_in:
+        details_col.caption("Mit Twitch angemeldet")
+    else:
+        details_col.caption("Mit StreamDex Desktop-App angemeldet")
+
+    if logout_col.button("🚪 Abmelden", key="dash_logout", use_container_width=True):
         for key in ("authenticated_tid", "authenticated_at", "auth_method", "acct_data", "dashboard_reauth_required"):
             st.session_state.pop(key, None)
         if st.user.is_logged_in:
