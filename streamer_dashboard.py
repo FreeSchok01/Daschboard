@@ -169,7 +169,7 @@ def _twitch_authorization_url():
         "client_id": client_id,
         "redirect_uri": TWITCH_REDIRECT_URI,
         "response_type": "code",
-        "scope": "openid",
+        "scope": "openid moderator:read:followers channel:read:subscriptions bits:read channel:read:goals channel:read:hype_train channel:read:ads channel:read:polls channel:read:predictions channel:read:charity",
         "state": state,
     }
     return f"{TWITCH_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}", None
@@ -292,6 +292,18 @@ def handle_twitch_oauth_callback():
             "display_name": str(user.get("display_name", "") or user.get("login", "") or twitch_id),
             "picture": str(user.get("profile_image_url", "") or ""),
         }
+        # OAuth-Tokens bleiben ausschließlich in der laufenden, serverseitigen Sitzung.
+        # Sie werden nicht in Firebase gespeichert oder in die Oberfläche ausgegeben.
+        st.session_state["twitch_oauth_tid"] = twitch_id
+        st.session_state["twitch_oauth_access_token"] = access_token
+        st.session_state["twitch_oauth_refresh_token"] = str(token_data.get("refresh_token", "") or "")
+        try:
+            expires_in = max(60, int(token_data.get("expires_in") or 14400))
+        except (TypeError, ValueError):
+            expires_in = 14400
+        st.session_state["twitch_oauth_expires_at"] = time.time() + expires_in
+        granted_scopes = token_data.get("scope", [])
+        st.session_state["twitch_oauth_scopes"] = list(granted_scopes) if isinstance(granted_scopes, list) else []
         st.session_state.pop("dashboard_reauth_required", None)
         st.session_state.pop("session_expired", None)
         st.session_state.pop("twitch_login_notice", None)
@@ -1525,6 +1537,8 @@ def render_streamer_dashboard(games):
         if logout_col.button("🚪 Abmelden", key="dash_logout", use_container_width=True):
             for key in (
                 "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
+                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+                "twitch_oauth_expires_at", "twitch_oauth_scopes",
                 "acct_data", "dashboard_reauth_required",
             ):
                 st.session_state.pop(key, None)
