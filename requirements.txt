@@ -1,4 +1,5 @@
 streamlit>=1.42
+Authlib>=1.3.2
 firebase-admin>=6.5
 pandas
 tzdata
