@@ -847,45 +847,52 @@ def _render_giveaway_tab(tid):
 
 
 def _render_landing():
-    """Öffentliche Streamer-Startseite mit Twitch-Login und optionalen Downloads."""
+    """Öffentliche Startseite ohne Downloads oder Beta-Formulare für abgemeldete Besucher."""
     st.markdown(
         '<div class="sd-section-heading"><div class="sd-section-kicker">CREATOR TOOLS</div>'
         '<h2>Alles für deinen Stream an einem Ort</h2>'
-        '<p>Statistiken, Freischaltungen und Community-Funktionen – übersichtlich in deinem StreamDex-Bereich.</p></div>',
+        '<p>Melde dich an, um dein persönliches Dashboard, Downloads und die Beta-Bewerbung freizuschalten.</p></div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div class="sd-feature-grid">'
         '<div class="sd-feature-card"><div class="sd-feature-icon">📊</div><div class="sd-feature-title">Deine Übersicht</div>'
-        '<div class="sd-feature-copy">Behalte Kanal-Aktivität, Giveaways und freigeschaltete Games im Blick.</div></div>'
+        '<div class="sd-feature-copy">Kanal-Aktivität, Giveaways und freigeschaltete Games – nach der Anmeldung.</div></div>'
         '<div class="sd-feature-card"><div class="sd-feature-icon">🎉</div><div class="sd-feature-title">Community & Events</div>'
-        '<div class="sd-feature-copy">Organisiere Community-Events und verwalte Anmeldungen direkt im Dashboard.</div></div>'
-        '<div class="sd-feature-card"><div class="sd-feature-icon">🧰</div><div class="sd-feature-title">Deine Tools</div>'
-        '<div class="sd-feature-copy">Finde Downloads, Beta-Informationen und Support an einem Ort.</div></div>'
+        '<div class="sd-feature-copy">Organisiere Community-Events und verwalte Anmeldungen im Dashboard.</div></div>'
+        '<div class="sd-feature-card"><div class="sd-feature-icon">🧰</div><div class="sd-feature-title">Downloads & Beta</div>'
+        '<div class="sd-feature-copy">Die Downloads und das Bewerbungsformular werden erst nach dem Login angezeigt.</div></div>'
         '</div>',
         unsafe_allow_html=True,
     )
-    st.divider()
+
+
+def _render_member_downloads_and_beta():
+    """Downloads, Beta-Bewerbung und Status sind ausschließlich im authentifizierten Dashboard sichtbar."""
     st.markdown(
-        '<div class="sd-section-heading"><div class="sd-section-kicker">MEHR ENTDECKEN</div>'
-        '<h2>Noch mehr aus StreamDex</h2></div>',
+        '<div class="sd-section-heading"><div class="sd-section-kicker">MITGLIEDERBEREICH</div>'
+        '<h2>Downloads & Beta</h2>'
+        '<p>Hier findest du die StreamDex-Version, deine Beta-Bewerbung und den Status deiner Bewerbung.</p></div>',
         unsafe_allow_html=True,
     )
     try:
         cfg = download_settings()
-        t_dl, t_apply, t_status = st.tabs(["⬇️ Downloads", "📝 Für Beta bewerben", "🔎 Beta-Status & Download"])
+        t_dl, t_apply, t_status = st.tabs(["⬇️ Downloads", "🧪 Für Beta bewerben", "🔎 Beta-Status"])
         with t_dl:
+            st.markdown("#### StreamDex herunterladen")
+            st.caption("Die Download-Links sind nur nach der Anmeldung verfügbar.")
             render_public_downloads(cfg)
+            b = beta_link(cfg)
+            if b:
+                st.divider()
+                st.markdown("#### Beta-Version")
+                render_member_downloads(cfg)
         with t_apply:
             _apply_form(cfg)
         with t_status:
             _status_view(cfg)
     except Exception as e:
         st.error(f"Downloads und Beta-Informationen sind gerade nicht erreichbar. ({type(e).__name__})")
-    if st.session_state.get("authenticated_tid") and st.button("Sitzung zurücksetzen"):
-        for key in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
-            st.session_state.pop(key, None)
-        st.rerun()
 
 
 STREAMER_DASHBOARD_CSS = """<style>
@@ -1090,7 +1097,7 @@ def render_streamer_dashboard(games):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
 
-    t_over, t_games, t_stats, t_hist, t_gw, t_events, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "🎁 Giveaways", "🎉 Events", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
+    t_over, t_games, t_stats, t_hist, t_gw, t_events, t_downloads, t_support, t_acct = st.tabs(["🏠 Übersicht", "🎮 Freigeschaltete Games", "📈 Kanal-Statistiken", "📅 Verlauf", "🎁 Giveaways", "🎉 Events", "📥 Downloads & Beta", "💬 Support-Chat", "🧾 Konto & Datenschutz"])
 
     # --- Tab 0: Übersicht ---
     with t_over:
@@ -1189,6 +1196,10 @@ def render_streamer_dashboard(games):
     # --- Tab Events ---
     with t_events:
         render_event_manager(authed_tid, twitch_username)
+
+    # --- Downloads und Beta: nur sichtbar, nachdem ein Login bestätigt wurde ---
+    with t_downloads:
+        _render_member_downloads_and_beta()
 
     # --- Tab 5: Support ---
     with t_support:
