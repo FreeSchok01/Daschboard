@@ -47,20 +47,13 @@ def _release_slug_reservation(slug, tid):
     if not SLUG_RE.fullmatch(str(slug or "")) or not is_valid_twitch_id(tid):
         return False
     ref = db.reference(f"{SLUG_ROOT}/{slug}")
-    outcome = {"released": False}
-
-    def release(current):
-        outcome["released"] = False
-        if str(current or "") == str(tid):
-            outcome["released"] = True
-            return None
-        return current
-
     try:
-        ref.transaction(release)
+        if str(ref.get() or "") != str(tid):
+            return False
+        ref.delete()
+        return True
     except Exception:
         return False
-    return bool(outcome["released"])
 
 
 def _slug_from_name(name, tid):
