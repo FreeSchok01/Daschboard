@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 from radar import fetch_public_live_status
 
 PROFILE_ROOT = "creator_profiles"
@@ -34,6 +35,9 @@ def _safe_https(value):
 
 def render_creator_profile(tid, twitch_username=""):
     """Private profile editor. All edits are scoped to the authenticated Twitch ID."""
+    if not has_active_user_session(st.session_state, tid):
+        st.error("Für den Profil-Editor ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     tid = str(tid or "")
     try:
         ref = _profile_ref(tid)
