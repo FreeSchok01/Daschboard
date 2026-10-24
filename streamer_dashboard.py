@@ -912,7 +912,7 @@ def _delete_account_data(tid):
 
     def read_root(path, label):
         try:
-            value = _safe_get(path, errors=None)
+            value = db.reference(path).get()
             if isinstance(value, dict):
                 return value
             return {}
@@ -974,10 +974,10 @@ def _delete_account_data(tid):
 
     # Remove the public slug mapping only if it is valid and still points to this account.
     try:
-        profile = _safe_get(account_path("creator_profiles/{t}", tid), errors=None) or {}
+        profile = db.reference(account_path("creator_profiles/{t}", tid)).get() or {}
         old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
         if old_slug and re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
-            mapped_tid = _safe_get(f"creator_profile_slugs/{old_slug}", errors=None)
+            mapped_tid = db.reference(f"creator_profile_slugs/{old_slug}").get()
             if str(mapped_tid or "") == tid:
                 db.reference(f"creator_profile_slugs/{old_slug}").delete()
                 removed += 1
