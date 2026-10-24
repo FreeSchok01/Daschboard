@@ -29,6 +29,7 @@ from creator_profile import render_creator_profile
 from legacy import render_legacy
 from clips_manager import render_clips_manager
 from community_events import render_community_integrations
+from theme import render_empty_state, render_os_navigation
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -1700,6 +1701,19 @@ def render_streamer_dashboard(games):
 
     st.divider()
 
+    # Einheitliche Schnellnavigation bleibt auch in den Einzelansichten aller Werkzeuge sichtbar.
+    suite_routes = ("ideas", "bracket", "wheel", "wishlist", "quiz", "goals", "modlog", "modteam")
+    nav_route = next(
+        (route for route in ("radar", "insight", "planner", "clips", "feedback", "community", "profile", *suite_routes)
+         if str(st.query_params.get(route, "")) == "1"),
+        "dashboard",
+    )
+    if nav_route in suite_routes:
+        nav_route = "ideas"
+    elif nav_route == "insight":
+        nav_route = "radar"
+    render_os_navigation(nav_route)
+
     # Support-Nachrichten einmal laden (Banner oben und Tab "Support-Chat" nutzen dieselben Daten).
     # Bewusst ein Banner statt Zähler im Tab-Titel: ändert sich der Titel, springt Streamlit zurück auf den ersten Tab.
     msgs = _load_messages(authed_tid)
@@ -1905,7 +1919,11 @@ def render_streamer_dashboard(games):
     with t_stats:
         st.subheader("📈 Deine Streamdex-Statistiken")
         if not stats_data:
-            st.info("Noch keine statistischen Daten vorhanden.")
+            render_empty_state(
+                "Deine Statistiken warten auf Daten",
+                "Sobald deine StreamDex-App Aktivität erfasst hat, erscheinen hier deine Kennzahlen. Lass die App laufen und schau später wieder vorbei.",
+                "📈",
+            )
         else:
             s_cols = st.columns(3)
             for i, (k, label) in enumerate(STAT_KEYS.items()):
@@ -1917,8 +1935,11 @@ def render_streamer_dashboard(games):
         st.subheader("📅 Verlauf")
         history = _load_history(authed_tid)
         if len(history) < 2:
-            st.info("Noch kein Verlauf vorhanden. Die App speichert ab jetzt täglich deinen Stand – "
-                    "nach dem zweiten Tag erscheinen hier die ersten Balken.")
+            render_empty_state(
+                "Dein Verlauf startet hier",
+                "StreamDex speichert den Verlauf täglich. Sobald mindestens zwei Tage mit Daten vorliegen, kannst du Trends und Veränderungen vergleichen.",
+                "🗓️",
+            )
         else:
             col_a, col_b = st.columns([2, 1])
             h_key = col_a.selectbox("Kennzahl", list(HISTORY_LABELS), format_func=lambda k: HISTORY_LABELS[k], key="hist_key")
