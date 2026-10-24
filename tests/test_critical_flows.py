@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import events
 import feedback_hub
 import onboarding
 import streamer_dashboard
@@ -158,6 +159,7 @@ def memory_db(monkeypatch):
     database = MemoryDatabase()
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
+    monkeypatch.setattr(events, "db", database)
     return database
 
 
@@ -387,3 +389,53 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert steps[1]["action"] == "Erste Idee anlegen"
     assert steps[2]["route"] == "planner"
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
+
+
+
+def test_event_mutations_recheck_the_owner_before_writing(memory_db):
+    event = {
+        "owner_tid": "12345",
+        "title": "Owned event",
+        "status": "open",
+        "capacity": 3,
+        "participants": {},
+    }
+    memory_db.reference("streamdex_events/event_123").set(event)
+
+    assert not events._set_owned_event_status("event_123", "99999", "closed")
+    assert memory_db.reference("streamdex_events/event_123/status").get() == "open"
+    assert not events._delete_owned_event("event_123", "99999")
+    assert memory_db.reference("streamdex_events/event_123").get()["owner_tid"] == "12345"
+
+    assert events._set_owned_event_status("event_123", "12345", "closed")
+    assert memory_db.reference("streamdex_events/event_123/status").get() == "closed"
+    assert events._set_owned_event_status("event_123", "12345", "open")
+    assert events._delete_owned_event("event_123", "12345")
+    assert memory_db.reference("streamdex_events/event_123").get() is None
+
+
+def test_event_registration_checks_status_capacity_and_duplicate_names_atomically(memory_db):
+    memory_db.reference("streamdex_events/event_123").set({
+        "owner_tid": "12345",
+        "title": "Full soon",
+        "status": "open",
+        "capacity": 1,
+        "participants": {},
+    })
+    events._register_event_participant("event_123", "FirstPerson", "Twitch", "11111")
+    saved = memory_db.reference("streamdex_events/event_123/participants").get()
+    assert len(saved) == 1
+    participant = next(iter(saved.values()))
+    assert participant["registrant_tid"] == "11111"
+
+    with pytest.raises(ValueError, match="voll"):
+        events._register_event_participant("event_123", "SecondPerson", "Discord", "22222")
+    assert len(memory_db.reference("streamdex_events/event_123/participants").get()) == 1
+
+    memory_db.reference("streamdex_events/event_123").update({"capacity": 2})
+    with pytest.raises(ValueError, match="bereits angemeldet"):
+        events._register_event_participant("event_123", "FirstPerson", "Twitch", "33333")
+
+    memory_db.reference("streamdex_events/event_123/status").set("closed")
+    with pytest.raises(ValueError, match="geschlossen"):
+        events._register_event_participant("event_123", "ThirdPerson", "Web", "44444")
