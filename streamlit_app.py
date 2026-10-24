@@ -25,6 +25,7 @@ from lurk import lurk_panel
 from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
 from stats_panel import stats_panel
 from streamer_dashboard import handle_twitch_oauth_callback, has_active_streamer_login, render_streamer_dashboard
+from privacy_security import admin_session_is_valid, safe_exception_label
 from supporter import admin_supporter_panel, partner_codes_view, supporter_login, team_chat_panel
 from theme import apply_theme, header_html
 from vacation import start_vacation_bot, vacation_panel
@@ -63,24 +64,58 @@ OPT_OFF = "⛔ gesperrt"
 # ----------------------------------------------------------------------------
 # Zugang: Passwort-Schutz (Streamlit-Community-Cloud-Apps sind sonst per URL erreichbar)
 # ----------------------------------------------------------------------------
+ADMIN_SESSION_TTL_S = 4 * 60 * 60
+ADMIN_MAX_ATTEMPTS = 5
+ADMIN_LOCKOUT_S = 5 * 60
+
+
 def require_login():
+    """Require a time-limited admin session and throttle repeated failures per browser session."""
+    now = time.time()
     if st.session_state.get("auth_ok"):
-        return
+        if admin_session_is_valid(
+            st.session_state.get("admin_authenticated_at"), now, ADMIN_SESSION_TTL_S
+        ):
+            return
+        st.session_state.pop("auth_ok", None)
+        st.session_state.pop("admin_authenticated_at", None)
+
     try:
-        expected = st.secrets["admin"]["password"]
+        locked_until = float(st.session_state.get("admin_lockout_until") or 0)
+    except (TypeError, ValueError):
+        locked_until = 0
+    if locked_until > now:
+        st.error("Zu viele Fehlversuche. Bitte warte einige Minuten und versuche es erneut.")
+        st.stop()
+    if locked_until:
+        st.session_state.pop("admin_lockout_until", None)
+        st.session_state.pop("admin_failed_attempts", None)
+
+    try:
+        expected = str(st.secrets["admin"]["password"])
     except Exception:
-        st.error("`[admin] password` fehlt in den Secrets.")
+        st.error("Die Admin-Anmeldung ist nicht konfiguriert. Bitte prüfe die Server-Secrets.")
         st.stop()
     apply_theme()
     st.markdown(header_html("ADMIN LOGIN", "LOCKED"), unsafe_allow_html=True)
     with st.form("login"):
         pw = st.text_input("Passwort", type="password")
         if st.form_submit_button("Anmelden"):
-            if hmac.compare_digest(pw.encode(), str(expected).encode()):
+            if hmac.compare_digest(pw.encode("utf-8"), expected.encode("utf-8")):
                 st.session_state["auth_ok"] = True
+                st.session_state["admin_authenticated_at"] = now
+                st.session_state.pop("admin_failed_attempts", None)
+                st.session_state.pop("admin_lockout_until", None)
                 st.rerun()
-            time.sleep(1.0)
-            st.error("Falsches Passwort.")
+            attempts = int(st.session_state.get("admin_failed_attempts") or 0) + 1
+            if attempts >= ADMIN_MAX_ATTEMPTS:
+                st.session_state["admin_failed_attempts"] = 0
+                st.session_state["admin_lockout_until"] = now + ADMIN_LOCKOUT_S
+                st.error("Zu viele Fehlversuche. Die Anmeldung ist für fünf Minuten gesperrt.")
+            else:
+                st.session_state["admin_failed_attempts"] = attempts
+                st.error("Falsches Passwort.")
+            time.sleep(0.35)
     st.stop()
 
 
@@ -120,7 +155,7 @@ def init_firebase():
     try:
         start_vacation_bot(GAMES)
     except Exception as e:
-        print("StreamDex Bot konnte nicht gestartet werden:", e)
+        print(f"StreamDex Bot konnte nicht gestartet werden ({safe_exception_label(e)})")
     return app
 
 
@@ -215,7 +250,7 @@ def streamer_list(search, only_online, ns=""):
     try:
         rows = load_streamers(ns)
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
         return
     online_count = sum(1 for r in rows if r["online"])
     st.caption(f"🟢 {online_count} online · {len(rows)} registriert")
@@ -238,7 +273,7 @@ def chat_messages(tid, ns=""):
     try:
         msgs = load_messages(tid, ns)
     except Exception as e:
-        st.error(f"Chat konnte nicht geladen werden: {e}")
+        st.error("Der Support-Chat konnte nicht geladen werden. Bitte versuche es erneut.")
         return
     box = st.container(height=520, border=True)
     with box:
@@ -273,7 +308,7 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
         try:
             send_admin_message(tid, prompt, sender_name, ns)
         except Exception as e:
-            st.error(f"Senden fehlgeschlagen: {e}")
+            st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es erneut.")
     with messages_area:
         chat_messages(tid, ns)
 
@@ -293,7 +328,7 @@ def games_panel():
         g_streamers = db.reference("game_flags/streamers").get() or {}
         rows = load_streamers()
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
         return
 
     st.subheader("🌍 Global")
@@ -369,7 +404,7 @@ def bans_panel(ns=""):
         bans_tw = db.reference("bans/twitch").get() or {}
         bans_hw = db.reference("bans/hwid").get() or {}
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
         return
 
     st.subheader("🚫 Streamer ausschließen")
@@ -440,7 +475,7 @@ def support_main():
         try:
             partner_codes_view()
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_beta:
         try:
             t_apps, t_testers = st.tabs(["📝 Bewerbungen", "🧪 Beta-Tester"])
@@ -449,7 +484,7 @@ def support_main():
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_fb:
         feedback_panel(me["name"], is_admin=False, tool="streamdex")
     with tab_team:
@@ -461,6 +496,8 @@ def main():
     # Callback vor allen anderen Routen verarbeiten, damit Code und State nie als Shop-URL landen.
     if "code" in st.query_params or "error" in st.query_params:
         st.set_page_config(page_title="StreamDex Twitch Login", page_icon="🟣", layout="wide")
+        # The one-time OAuth state is checked against Firebase before exchanging the code.
+        init_firebase()
         if handle_twitch_oauth_callback():
             st.rerun()
         return
@@ -568,7 +605,7 @@ def main():
         try:
             vacation_panel(ADMIN_NAME)
         except Exception as e:
-            st.error(f"Urlaubsmodus nicht verfügbar: {e}")
+            st.error("Der Urlaubsmodus ist gerade nicht verfügbar. Bitte versuche es erneut.")
         left, right = st.columns([1, 2], gap="large")
         with left:
             st.subheader("Streamer")
@@ -590,7 +627,7 @@ def main():
         try:
             stats_panel(load_streamers(), GAMES)
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_games:
         games_panel()
     with tab_shop:
@@ -605,7 +642,7 @@ def main():
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_fb:
         feedback_panel(ADMIN_NAME, is_admin=True, tool="streamdex")
     with tab_bans:
@@ -614,7 +651,7 @@ def main():
         try:
             admin_supporter_panel()
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_team:
         team_chat_panel(ADMIN_NAME)
 

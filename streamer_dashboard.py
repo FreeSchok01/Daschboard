@@ -31,6 +31,16 @@ from clips_manager import render_clips_manager
 from community_events import render_community_integrations
 from theme import render_empty_state, render_os_navigation
 from onboarding import render_first_steps, render_guided_tour
+from privacy_security import (
+    collect_user_shared_data,
+    is_valid_twitch_id,
+    make_signed_oauth_state,
+    oauth_state_key,
+    oauth_state_record_is_active,
+    plan_shared_account_deletions,
+    safe_exception_label,
+    verify_signed_oauth_state,
+)
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -183,44 +193,63 @@ def _twitch_credentials():
 
 def _make_twitch_state(client_secret):
     """Erzeugt einen zeitlich begrenzten, signierten OAuth-state-Wert."""
-    timestamp = str(int(time.time()))
-    nonce = secrets.token_urlsafe(24)
-    payload = f"{timestamp}.{nonce}"
-    signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{payload}.{signature}"
+    return make_signed_oauth_state(client_secret)
 
 
 def _valid_twitch_state(state, client_secret):
     """Prüft Signatur und Ablaufzeit des OAuth-state-Werts."""
-    if not isinstance(state, str):
-        return False
-    pieces = state.split(".")
-    if len(pieces) != 3:
-        return False
+    return verify_signed_oauth_state(
+        state, client_secret, max_age_seconds=TWITCH_STATE_MAX_AGE_S
+    )
 
-    timestamp_text, nonce, supplied_signature = pieces
-    if not nonce or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
-        return False
+
+def _register_twitch_state(state):
+    """Store only a SHA-256 digest of a pending OAuth state and prune expired entries."""
+    now_ms = int(time.time() * 1000)
+    root = db.reference("streamdex_oauth_states")
+    records = root.get() or {}
+    if isinstance(records, dict):
+        for key, record in list(records.items()):
+            if not oauth_state_record_is_active(record, now_ms):
+                try:
+                    root.child(str(key)).delete()
+                except Exception:
+                    pass
+    digest = oauth_state_key(state)
+    root.child(digest).set({
+        "issued_at_ms": now_ms,
+        "expires_at_ms": now_ms + TWITCH_STATE_MAX_AGE_S * 1000,
+        "consumed": False,
+    })
+
+
+def _consume_twitch_state(state):
+    """Atomically consume an OAuth state once; raw state values are never persisted."""
+    digest = oauth_state_key(state)
+    ref = db.reference(f"streamdex_oauth_states/{digest}")
+    outcome = {"accepted": False}
+    now_ms = int(time.time() * 1000)
+
+    def consume(current):
+        outcome["accepted"] = False
+        if not oauth_state_record_is_active(current, now_ms):
+            return current
+        outcome["accepted"] = True
+        updated = dict(current)
+        updated["consumed"] = True
+        updated["consumed_at_ms"] = now_ms
+        return updated
+
     try:
-        timestamp = int(timestamp_text)
-    except (TypeError, ValueError):
+        ref.transaction(consume)
+    except Exception:
         return False
-
-    age = int(time.time()) - timestamp
-    if age < -60 or age > TWITCH_STATE_MAX_AGE_S:
-        return False
-
-    payload = f"{timestamp_text}.{nonce}"
-    expected_signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected_signature, supplied_signature)
+    if outcome["accepted"]:
+        try:
+            ref.delete()
+        except Exception:
+            pass
+    return bool(outcome["accepted"])
 
 
 def _twitch_authorization_url():
@@ -231,6 +260,11 @@ def _twitch_authorization_url():
         return None, str(exc)
 
     state = _make_twitch_state(client_secret)
+    try:
+        _register_twitch_state(state)
+    except Exception as exc:
+        print(f"[dashboard] OAuth state registration failed ({safe_exception_label(exc)})")
+        return None, "Die Twitch-Anmeldung ist gerade nicht verfügbar. Bitte versuche es später erneut."
     params = {
         "client_id": client_id,
         "redirect_uri": TWITCH_REDIRECT_URI,
@@ -270,7 +304,7 @@ def _twitch_http_json(url, method="GET", form=None, headers=None):
 
 
 def handle_twitch_oauth_callback():
-    """Verarbeitet Twitch ?code=...; gibt False zurück, wenn kein Callback vorliegt."""
+    """Verarbeitet einen Twitch-Callback; OAuth-state ist signiert, kurzlebig und einmalig."""
     has_code = "code" in st.query_params
     has_error = "error" in st.query_params
     if not has_code and not has_error:
@@ -287,23 +321,26 @@ def handle_twitch_oauth_callback():
         st.query_params["dashboard"] = "1"
         return True
 
-    if provider_error:
-        if provider_error == "access_denied":
-            return _return_to_dashboard("Du hast die Anmeldung bei Twitch abgebrochen.")
-        return _return_to_dashboard(
-            "Twitch hat die Anmeldung abgelehnt. Prüfe die Redirect-URL in der Twitch Developer Console."
-        )
-
-    if not code or not state:
-        return _return_to_dashboard(
-            "Der Twitch-Rückweg war unvollständig. Bitte starte die Anmeldung erneut."
-        )
-
     try:
         client_id, client_secret = _twitch_credentials()
-        if not _valid_twitch_state(state, client_secret):
+        if not state or not _valid_twitch_state(state, client_secret):
             return _return_to_dashboard(
-                "Der Twitch-Anmeldelink ist abgelaufen oder ungültig. Bitte klicke erneut auf „Mit Twitch anmelden“."
+                "Der Twitch-Anmeldelink ist abgelaufen oder ungültig. Bitte starte die Anmeldung erneut."
+            )
+        if not _consume_twitch_state(state):
+            return _return_to_dashboard(
+                "Dieser Twitch-Anmeldelink wurde bereits verwendet oder ist abgelaufen. Bitte starte die Anmeldung erneut."
+            )
+
+        if provider_error:
+            if provider_error == "access_denied":
+                return _return_to_dashboard("Du hast die Anmeldung bei Twitch abgebrochen.")
+            return _return_to_dashboard(
+                "Twitch hat die Anmeldung abgelehnt. Bitte starte sie erneut."
+            )
+        if not code:
+            return _return_to_dashboard(
+                "Der Twitch-Rückweg war unvollständig. Bitte starte die Anmeldung erneut."
             )
 
         token_data = _twitch_http_json(
@@ -320,18 +357,18 @@ def handle_twitch_oauth_callback():
         )
         access_token = str(token_data.get("access_token", "") or "")
         if not access_token:
-            raise RuntimeError("Twitch hat kein Zugriffstoken zurückgegeben.")
+            raise RuntimeError("Missing token")
 
         validation = _twitch_http_json(
             TWITCH_VALIDATE_URL,
             headers={"Authorization": f"OAuth {access_token}"},
         )
         if str(validation.get("client_id", "")) != client_id:
-            raise RuntimeError("Das Twitch-Token gehört nicht zur konfigurierten Anwendung.")
+            raise RuntimeError("Token application mismatch")
 
         twitch_id = str(validation.get("user_id", "") or "")
         if not TID_RE.fullmatch(twitch_id):
-            raise RuntimeError("Twitch hat keine gültige Benutzer-ID zurückgegeben.")
+            raise RuntimeError("Invalid Twitch user ID")
 
         user_data = _twitch_http_json(
             TWITCH_USERS_URL,
@@ -342,29 +379,29 @@ def handle_twitch_oauth_callback():
         )
         users = user_data.get("data", [])
         if not isinstance(users, list) or not users or not isinstance(users[0], dict):
-            raise RuntimeError("Twitch konnte dein Profil nicht zurückgeben.")
+            raise RuntimeError("Missing Twitch profile")
 
         user = users[0]
         if str(user.get("id", "")) != twitch_id:
-            raise RuntimeError("Die Profil-ID stimmt nicht mit dem validierten Twitch-Token überein.")
+            raise RuntimeError("Twitch profile ID mismatch")
 
-        # Tokens werden nicht dauerhaft in Firebase gespeichert; sie verbleiben nur in der laufenden Sitzung.
+        # Start a fresh authenticated session, never reuse an earlier account's tokens.
+        _clear_oauth_tokens()
         st.session_state["authenticated_tid"] = twitch_id
         st.session_state["authenticated_at"] = time.time()
         st.session_state["auth_method"] = "twitch"
         st.session_state["twitch_profile"] = {
             "id": twitch_id,
-            "login": str(user.get("login", "") or ""),
-            "display_name": str(user.get("display_name", "") or user.get("login", "") or twitch_id),
-            "picture": str(user.get("profile_image_url", "") or ""),
+            "login": str(user.get("login", "") or "")[:100],
+            "display_name": str(user.get("display_name", "") or user.get("login", "") or twitch_id)[:100],
+            "picture": str(user.get("profile_image_url", "") or "")[:1000],
         }
-        # OAuth-Tokens bleiben ausschließlich in der laufenden, serverseitigen Sitzung.
-        # Sie werden nicht in Firebase gespeichert oder in die Oberfläche ausgegeben.
+        # Tokens remain only in this server-side Streamlit session.
         st.session_state["twitch_oauth_tid"] = twitch_id
         st.session_state["twitch_oauth_access_token"] = access_token
         st.session_state["twitch_oauth_refresh_token"] = str(token_data.get("refresh_token", "") or "")
         try:
-            expires_in = max(60, int(token_data.get("expires_in") or 14400))
+            expires_in = max(60, min(int(token_data.get("expires_in") or 14400), 86400))
         except (TypeError, ValueError):
             expires_in = 14400
         st.session_state["twitch_oauth_expires_at"] = time.time() + expires_in
@@ -376,11 +413,30 @@ def handle_twitch_oauth_callback():
         return _return_to_dashboard()
 
     except Exception as exc:
-        # Keine Secrets, Access-Tokens oder Response-Bodies ins UI schreiben.
-        detail = str(exc)
-        if not detail or any(k in detail.lower() for k in ("client_secret", "access_token", "refresh_token")):
-            detail = "Twitch konnte den Autorisierungscode nicht verifizieren."
-        return _return_to_dashboard(f"Twitch-Anmeldung fehlgeschlagen: {detail[:220]}")
+        # Never show exception details, provider response bodies, or tokens in the browser/log.
+        print(f"[dashboard] Twitch OAuth callback failed ({safe_exception_label(exc)})")
+        return _return_to_dashboard(
+            "Die Twitch-Anmeldung konnte nicht abgeschlossen werden. Bitte starte die Anmeldung erneut."
+        )
+
+
+def _clear_oauth_tokens():
+    """Clear all Twitch OAuth credentials and scopes from the server-side session."""
+    for key in (
+        "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+        "twitch_oauth_expires_at", "twitch_oauth_scopes",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _clear_authenticated_session():
+    """Logout/expiry cleanup; session credentials must not survive authentication changes."""
+    _clear_oauth_tokens()
+    for key in (
+        "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
+        "acct_data", "dashboard_reauth_required", "sd_wheel_result",
+    ):
+        st.session_state.pop(key, None)
 
 
 def _render_twitch_login():
@@ -401,12 +457,13 @@ def _render_twitch_login():
 def _verify_and_consume_token(token: str):
     """Prüft einen Login-Token und löscht ihn atomar (Einmal-Nutzung).
     Gibt die Twitch-ID zurück oder None. Der Grund einer Ablehnung wird nur auf der Serverkonsole geloggt."""
-    def _fail(reason):
-        print(f"[dashboard] Token abgelehnt: {reason}")   # nur Streamlit-Log, nicht im Browser sichtbar
+    def _fail(category):
+        # Keep diagnostics categorical: never log the supplied token or database payload.
+        print(f"[dashboard] Einmal-Token abgelehnt ({category})")
         return None
 
-    if not isinstance(token, str) or not TOKEN_RE.match(token):
-        return _fail(f"Format falsch (Länge {len(token) if isinstance(token, str) else '-'})")
+    if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        return _fail("invalid_format")
 
     consumed = {}
 
@@ -423,8 +480,8 @@ def _verify_and_consume_token(token: str):
     ref = db.reference(f"dash_tokens/{token}")
     try:
         ref.transaction(_take)
-    except Exception as e:
-        return _fail(f"Transaktion fehlgeschlagen: {type(e).__name__}: {e}")
+    except Exception as exc:
+        return _fail(f"transaction_error:{safe_exception_label(exc)}")
     try:
         ref.delete()   # Markierung entfernen (Token ist ohnehin schon unbrauchbar)
     except Exception:
@@ -432,20 +489,19 @@ def _verify_and_consume_token(token: str):
 
     data = consumed.get("data")
     if not isinstance(data, dict):
-        return _fail(f"Kein Eintrag gefunden (data={data!r}). Token schon eingelöst, "
-                     "oder das Dashboard liest in einer anderen Datenbank.")
+        return _fail("not_found_or_already_used")
 
     try:
         created_at = int(data.get("ts") or 0)
     except (TypeError, ValueError):
-        return _fail(f"ts ungültig: {data!r}")
+        return _fail("invalid_timestamp")
     age_ms = int(time.time() * 1000) - created_at
-    if not created_at or age_ms > TOKEN_MAX_AGE_MS:
-        return _fail(f"Abgelaufen: Alter {age_ms / 1000:.0f} s (erlaubt {TOKEN_MAX_AGE_MS // 1000} s), ts={created_at}")
+    if not created_at or age_ms < -60_000 or age_ms > TOKEN_MAX_AGE_MS:
+        return _fail("expired_or_invalid_timestamp")
 
     tid = str(data.get("tid") or "")
-    if not TID_RE.match(tid):
-        return _fail(f"tid ungültig: {tid!r}")
+    if not TID_RE.fullmatch(tid):
+        return _fail("invalid_user_id")
     return tid
 
 
@@ -705,22 +761,32 @@ _DELETE_PATHS = [
     "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
     "support_read/{t}", "giveaway_log/{t}",
-    "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
-    "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
+    "radar_watchlists/{t}", "radar_analytics/{t}", "streamdex_planner/{t}",
+    "streamdex_ideas/{t}", "streamdex_brackets/{t}", "streamdex_wheel/{t}",
+    "streamdex_goals/{t}", "streamdex_modlog/{t}", "streamdex_modteam/{t}",
+    "streamdex_clips/{t}", "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
     "creator_profiles/{t}", "presence/{t}",
 ]
-# Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
+# Kauf-/Freischaltungsdaten bleiben bewusst erhalten.
 _KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
+_SHARED_ACCOUNT_ROOTS = (
+    "feedback_inbox",
+    "streamdex_community_wishlist",
+    "community_polls",
+    "streamdex_quiz_rooms",
+    "streamdex_events",
+)
 
 ACCOUNT_DATA_TABLE = """
 | Was | Wozu |
 |---|---|
-| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität, Website-Login-Zeitpunkt und -Zähler, direkte Tool-Seitenaufrufe | Login, Status-Anzeige, Zuordnung deiner Daten und Nutzungsstatistik |
-| Hardware-Kennungen (nur als Hash) | Sperrliste gegen Missbrauch |
-| Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
-| Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
+| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität und Website-Login-Zeitpunkte | Login, Status-Anzeige und Zuordnung deiner Daten |
+| Direkte Tool-Aufrufe und gespeicherte Einträge der StreamDex-Werkzeuge | Nutzungsübersicht und persönliche Werkzeuge |
+| Zähler (Giveaways, Check-ins, Spins, …), Tagesstände und Giveaway-Verlauf | Statistiken im Dashboard |
+| Eigene Feedback-Beiträge, Community-Wünsche, Umfragen, Quiz-Antworten und Event-Anmeldungen | Community-Funktionen |
 | Support-Nachrichten und Feedback | Support |
-| Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
+| Kauf- und Freischaltungsdaten | Games und Features, die du freigeschaltet hast; bleiben bei Datenlöschung erhalten |
+| Lokal gespeicherte Einstellungen und Logs deiner Desktop-App | Werden nicht auf dem StreamDex-Webserver gespeichert |
 """
 
 
@@ -736,8 +802,15 @@ def _account_area_label(path):
         "lurk": "Lurk-Daten",
         "support_read": "Support-Lesestatus",
         "giveaway_log": "Giveaway-Verlauf",
+        "radar_watchlists": "Radar-Watchlist",
         "radar_analytics": "Insight-Verläufe",
         "streamdex_planner": "Planner-Termine",
+        "streamdex_ideas": "StreamDex-Ideen",
+        "streamdex_brackets": "Turnierdaten",
+        "streamdex_wheel": "Glücksrad-Daten",
+        "streamdex_goals": "Ziele",
+        "streamdex_modlog": "Moderationsprotokoll",
+        "streamdex_modteam": "Moderationsteam",
         "streamdex_clips": "Clip-Sammlung",
         "streamdex_web_auth": "Web-Anmeldedaten",
         "streamdex_tool_usage": "Nutzungsstatistiken",
@@ -746,7 +819,9 @@ def _account_area_label(path):
         "creator_profile_slugs": "öffentlicher Profil-Link",
         "streamdex_events": "Community-Events",
         "feedback_inbox": "Feedback-Einträge",
+        "streamdex_community_wishlist": "Community-Wünsche",
         "community_polls": "Community-Umfragen",
+        "streamdex_quiz_rooms": "Quizräume und Antworten",
     }
     return labels.get(root, "Datenbereich")
 
@@ -765,6 +840,8 @@ def _safe_get(path, errors=None):
 
 def _build_account_export_json(tid, data, exported_at=None):
     """Build the account JSON export in one testable, deterministic place."""
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Ungültige Twitch-ID für den Datenexport.")
     payload = {
         "exportiert_am": exported_at or datetime.now(TZ).isoformat(timespec="seconds"),
         "twitch_id": str(tid),
@@ -775,17 +852,37 @@ def _build_account_export_json(tid, data, exported_at=None):
 
 
 def _load_feedback(tid):
-    """Feedback-Einträge dieser Twitch-ID. Mit Index auf 'tid' direkt, sonst Fallback über 'ts' (letzte 1000)."""
-    ref = db.reference("feedback_inbox")
-    try:
-        data = ref.order_by_child("tid").equal_to(str(tid)).get() or {}
-    except Exception:
-        data = ref.order_by_child("ts").limit_to_last(1000).get() or {}
-    return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
+    """Load all feedback entries belonging to this account, not only the latest page."""
+    data = db.reference("feedback_inbox").get() or {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: value for key, value in data.items()
+        if isinstance(value, dict) and str(value.get("tid") or "") == str(tid)
+    }
+
+
+def _read_shared_account_roots(errors=None):
+    """Load the shared collections needed to export/delete this account's own contributions."""
+    roots = {}
+    errors = errors if errors is not None else []
+    for path in _SHARED_ACCOUNT_ROOTS:
+        try:
+            value = db.reference(path).get() or {}
+            roots[path] = value if isinstance(value, dict) else {}
+        except Exception:
+            roots[path] = {}
+            message = f"{_account_area_label(path)} konnten nicht vollständig geprüft werden."
+            if message not in errors:
+                errors.append(message)
+    return roots
 
 
 def _collect_account_data(tid, errors=None):
-    """Collect the current account's data and optionally return readable per-area errors."""
+    """Collect private records and only the current user's contribution to shared collections."""
+    tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Ungültige Twitch-ID für den Datenexport.")
     errors = errors if errors is not None else []
     out = {}
     for path in _KEEP_PATHS + _DELETE_PATHS:
@@ -793,55 +890,56 @@ def _collect_account_data(tid, errors=None):
         val = _safe_get(p, errors=errors)
         if val not in (None, {}, []):
             out[p] = val
-    try:
-        fb = _load_feedback(tid)
-        if fb:
-            out["feedback_inbox (nur deine Einträge)"] = fb
-    except Exception:
-        message = "Feedback-Einträge konnten nicht gelesen werden."
-        if message not in errors:
-            errors.append(message)
-    events = _safe_get("streamdex_events", errors=errors)
-    if isinstance(events, dict):
-        own_events = {
-            key: value for key, value in events.items()
-            if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)
-        }
-        if own_events:
-            out["streamdex_events (eigene Events)"] = own_events
+
+    profile = out.get(f"creator_profiles/{tid}")
+    old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+        slug_owner = _safe_get(f"creator_profile_slugs/{old_slug}", errors=errors)
+        if str(slug_owner or "") == tid:
+            out[f"creator_profile_slugs/{old_slug}"] = tid
+
+    shared_roots = _read_shared_account_roots(errors)
+    shared_data = collect_user_shared_data(tid, shared_roots)
+    if shared_data:
+        out["community_activity (nur deine Beiträge, Stimmen, Antworten und Anmeldungen)"] = shared_data
     return out
 
+
 def _delete_account_data(tid):
-    """Delete account-owned data and return (number of removals, readable error messages)."""
+    """Delete only this account's private data and contributions to shared collections."""
+    tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Ungültige Twitch-ID für die Kontolöschung.")
+
     removed, errors = 0, []
-
-    try:
-        for key in list(_load_feedback(tid)):
-            db.reference(f"feedback_inbox/{key}").delete()
-            removed += 1
-    except Exception:
-        errors.append("Deine Feedback-Einträge konnten nicht gelöscht werden.")
-
+    # Remove the public slug while the private profile still exists.
     try:
         profile = db.reference(f"creator_profiles/{tid}").get() or {}
         old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
-        if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
-            db.reference(f"creator_profile_slugs/{old_slug}").delete()
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+            slug_ref = db.reference(f"creator_profile_slugs/{old_slug}")
+            if str(slug_ref.get() or "") == tid:
+                slug_ref.delete()
+                removed += 1
     except Exception:
         errors.append("Dein öffentlicher Profil-Link konnte nicht freigegeben werden.")
 
-    try:
-        global_events = db.reference("streamdex_events").get() or {}
-        if isinstance(global_events, dict):
-            for event_id, event in global_events.items():
-                if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
-                    db.reference(f"streamdex_events/{event_id}").delete()
-                    removed += 1
-    except Exception:
-        errors.append("Deine Community-Events konnten nicht gelöscht werden.")
+    shared_roots = _read_shared_account_roots(errors)
+    for target in plan_shared_account_deletions(tid, shared_roots):
+        try:
+            ref = db.reference(target)
+            if ref.get() is not None:
+                ref.delete()
+                removed += 1
+        except Exception:
+            errors.append("Community-Beiträge oder eigene Stimmen konnten nicht vollständig gelöscht werden.")
 
     for path in _DELETE_PATHS:
         p = path.format(t=tid)
+        # Presence is deliberately last: keep the account recognizable for a retry if
+        # any previous deletion failed. A partial deletion must never look successful.
+        if p == f"presence/{tid}" and errors:
+            continue
         try:
             ref = db.reference(p)
             if ref.get() is not None:
