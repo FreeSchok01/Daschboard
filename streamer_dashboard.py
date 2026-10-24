@@ -169,7 +169,7 @@ TWITCH_STATE_MAX_AGE_S = 10 * 60
 TWITCH_BROWSER_COOKIE = "streamdex_oauth_browser"
 
 
-def _oauth_browser_binding_status():
+def _oauth_browser_binding_status(create=False):
     """Return (controller_ready, browser binding); cookie is browser-local, not session-local."""
     try:
         controller = CookieController(key="streamdex_oauth_cookie_controller")
@@ -181,28 +181,24 @@ def _oauth_browser_binding_status():
     value = cookies.get(TWITCH_BROWSER_COOKIE) if isinstance(cookies, dict) else None
     if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{32,100}", value):
         return True, value
+    if create:
+        try:
+            controller.set(
+                TWITCH_BROWSER_COOKIE,
+                secrets.token_urlsafe(32),
+                max_age=TWITCH_STATE_MAX_AGE_S,
+                secure=True,
+                same_site="lax",
+            )
+        except Exception as exc:
+            print(f"[dashboard] OAuth browser cookie setup failed ({safe_exception_label(exc)})")
     return True, None
 
 
 def _ensure_oauth_browser_binding():
     """Create a short-lived, random browser cookie before showing the OAuth link."""
-    ready, binding = _oauth_browser_binding_status()
-    if not ready:
-        return None
-    if binding:
-        return binding
-    try:
-        controller = CookieController(key="streamdex_oauth_cookie_controller")
-        controller.set(
-            TWITCH_BROWSER_COOKIE,
-            secrets.token_urlsafe(32),
-            max_age=TWITCH_STATE_MAX_AGE_S,
-            secure=True,
-            same_site="lax",
-        )
-    except Exception as exc:
-        print(f"[dashboard] OAuth browser cookie setup failed ({safe_exception_label(exc)})")
-    return None
+    ready, binding = _oauth_browser_binding_status(create=True)
+    return binding if ready else None
 
 
 def _oauth_browser_binding_key(binding):
