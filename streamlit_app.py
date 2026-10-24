@@ -63,24 +63,65 @@ OPT_OFF = "⛔ gesperrt"
 # ----------------------------------------------------------------------------
 # Zugang: Passwort-Schutz (Streamlit-Community-Cloud-Apps sind sonst per URL erreichbar)
 # ----------------------------------------------------------------------------
+ADMIN_SESSION_MAX_AGE_SECONDS = 4 * 60 * 60
+ADMIN_LOGIN_MAX_FAILURES = 5
+ADMIN_LOGIN_LOCK_SECONDS = 120
+
+
 def require_login():
+    """Password gate with a fixed maximum lifetime and per-session failed-login cooldown."""
+    now = time.time()
     if st.session_state.get("auth_ok"):
-        return
+        try:
+            issued = float(st.session_state.get("admin_authenticated_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            issued = 0
+        age = now - issued
+        if issued > 0 and 0 <= age <= ADMIN_SESSION_MAX_AGE_SECONDS:
+            return
+        st.session_state.pop("auth_ok", None)
+        st.session_state.pop("admin_authenticated_at", None)
+        st.session_state["admin_session_expired"] = True
+
     try:
-        expected = st.secrets["admin"]["password"]
+        expected = str(st.secrets["admin"]["password"])
     except Exception:
         st.error("`[admin] password` fehlt in den Secrets.")
         st.stop()
+
+    locked_until = 0
+    try:
+        locked_until = float(st.session_state.get("admin_locked_until") or 0)
+    except (TypeError, ValueError, OverflowError):
+        locked_until = 0
+
     apply_theme()
     st.markdown(header_html("ADMIN LOGIN", "LOCKED"), unsafe_allow_html=True)
+    if st.session_state.pop("admin_session_expired", False):
+        st.warning("Deine Admin-Sitzung ist aus Sicherheitsgründen abgelaufen. Bitte melde dich erneut an.")
+    if locked_until > now:
+        remaining = max(1, int(locked_until - now))
+        st.error(f"Zu viele fehlgeschlagene Anmeldeversuche. Bitte warte noch {remaining} Sekunden.")
+        st.stop()
+
     with st.form("login"):
         pw = st.text_input("Passwort", type="password")
         if st.form_submit_button("Anmelden"):
-            if hmac.compare_digest(pw.encode(), str(expected).encode()):
+            if hmac.compare_digest(pw.encode("utf-8"), expected.encode("utf-8")):
                 st.session_state["auth_ok"] = True
+                st.session_state["admin_authenticated_at"] = time.time()
+                st.session_state.pop("admin_login_failures", None)
+                st.session_state.pop("admin_locked_until", None)
                 st.rerun()
-            time.sleep(1.0)
-            st.error("Falsches Passwort.")
+
+            failures = int(st.session_state.get("admin_login_failures") or 0) + 1
+            if failures >= ADMIN_LOGIN_MAX_FAILURES:
+                st.session_state["admin_login_failures"] = 0
+                st.session_state["admin_locked_until"] = time.time() + ADMIN_LOGIN_LOCK_SECONDS
+                st.error("Zu viele fehlgeschlagene Anmeldeversuche. Der Login ist für zwei Minuten gesperrt.")
+            else:
+                st.session_state["admin_login_failures"] = failures
+                st.error("Falsches Passwort.")
     st.stop()
 
 
