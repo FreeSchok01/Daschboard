@@ -21,4 +21,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile application modules
-        run: python -m py_compile streamlit_app.py streamer_dashboard.py admin_users.py radar.py feedback_hub.py streamdex_suite.py beta_apply.py downloads.py planner.py creator_profile.py legacy.py clips_manager.py community_events.py
+        run: python -m py_compile streamlit_app.py streamer_dashboard.py admin_users.py radar.py feedback_hub.py streamdex_suite.py streamdex_security.py beta_apply.py downloads.py planner.py creator_profile.py legacy.py clips_manager.py community_events.py tests/test_security.py
+
+      - name: Run security regression tests
+        run: python -m unittest discover -s tests -v
