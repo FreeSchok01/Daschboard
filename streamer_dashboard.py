@@ -1734,10 +1734,14 @@ def render_streamer_dashboard(games):
     if token_arg:
         valid_tid = _verify_and_consume_token(token_arg)
         if valid_tid:
+            for key in (
+                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+                "twitch_oauth_expires_at", "twitch_oauth_scopes", "twitch_profile", "acct_data",
+            ):
+                st.session_state.pop(key, None)
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
             st.session_state["auth_method"] = "desktop"
-            st.session_state.pop("twitch_profile", None)
             st.session_state.pop("dashboard_reauth_required", None)
             # Token aus URL entfernen für saubere Adresse
             st.query_params.clear()
