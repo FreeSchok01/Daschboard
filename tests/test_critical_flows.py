@@ -120,6 +120,12 @@ class MemoryReference:
     def set(self, value):
         self.database._set(self.path, value)
 
+    def transaction(self, update_fn):
+        current = self.database._get(self.path)
+        updated = update_fn(current)
+        self.database._set(self.path, updated)
+        return {"committed": True, "snapshot": updated}
+
     def update(self, values):
         existing = self.database._get(self.path)
         if not isinstance(existing, dict):
@@ -260,7 +266,7 @@ def test_data_access_is_account_scoped_and_reports_unavailable_areas(memory_db):
     data = streamer_dashboard._collect_account_data("12345", errors=errors)
     assert errors == []
     assert data["stats/12345"] == {"checkins": 7}
-    shared = data["community_activity"]
+    shared = data["community_activity (nur deine Beiträge, Stimmen, Antworten und Anmeldungen)"]
     assert set(shared["feedback"]["submitted"]) == {"fb-own"}
     assert set(shared["events"]["created"]) == {"event-own"}
     assert "fb-other" not in shared["feedback"]["submitted"]
