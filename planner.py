@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 from radar import _app_token, _creator_access_token, _credentials, _helix_get
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -471,6 +472,9 @@ def _render_twitch_schedule_integration(ref, owner_tid, streams, twitch_username
 
 def render_planner(owner_tid, twitch_username="", reauth_url=None):
     """Rendert den Planner ausschließlich für die angemeldete Twitch-ID."""
+    if not has_active_user_session(st.session_state, owner_tid):
+        st.error("Für den Planner ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     try:
         owner = _owner_ref(owner_tid)
         streams = _read_items(owner, "streams")
