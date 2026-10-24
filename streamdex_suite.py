@@ -423,6 +423,45 @@ def _parse_quiz(raw):
     return questions
 
 
+
+def _create_quiz_room(tid, username, title, questions, attempts=10):
+    """Reserve a random quiz code and create its room atomically without overwriting."""
+    uid = _uid(tid)
+    if not uid:
+        raise ValueError("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
+    root = "streamdex_quiz_rooms"
+    for _attempt in range(max(1, min(int(attempts), 25))):
+        code = secrets.token_hex(3).upper()
+        if not QUIZ_CODE_RE.fullmatch(code):
+            continue
+        room = {
+            "code": code,
+            "title": str(title or "").strip()[:100] or "StreamDex Quiz",
+            "created_by": uid,
+            "created_by_name": str(username or uid)[:80],
+            "questions": questions,
+            "created_at": SERVER_TS,
+            "status": "open",
+            "answers": {},
+        }
+        outcome = {"created": False}
+
+        def reserve(current):
+            outcome["created"] = False
+            if current is None:
+                outcome["created"] = True
+                return room
+            return current
+
+        try:
+            db.reference(f"{root}/{code}").transaction(reserve)
+        except Exception:
+            raise RuntimeError("Der Quizraum konnte nicht sicher reserviert werden.") from None
+        if outcome["created"]:
+            return code
+    raise RuntimeError("Es konnte kein freier Quizcode reserviert werden. Bitte versuche es erneut.")
+
+
 def _quiz(tid, username):
     root = "streamdex_quiz_rooms"; _header("StreamDex Quiz", "COMMUNITY QUIZ ROOMS", "Erstelle einen Quizraum, teile den Code und beantworte Multiple-Choice-Fragen.")
     with st.expander("＋ Quizraum erstellen"):
@@ -433,15 +472,7 @@ def _quiz(tid, username):
         if submit:
             try:
                 questions = _parse_quiz(raw)
-                code = ""
-                for _attempt in range(10):
-                    candidate = secrets.token_hex(3).upper()
-                    if not db.reference(f"{root}/{candidate}").get():
-                        code = candidate
-                        break
-                if not code:
-                    raise RuntimeError("Kein freier Quizcode verfügbar.")
-                db.reference(f"{root}/{code}").set({"code": code, "title": title.strip()[:100] or "StreamDex Quiz", "created_by": _uid(tid), "created_by_name": str(username)[:80], "questions": questions, "created_at": SERVER_TS, "status": "open", "answers": {}})
+                code = _create_quiz_room(tid, username, title, questions)
                 st.success(f"Quizraum erstellt – Code: {code}"); st.rerun()
             except ValueError as exc: st.warning(str(exc))
             except Exception: _err()
