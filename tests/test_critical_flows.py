@@ -535,6 +535,133 @@ def test_quiz_answers_and_room_management_are_account_scoped(memory_db):
 
 
 
+
+def test_paypal_checkout_creates_branded_order_and_saves_approval_url(monkeypatch, memory_db):
+    fake_st = SimpleNamespace(secrets={
+        "paypal": {
+            "client_id": "sandbox-client",
+            "client_secret": "sandbox-secret",
+            "mode": "sandbox",
+            "brand_name": "StreamDex",
+        }
+    })
+    monkeypatch.setattr(shop, "st", fake_st)
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345",
+        "name": "testcreator",
+        "status": "pending",
+        "item_name": "Slot Machine",
+        "price": "2.99",
+        "games": ["slot"],
+        "ts": int(time.time() * 1000),
+    })
+    requests_seen = []
+
+    def fake_request(config, method, path, payload=None):
+        requests_seen.append((config, method, path, payload))
+        return {
+            "id": "PAYPALORDER123",
+            "links": [{"rel": "payer-action", "href": "https://www.sandbox.paypal.com/checkoutnow?token=PAYPALORDER123"}],
+        }
+
+    monkeypatch.setattr(shop, "_paypal_api_request", fake_request)
+
+    url = shop.create_paypal_checkout("SDX-ABC234")
+
+    assert url == "https://www.sandbox.paypal.com/checkoutnow?token=PAYPALORDER123"
+    config, method, path, payload = requests_seen[0]
+    assert config["mode"] == "sandbox"
+    assert method == "POST"
+    assert path == "/v2/checkout/orders"
+    assert payload["purchase_units"][0]["amount"] == {"currency_code": "EUR", "value": "2.99"}
+    assert payload["purchase_units"][0]["custom_id"] == "SDX-ABC234"
+    assert payload["payment_source"]["paypal"]["experience_context"]["brand_name"] == "StreamDex"
+    assert payload["payment_source"]["paypal"]["experience_context"]["return_url"].startswith(
+        "https://streamdex.streamlit.app/?"
+    )
+    saved = memory_db.reference("shop/orders/SDX-ABC234").get()
+    assert saved["paypal_order_id"] == "PAYPALORDER123"
+    assert saved["paypal_approval_url"] == url
+    assert saved["payment_provider"] == "paypal"
+
+
+def test_paypal_return_verifies_amount_and_fulfills_once(monkeypatch, memory_db):
+    monkeypatch.setattr(shop, "_paypal_config", lambda: {
+        "mode": "sandbox", "base_url": "https://api-m.sandbox.paypal.com",
+        "client_id": "test", "client_secret": "secret", "brand_name": "StreamDex",
+    })
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345",
+        "name": "testcreator",
+        "status": "pending",
+        "item_name": "Slot Machine",
+        "price": "2.99",
+        "games": ["slot"],
+        "payment_provider": "paypal",
+        "paypal_order_id": "PAYPALORDER123",
+    })
+    calls = []
+
+    def fake_request(config, method, path, payload=None):
+        calls.append((method, path))
+        return {
+            "id": "PAYPALORDER123",
+            "status": "COMPLETED",
+            "purchase_units": [{
+                "custom_id": "SDX-ABC234",
+                "payments": {"captures": [{
+                    "id": "CAPTUREABC123",
+                    "status": "COMPLETED",
+                    "amount": {"currency_code": "EUR", "value": "2.99"},
+                }]},
+            }],
+        }
+
+    monkeypatch.setattr(shop, "_paypal_api_request", fake_request)
+    ok, message = shop.handle_paypal_return("PAYPALORDER123", "PAYER123")
+
+    assert ok is True
+    assert "freigeschaltet" in message
+    assert memory_db.reference("shop/orders/SDX-ABC234/status").get() == "paid"
+    assert memory_db.reference("game_flags/streamers/12345/slot").get() is True
+    assert memory_db.reference("shop/orders/SDX-ABC234/payment_provider").get() == "paypal"
+    assert memory_db.reference("shop/used_paypal_captures/CAPTUREABC123/order").get() == "SDX-ABC234"
+
+    # The same return callback cannot grant the same order a second time or recapture it.
+    again, _ = shop.handle_paypal_return("PAYPALORDER123", "PAYER123")
+    assert again is True
+    assert len(calls) == 1
+
+
+def test_paypal_return_rejects_wrong_amount_without_fulfilment(monkeypatch, memory_db):
+    monkeypatch.setattr(shop, "_paypal_config", lambda: {
+        "mode": "sandbox", "base_url": "https://api-m.sandbox.paypal.com",
+        "client_id": "test", "client_secret": "secret", "brand_name": "StreamDex",
+    })
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345", "name": "testcreator", "status": "pending",
+        "item_name": "Slot Machine", "price": "2.99", "games": ["slot"],
+        "payment_provider": "paypal", "paypal_order_id": "PAYPALORDER123",
+    })
+    monkeypatch.setattr(shop, "_paypal_api_request", lambda *a, **k: {
+        "status": "COMPLETED",
+        "purchase_units": [{
+            "custom_id": "SDX-ABC234",
+            "payments": {"captures": [{
+                "id": "CAPTUREABC123", "status": "COMPLETED",
+                "amount": {"currency_code": "EUR", "value": "0.01"},
+            }]},
+        }],
+    })
+
+    ok, message = shop.handle_paypal_return("PAYPALORDER123")
+
+    assert ok is False
+    assert "Betrag" in message
+    assert memory_db.reference("shop/orders/SDX-ABC234/status").get() == "pending"
+    assert memory_db.reference("game_flags/streamers/12345/slot").get() is None
+
+
 def test_event_registration_prevents_duplicate_authenticated_account(memory_db):
     memory_db.reference("streamdex_events/event_123").set({
         "owner_tid": "12345", "title": "Community", "status": "open", "capacity": 3, "participants": {},
