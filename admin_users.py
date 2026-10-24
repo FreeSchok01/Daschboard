@@ -258,78 +258,119 @@ def render_user_admin():
         "App-Version": u["version"], "Giveaways": u["giveaways"],
         "Teilnahmen": u["participants"], "Beta": "Ja" if u["beta"] else "Nein",
     } for u in visible])
-    st.markdown(f"### Konten ({len(visible)})")
+    st.markdown(f"### Konten als Karten ({len(visible)})")
     if view.empty:
         st.info("Keine Konten entsprechen den aktuellen Filtern.")
     else:
-        st.dataframe(view, hide_index=True, use_container_width=True)
         st.download_button("⬇️ Diese User-Liste als CSV", data=view.to_csv(index=False).encode("utf-8-sig"),
                            file_name="streamdex-user-liste.csv", mime="text/csv", key="admin_users_csv")
-        options = {f"{u['name']} · {u['tid']}": u["tid"] for u in visible}
-        selected_label = st.selectbox("User-Details öffnen", list(options), key="admin_user_detail_pick")
-        selected_tid = options[selected_label]
-        with st.spinner("Tool-Daten werden zusammengeführt …"):
-            detail = _load_user_detail(selected_tid)
-        selected = next((u for u in visible if u["tid"] == selected_tid), {})
-        st.divider()
-        st.markdown(f"## 👤 {str(selected.get('name') or selected_tid)}")
-        st.caption(f"Twitch-ID: {selected_tid} · {selected.get('status', 'Unbekannt')} · Version {selected.get('version', '—')}")
-        login_col, active_col, profile_col, beta_col = st.columns(4)
-        login_col.metric("Website-Logins", _number(detail["web_auth"].get("login_count"), 1 if selected.get("web_login") else 0))
-        active_col.metric("Letzter Website-Login", _fmt_ts(detail["web_auth"].get("last_login_ms")))
-        profile_col.metric("Creator-Profil", "Öffentlich" if detail["profile"].get("published") else ("Vorhanden" if detail["profile"] else "Keins"))
-        beta_col.metric("Beta-Tester", "Ja" if detail["beta"] else "Nein")
-        if detail["profile"]:
-            with st.expander("Creator-Profil-Metadaten"):
-                st.write(f"**Creator-Name:** {detail['profile'].get('display_name') or selected.get('name') or '—'}")
-                st.write(f"**Slug:** {detail['profile'].get('slug') or '—'}")
-                st.write(f"**Aktualisiert:** {_fmt_ts(detail['profile'].get('updated_at'))}")
-        st.markdown("### 🧰 Tool-Nutzung & gespeicherte Daten")
-        st.caption("Gespeicherte Einträge zeigen, ob ein Werkzeug genutzt wurde. Direkte Seitenaufrufe werden ab jetzt gezählt; normale Streamlit-Tabs melden keine zuverlässige Auswahl und werden daher nicht als Aufruf gewertet.")
-        tools_df = pd.DataFrame(detail["tool_rows"])
-        st.dataframe(tools_df, hide_index=True, use_container_width=True)
-        st.download_button("⬇️ Tool-Übersicht als CSV", data=tools_df.to_csv(index=False).encode("utf-8-sig"),
-                           file_name=f"streamdex-tools-{selected_tid}.csv", mime="text/csv", key="admin_user_tools_csv")
-        st.markdown("### 📊 Vorhandene StreamDex-Statistiken")
-        stats = detail["stats"]
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Giveaways", _number(stats.get("giveaways")))
-        m2.metric("Giveaway-Teilnahmen", _number(stats.get("giveaway_participants")))
-        m3.metric("Check-ins", _number(stats.get("checkins")))
-        m4.metric("Slot-Spins", _number(stats.get("slot_spins")))
-        m5, m6, m7, m8 = st.columns(4)
-        m5.metric("Mega-Slot-Spins", _number(stats.get("megaslot_spins")))
-        m6.metric("Fänge", _number(stats.get("fish_catches")))
-        m7.metric("Ernten", _number(stats.get("harvests")))
-        m8.metric("Raids", _number(stats.get("raids")))
-        st.markdown("### 🎮 Game-Freigaben")
-        game_keys = sorted(set(detail["global_flags"]) | set(detail["flags"]))
-        if game_keys:
-            game_df = pd.DataFrame([{
-                "Game": key,
-                "Global": "Frei" if detail["global_flags"].get(key) is True else ("Gesperrt" if detail["global_flags"].get(key) is False else "Standard"),
-                "User-Override": "Frei" if detail["flags"].get(key) is True else ("Gesperrt" if detail["flags"].get(key) is False else "Standard"),
-            } for key in game_keys])
-            st.dataframe(game_df, hide_index=True, use_container_width=True)
-        else:
-            st.caption("Keine individuellen Game-Freigaben gefunden.")
-        st.markdown("### 🕘 Website-Aktivität")
-        visit_rows = []
-        for key, label in TOOLS:
-            entry = _dict(detail["tool_usage"].get(key))
-            if _number(entry.get("visit_count")) or entry.get("last_used_ms"):
-                visit_rows.append({"Werkzeug": label, "Aufrufe": _number(entry.get("visit_count")), "Zuletzt geöffnet": _fmt_ts(entry.get("last_used_ms"))})
-        if visit_rows:
-            st.dataframe(pd.DataFrame(visit_rows), hide_index=True, use_container_width=True)
-        else:
-            st.info("Direkte Tool-Aufrufe werden ab jetzt erfasst. Für frühere Besuche gibt es keine verlässliche Verlaufshistorie.")
-        report = {
-            "twitch_id": selected_tid, "name": selected.get("name"), "status": selected.get("status"),
-            "website_login": bool(selected.get("web_login")), "login_count": _number(detail["web_auth"].get("login_count")),
-            "last_web_login": _fmt_ts(detail["web_auth"].get("last_login_ms")), "version": selected.get("version"),
-            "stats": stats, "tool_usage": detail["tool_rows"], "game_flags_global": detail["global_flags"],
-            "game_flags_user": detail["flags"], "profile_published": bool(detail["profile"].get("published")),
-            "beta_tester": bool(detail["beta"]), "record_counts": detail["counts"],
+        st.caption("Klicke bei einem Konto auf „Details anzeigen“, um die zugehörigen Nutzungsdaten, Statistiken und Tool-Einträge zu öffnen.")
+        st.markdown("""
+        <style>
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: rgba(139,92,246,.34);
+            border-radius: 15px;
+            background: linear-gradient(145deg, rgba(30,41,59,.45), rgba(49,29,87,.22));
         }
-        st.download_button("⬇️ User-Bericht als JSON", data=json.dumps(report, ensure_ascii=False, indent=2, default=str),
-                           file_name=f"streamdex-user-{selected_tid}.json", mime="application/json", key="admin_user_report_json")
+        </style>
+        """, unsafe_allow_html=True)
+        card_columns = st.columns(3)
+        for index, user in enumerate(visible):
+            with card_columns[index % len(card_columns)]:
+                with st.container(border=True):
+                    st.markdown(f"#### 👤 {user['name']}")
+                    st.caption(f"Twitch-ID: {user['tid']}")
+                    status_col, login_col = st.columns(2)
+                    status_col.metric("Status", user["status"])
+                    login_col.metric("Web-Logins", user["login_count"] if user["web_login"] else "—")
+                    st.caption(f"Letzte Aktivität: {_fmt_age(user['last_seen_ms'])}")
+                    st.caption(f"Letzter Website-Login: {_fmt_ts(user['last_web_login_ms'])}")
+                    badges = []
+                    if user["beta"]:
+                        badges.append("🧪 Beta-Tester")
+                    if user["web_login"]:
+                        badges.append("🌐 Website-Login")
+                    if user["version"] != "—":
+                        badges.append(f"📦 Version {user['version']}")
+                    if badges:
+                        st.caption(" · ".join(badges))
+                    if st.button("📂 Details anzeigen", key=f"admin_user_card_{user['tid']}",
+                                 use_container_width=True,
+                                 type="primary" if st.session_state.get("admin_user_selected_tid") == user["tid"] else "secondary"):
+                        st.session_state["admin_user_selected_tid"] = user["tid"]
+                        st.rerun()
+
+        selected_tid = st.session_state.get("admin_user_selected_tid")
+        visible_ids = {u["tid"] for u in visible}
+        if selected_tid not in visible_ids:
+            selected_tid = None
+            st.session_state.pop("admin_user_selected_tid", None)
+        if selected_tid and st.button("✕ Detailansicht schließen", key="admin_user_close_detail"):
+            st.session_state.pop("admin_user_selected_tid", None)
+            st.rerun()
+        if selected_tid:
+            with st.spinner("Tool-Daten werden zusammengeführt …"):
+                detail = _load_user_detail(selected_tid)
+            selected = next((u for u in visible if u["tid"] == selected_tid), {})
+            st.divider()
+            st.markdown(f"## 👤 {str(selected.get('name') or selected_tid)}")
+            st.caption(f"Twitch-ID: {selected_tid} · {selected.get('status', 'Unbekannt')} · Version {selected.get('version', '—')}")
+            login_col, active_col, profile_col, beta_col = st.columns(4)
+            login_col.metric("Website-Logins", _number(detail["web_auth"].get("login_count"), 1 if selected.get("web_login") else 0))
+            active_col.metric("Letzter Website-Login", _fmt_ts(detail["web_auth"].get("last_login_ms")))
+            profile_col.metric("Creator-Profil", "Öffentlich" if detail["profile"].get("published") else ("Vorhanden" if detail["profile"] else "Keins"))
+            beta_col.metric("Beta-Tester", "Ja" if detail["beta"] else "Nein")
+            if detail["profile"]:
+                with st.expander("Creator-Profil-Metadaten"):
+                    st.write(f"**Creator-Name:** {detail['profile'].get('display_name') or selected.get('name') or '—'}")
+                    st.write(f"**Slug:** {detail['profile'].get('slug') or '—'}")
+                    st.write(f"**Aktualisiert:** {_fmt_ts(detail['profile'].get('updated_at'))}")
+            st.markdown("### 🧰 Tool-Nutzung & gespeicherte Daten")
+            st.caption("Gespeicherte Einträge zeigen, ob ein Werkzeug genutzt wurde. Direkte Seitenaufrufe werden ab jetzt gezählt; normale Streamlit-Tabs melden keine zuverlässige Auswahl und werden daher nicht als Aufruf gewertet.")
+            tools_df = pd.DataFrame(detail["tool_rows"])
+            st.dataframe(tools_df, hide_index=True, use_container_width=True)
+            st.download_button("⬇️ Tool-Übersicht als CSV", data=tools_df.to_csv(index=False).encode("utf-8-sig"),
+                               file_name=f"streamdex-tools-{selected_tid}.csv", mime="text/csv", key="admin_user_tools_csv")
+            st.markdown("### 📊 Vorhandene StreamDex-Statistiken")
+            stats = detail["stats"]
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Giveaways", _number(stats.get("giveaways")))
+            m2.metric("Giveaway-Teilnahmen", _number(stats.get("giveaway_participants")))
+            m3.metric("Check-ins", _number(stats.get("checkins")))
+            m4.metric("Slot-Spins", _number(stats.get("slot_spins")))
+            m5, m6, m7, m8 = st.columns(4)
+            m5.metric("Mega-Slot-Spins", _number(stats.get("megaslot_spins")))
+            m6.metric("Fänge", _number(stats.get("fish_catches")))
+            m7.metric("Ernten", _number(stats.get("harvests")))
+            m8.metric("Raids", _number(stats.get("raids")))
+            st.markdown("### 🎮 Game-Freigaben")
+            game_keys = sorted(set(detail["global_flags"]) | set(detail["flags"]))
+            if game_keys:
+                game_df = pd.DataFrame([{
+                    "Game": key,
+                    "Global": "Frei" if detail["global_flags"].get(key) is True else ("Gesperrt" if detail["global_flags"].get(key) is False else "Standard"),
+                    "User-Override": "Frei" if detail["flags"].get(key) is True else ("Gesperrt" if detail["flags"].get(key) is False else "Standard"),
+                } for key in game_keys])
+                st.dataframe(game_df, hide_index=True, use_container_width=True)
+            else:
+                st.caption("Keine individuellen Game-Freigaben gefunden.")
+            st.markdown("### 🕘 Website-Aktivität")
+            visit_rows = []
+            for key, label in TOOLS:
+                entry = _dict(detail["tool_usage"].get(key))
+                if _number(entry.get("visit_count")) or entry.get("last_used_ms"):
+                    visit_rows.append({"Werkzeug": label, "Aufrufe": _number(entry.get("visit_count")), "Zuletzt geöffnet": _fmt_ts(entry.get("last_used_ms"))})
+            if visit_rows:
+                st.dataframe(pd.DataFrame(visit_rows), hide_index=True, use_container_width=True)
+            else:
+                st.info("Direkte Tool-Aufrufe werden ab jetzt erfasst. Für frühere Besuche gibt es keine verlässliche Verlaufshistorie.")
+            report = {
+                "twitch_id": selected_tid, "name": selected.get("name"), "status": selected.get("status"),
+                "website_login": bool(selected.get("web_login")), "login_count": _number(detail["web_auth"].get("login_count")),
+                "last_web_login": _fmt_ts(detail["web_auth"].get("last_login_ms")), "version": selected.get("version"),
+                "stats": stats, "tool_usage": detail["tool_rows"], "game_flags_global": detail["global_flags"],
+                "game_flags_user": detail["flags"], "profile_published": bool(detail["profile"].get("published")),
+                "beta_tester": bool(detail["beta"]), "record_counts": detail["counts"],
+            }
+            st.download_button("⬇️ User-Bericht als JSON", data=json.dumps(report, ensure_ascii=False, indent=2, default=str),
+                               file_name=f"streamdex-user-{selected_tid}.json", mime="application/json", key="admin_user_report_json")
