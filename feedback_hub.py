@@ -26,8 +26,31 @@ def _fmt_ts(value):
         return "Gerade eben"
 
 
+def _load_recent(path, order_child, limit):
+    """Load recent records efficiently, with a compatibility fallback if Firebase lacks an index."""
+    try:
+        data = db.reference(path).order_by_child(order_child).limit_to_last(limit).get() or {}
+    except Exception as query_error:
+        # Older Firebase rules may not define .indexOn for ts/created_at yet.
+        # Retry without the indexed query so the community page remains usable.
+        try:
+            data = db.reference(path).get() or {}
+        except Exception:
+            raise query_error
+        if not isinstance(data, dict):
+            return {}
+        def sort_key(pair):
+            value = pair[1] if isinstance(pair[1], dict) else {}
+            try:
+                return int(value.get(order_child) or 0)
+            except (TypeError, ValueError):
+                return 0
+        data = dict(sorted(data.items(), key=sort_key)[-limit:])
+    return data if isinstance(data, dict) else {}
+
+
 def _load_suggestions():
-    data = db.reference("feedback_inbox").order_by_child("ts").limit_to_last(MAX_SUGGESTIONS).get() or {}
+    data = _load_recent("feedback_inbox", "ts", MAX_SUGGESTIONS)
     items = []
     for key, value in data.items():
         if not isinstance(value, dict) or not value.get("community_visible"):
@@ -42,7 +65,7 @@ def _load_suggestions():
 
 
 def _load_my_feedback(tid):
-    data = db.reference("feedback_inbox").order_by_child("ts").limit_to_last(MAX_SUGGESTIONS).get() or {}
+    data = _load_recent("feedback_inbox", "ts", MAX_SUGGESTIONS)
     items = []
     for key, value in data.items():
         if isinstance(value, dict) and str(value.get("tid") or "") == str(tid):
@@ -53,7 +76,7 @@ def _load_my_feedback(tid):
 
 
 def _load_polls():
-    data = db.reference("community_polls").order_by_child("created_at").limit_to_last(MAX_POLLS).get() or {}
+    data = _load_recent("community_polls", "created_at", MAX_POLLS)
     result = []
     for key, value in data.items():
         if not isinstance(value, dict):
@@ -176,15 +199,32 @@ def render_feedback_hub(tid, username):
         unsafe_allow_html=True,
     )
 
+    # Load each section independently so a permission/index problem in one
+    # Firebase collection does not hide the entire feedback hub.
+    load_errors = []
     try:
         suggestions = _load_suggestions()
+    except Exception as exc:
+        suggestions = []
+        load_errors.append(("Community-Vorschläge", exc))
+    try:
         polls = _load_polls()
+    except Exception as exc:
+        polls = []
+        load_errors.append(("Umfragen", exc))
+    try:
         my_items = _load_my_feedback(tid)
-    except Exception:
-        st.error("Feedback-Daten konnten gerade nicht geladen werden. Bitte versuche es erneut.")
-        if st.button("🔄 Erneut laden", key="sd_feedback_reload_error"):
-            st.rerun()
-        return
+    except Exception as exc:
+        my_items = []
+        load_errors.append(("Meine Beiträge", exc))
+
+    for section, exc in load_errors:
+        st.warning(f"{section} konnten nicht geladen werden. Andere Feedback-Bereiche bleiben verfügbar.")
+        # Keep the real cause in Streamlit server logs for diagnosis without
+        # exposing database/rules details to ordinary dashboard users.
+        st.error(f"Technischer Hinweis ({section}): {type(exc).__name__}")
+    if load_errors and st.button("🔄 Erneut laden", key="sd_feedback_reload_error"):
+        st.rerun()
 
     open_polls = [poll for poll in polls if not poll.get("closed")]
     active_suggestions = [item for item in suggestions if item.get("status", "neu") not in ("abgelehnt",)]
@@ -376,15 +416,30 @@ def render_feedback_hub(tid, username):
         if not my_items and not my_polls:
             st.info("Du hast bisher noch kein Feedback und keine Umfrage eingereicht.")
         if my_items:
-            st.markdown("**Feedback und Vorschläge**")
+            st.markdown("**Deine Bugs, Rückmeldungen und Ideen**")
+            st.caption("Hier siehst du den aktuellen Bearbeitungsstand. Wenn das Team den Status ändert, wird er beim nächsten Laden aktualisiert.")
+            status_labels = {
+                "neu": ("🆕 Eingegangen", "Dein Beitrag ist angekommen und wartet auf Prüfung."),
+                "in Arbeit": ("🛠️ In Bearbeitung", "Das Team prüft den Eintrag oder arbeitet an einer Lösung."),
+                "erledigt": ("✅ Erledigt", "Der Eintrag wurde bearbeitet oder umgesetzt."),
+                "abgelehnt": ("🚫 Nicht geplant", "Der Eintrag wird aktuell nicht weiterverfolgt."),
+            }
+            progress = {"neu": 15, "in Arbeit": 55, "erledigt": 100, "abgelehnt": 100}
             for item in my_items[:25]:
                 title_text = str(item.get("title") or str(item.get("text") or "Feedback").splitlines()[0])[:MAX_TITLE]
                 status = str(item.get("status") or "neu")
-                status_label = {"neu": "🆕 Neu", "in Arbeit": "🛠️ In Arbeit", "erledigt": "✅ Erledigt", "abgelehnt": "🚫 Abgelehnt"}.get(status, status)
-                visibility = "Öffentlich" if item.get("community_visible") else "Nur Team"
+                status_label, status_help = status_labels.get(status, (status, "Der aktuelle Status dieses Eintrags."))
+                visibility = "Community-Vorschlag" if item.get("community_visible") else "Privat · nur Team"
+                kind = str(item.get("kind") or "Feedback")
                 with st.container(border=True):
-                    st.markdown(f"**{html.escape(title_text)}**")
-                    st.caption(f"{visibility} · {status_label} · {_fmt_ts(item.get('ts'))}")
+                    st.markdown(f"#### {html.escape(title_text)}")
+                    st.caption(f"{'🐞 Bug' if kind == 'Bug' else ('💡 Idee' if kind == 'Feature-Wunsch' else '💬 Feedback')} · {visibility} · Eingereicht: {_fmt_ts(item.get('ts'))}")
+                    st.markdown(f"**Aktueller Status: {status_label}**")
+                    st.caption(status_help)
+                    if status in progress and status != "abgelehnt":
+                        st.progress(progress[status], text="Bearbeitungsstand")
+                    if item.get("status_changed_at"):
+                        st.caption(f"Status zuletzt aktualisiert: {_fmt_ts(item.get('status_changed_at'))}")
         if my_polls:
             st.markdown("**Deine Umfragen**")
             for poll in [p for p in polls if str(p.get("created_by") or "") == str(tid)]:

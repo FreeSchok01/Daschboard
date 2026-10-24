@@ -33,6 +33,15 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _query_by_child(path, child, value):
+    """Fetch only records matching a user field; never fall back to a full community scan."""
+    try:
+        result = db.reference(path).order_by_child(child).equal_to(str(value)).get()
+        return _dict(result)
+    except Exception:
+        return None
+
+
 def _count(value):
     if isinstance(value, dict):
         return len(value)
@@ -117,13 +126,46 @@ def _tool_row(label, key, records, usage, note=""):
     visit = _dict(usage.get(key))
     return {
         "Werkzeug": label, "Gespeicherte Einträge": int(records or 0),
-        "Direkte Seitenaufrufe": _number(visit.get("visit_count")),
-        "Zuletzt direkt geöffnet": _fmt_ts(visit.get("last_used_ms")),
+        "Sitzungsöffnungen": _number(visit.get("visit_count")),
+        "Zuletzt genutzt": _fmt_ts(visit.get("last_used_ms")),
         "Datenspur": note or ("Daten vorhanden" if records else "Keine gespeicherten Einträge gefunden"),
     }
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_usage_overview():
+    """Aggregate anonymous-by-tool usage counts; never expose individual IDs in the overview."""
+    try:
+        root = _dict(db.reference("streamdex_tool_usage").get())
+    except Exception:
+        return None
+    totals = {key: {"users": 0, "sessions": 0, "last_used_ms": 0} for key, _ in TOOLS}
+    for per_user in root.values():
+        per_user = _dict(per_user)
+        for key, entry in per_user.items():
+            if key not in totals or not isinstance(entry, dict):
+                continue
+            visits = _number(entry.get("visit_count"))
+            last_used = _number(entry.get("last_used_ms"))
+            if visits or last_used:
+                totals[key]["users"] += 1
+                totals[key]["sessions"] += visits
+                totals[key]["last_used_ms"] = max(totals[key]["last_used_ms"], last_used)
+    rows = []
+    for key, label in TOOLS:
+        item = totals[key]
+        rows.append({
+            "Werkzeug": label,
+            "Nutzer mit Nutzung": item["users"],
+            "Sitzungsöffnungen": item["sessions"],
+            "Zuletzt genutzt": _fmt_ts(item["last_used_ms"]),
+        })
+    return sorted(rows, key=lambda row: (row["Nutzer mit Nutzung"], row["Sitzungsöffnungen"]), reverse=True)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def _load_user_detail(tid):
+    """Cache expensive per-user detail aggregation briefly to avoid repeat Firebase reads."""
     p = _dict(_read(f"presence/{tid}"))
     web = _dict(_read(f"streamdex_web_auth/{tid}"))
     stat = _dict(_read(f"stats/{tid}"))
@@ -137,18 +179,31 @@ def _load_user_detail(tid):
     bracket = _dict(_read(f"streamdex_brackets/{tid}/active"))
     wheel_options = _read(f"streamdex_wheel/{tid}/options")
     wheel_runs = _read(f"streamdex_wheel/{tid}/runs")
-    wish_root = _dict(_read("streamdex_community_wishlist"))
-    wishes = [v for v in wish_root.values() if isinstance(v, dict) and str(v.get("author_tid") or "") == str(tid)]
-    wish_votes = sum(1 for v in wish_root.values() if isinstance(v, dict) and str(tid) in _dict(v.get("votes")))
-    feedback_root = _dict(_read("feedback_inbox"))
-    feedback = [v for v in feedback_root.values() if isinstance(v, dict) and str(v.get("tid") or "") == str(tid)]
-    feedback_votes = sum(1 for v in feedback_root.values() if isinstance(v, dict) and v.get("community_visible") and str(tid) in _dict(v.get("votes")))
-    poll_root = _dict(_read("community_polls"))
-    polls_created = [v for v in poll_root.values() if isinstance(v, dict) and str(v.get("created_by") or "") == str(tid)]
-    poll_votes = sum(1 for v in poll_root.values() if isinstance(v, dict) and str(tid) in _dict(v.get("votes")))
-    quiz_root = _dict(_read("streamdex_quiz_rooms"))
-    quiz_created = [v for v in quiz_root.values() if isinstance(v, dict) and str(v.get("created_by") or "") == str(tid)]
-    quiz_answers = sum(1 for v in quiz_root.values() if isinstance(v, dict) and _count(_dict(v.get("answers")).get(str(tid))))
+    query_errors = []
+    wish_root = _query_by_child("streamdex_community_wishlist", "author_tid", tid)
+    if wish_root is None:
+        query_errors.append("Community-Wishlist (author_tid)")
+        wish_root = {}
+    wishes = [v for v in wish_root.values() if isinstance(v, dict)]
+    # Vote maps are keyed by user ID inside every community item. Counting them would
+    # require downloading and scanning the complete community collection.
+    wish_votes = None
+
+    feedback_root = _query_by_child("feedback_inbox", "tid", tid)
+    if feedback_root is None:
+        query_errors.append("Feedback-Inbox (tid)")
+        feedback_root = {}
+    feedback = [v for v in feedback_root.values() if isinstance(v, dict)]
+    feedback_votes = None
+
+    # Only load rooms created by this user. Counting answers across every public room
+    # would require a full collection scan, so that metric is intentionally omitted.
+    quiz_root = _query_by_child("streamdex_quiz_rooms", "created_by", tid)
+    if quiz_root is None:
+        query_errors.append("Quizräume (created_by)")
+        quiz_root = {}
+    quiz_created = [v for v in quiz_root.values() if isinstance(v, dict)]
+    quiz_answers = None
     clips_root = _dict(_read(f"streamdex_clips/{tid}"))
     clips_suite = _dict(clips_root.get("items"))
     clips_legacy = {k: v for k, v in clips_root.items() if k != "items" and isinstance(v, dict) and (v.get("url") or v.get("id"))}
@@ -160,8 +215,11 @@ def _load_user_detail(tid):
     planner_streams = _dict(planner.get("streams"))
     radar = _dict(_read(f"radar_watchlists/{tid}"))
     radar_names = radar.get("names", []) if isinstance(radar.get("names", []), list) else []
-    events_root = _dict(_read("streamdex_events"))
-    own_events = [v for v in events_root.values() if isinstance(v, dict) and str(v.get("owner_tid") or "") == str(tid)]
+    events_root = _query_by_child("streamdex_events", "owner_tid", tid)
+    if events_root is None:
+        query_errors.append("Community-Events (owner_tid)")
+        events_root = {}
+    own_events = [v for v in events_root.values() if isinstance(v, dict)]
     chats = _read(f"chats/{tid}/messages")
     stats_history = _read(f"stats_history/{tid}")
     giveaway_log = _read(f"giveaway_log/{tid}")
@@ -170,9 +228,9 @@ def _load_user_detail(tid):
         _tool_row("StreamDex Ideas", "ideas", _count(ideas), usage),
         _tool_row("StreamDex Bracket", "bracket", int(bool(bracket.get("title"))), usage),
         _tool_row("StreamDex Wheel", "wheel", _count(wheel_runs), usage, f"{_count(wheel_options)} Rad-Einträge · {_count(wheel_runs)} Drehungen"),
-        _tool_row("StreamDex Wishlist", "wishlist", len(wishes), usage, f"{len(wishes)} eigene Wünsche · {wish_votes} Stimmen abgegeben"),
-        _tool_row("StreamDex Feedback", "feedback", len(feedback), usage, f"{len(feedback)} Einreichungen · {feedback_votes} Stimmen für Vorschläge"),
-        _tool_row("StreamDex Quiz", "quiz", len(quiz_created) + quiz_answers, usage, f"{len(quiz_created)} Räume erstellt · {quiz_answers} Antwortsätze"),
+        _tool_row("StreamDex Wishlist", "wishlist", len(wishes), usage, f"{len(wishes)} eigene Wünsche · Stimmen werden ohne Community-Vollscan nicht gezählt"),
+        _tool_row("StreamDex Feedback", "feedback", len(feedback), usage, f"{len(feedback)} Einreichungen · Stimmen werden ohne Community-Vollscan nicht gezählt"),
+        _tool_row("StreamDex Quiz", "quiz", len(quiz_created), usage, f"{len(quiz_created)} eigene Räume · Antworten in fremden Räumen werden nicht global durchsucht"),
         _tool_row("StreamDex Clips", "clips", len(clips_suite) + len(clips_legacy), usage),
         _tool_row("StreamDex Goals", "goals", _count(goals), usage),
         _tool_row("StreamDex ModLog", "modlog", _count(modlog), usage),
@@ -186,10 +244,11 @@ def _load_user_detail(tid):
     return {
         "presence": p, "web_auth": web, "stats": stat, "profile": profile, "flags": flags,
         "global_flags": global_flags, "beta": beta, "tool_usage": usage, "tool_rows": tool_rows,
+        "query_errors": query_errors,
         "counts": {
             "ideas": _count(ideas), "bracket": int(bool(bracket.get("title"))),
             "wheel_runs": _count(wheel_runs), "wishlist": len(wishes), "feedback": len(feedback),
-            "quiz_created": len(quiz_created), "quiz_answers": quiz_answers,
+            "quiz_created": len(quiz_created), "quiz_answers": None,
             "clips": len(clips_suite) + len(clips_legacy), "goals": _count(goals),
             "modlog": _count(modlog), "modteam_members": _count(members), "modteam_tasks": _count(tasks),
             "planner_streams": _count(planner_streams), "events": len(own_events),
@@ -214,6 +273,8 @@ def render_user_admin():
     """, unsafe_allow_html=True)
     if st.button("🔄 User-Daten aktualisieren", key="admin_users_refresh"):
         _read_user_index.clear()
+        _load_user_detail.clear()
+        _load_usage_overview.clear()
         st.rerun()
     try:
         users = _read_user_index()
@@ -232,15 +293,30 @@ def render_user_admin():
     d.metric("Website-Logins (30 Tage)", len(recent_logins))
     st.caption("Website-Login-Zähler werden ab Aktivierung dieser Funktion erfasst. Ältere Konten können bereits existieren, ohne dass frühere Web-Anmeldungen gezählt wurden.")
 
+    st.markdown("### 📈 Welche Werkzeuge werden genutzt?")
+    usage_overview = _load_usage_overview()
+    if usage_overview is None:
+        st.warning("Die aggregierten Nutzungsstatistiken konnten gerade nicht geladen werden.")
+    else:
+        usage_df = pd.DataFrame(usage_overview)
+        st.caption("Datensparsame Aggregation pro Werkzeug: Anzahl unterschiedlicher Konten mit erfasster Nutzung und Sitzungsöffnungen. Pro Werkzeug wird höchstens eine Öffnung je Login-Sitzung gezählt – das ist ausdrücklich keine vollständige Seitenaufruf- oder Besuchshistorie. Historische Daten vor Aktivierung der Erfassung fehlen; Konten ohne Twitch-Web-Login können unterrepräsentiert sein.")
+        st.dataframe(usage_df, hide_index=True, use_container_width=True)
+        if not usage_df.empty and usage_df["Nutzer mit Nutzung"].max() > 0:
+            st.bar_chart(usage_df.set_index("Werkzeug")[["Nutzer mit Nutzung"]])
+
     f1, f2, f3 = st.columns([2, 1.4, 1.2])
     query = f1.text_input("User suchen", placeholder="Twitch-Name oder Twitch-ID", key="admin_users_search").strip().casefold()
-    account_filter = f2.selectbox("Kontotyp", ["Alle Konten", "Website-Login erfasst", "Aktuell online"], key="admin_users_type")
+    account_filter = f2.selectbox("Kontotyp / Status", ["Alle Konten", "Website-Login erfasst", "Aktuell online", "Blockiert", "Inaktiv (30+ Tage)"], key="admin_users_type")
     sort_order = f3.selectbox("Sortieren nach", ["Letzter Website-Login", "Letzte Aktivität", "Name"], key="admin_users_sort")
     visible = users[:]
     if account_filter == "Website-Login erfasst":
         visible = [u for u in visible if u["web_login"]]
     elif account_filter == "Aktuell online":
         visible = [u for u in visible if u["online"]]
+    elif account_filter == "Blockiert":
+        visible = [u for u in visible if u["status"] == "Blockiert"]
+    elif account_filter == "Inaktiv (30+ Tage)":
+        visible = [u for u in visible if not u["last_seen_ms"] or now_ms - u["last_seen_ms"] > 30 * 86400 * 1000]
     if query:
         visible = [u for u in visible if query in u["name"].casefold() or query in u["tid"]]
     if sort_order == "Name":
@@ -258,6 +334,13 @@ def render_user_admin():
         "App-Version": u["version"], "Giveaways": u["giveaways"],
         "Teilnahmen": u["participants"], "Beta": "Ja" if u["beta"] else "Nein",
     } for u in visible])
+    page_size = 24
+    page_count = max(1, (len(visible) + page_size - 1) // page_size)
+    page = st.selectbox("Seite", list(range(1, page_count + 1)),
+                        format_func=lambda n: f"{n} / {page_count}",
+                        key="admin_users_page") if page_count > 1 else 1
+    page_users = visible[(page - 1) * page_size:page * page_size]
+    st.caption(f"Zeige {len(page_users)} von {len(visible)} gefilterten Konten. Die Karten werden seitenweise gerendert.")
     st.markdown(f"### Konten als Karten ({len(visible)})")
     if view.empty:
         st.info("Keine Konten entsprechen den aktuellen Filtern.")
@@ -275,7 +358,7 @@ def render_user_admin():
         </style>
         """, unsafe_allow_html=True)
         card_columns = st.columns(3)
-        for index, user in enumerate(visible):
+        for index, user in enumerate(page_users):
             with card_columns[index % len(card_columns)]:
                 with st.container(border=True):
                     st.markdown(f"#### 👤 {user['name']}")
@@ -301,7 +384,7 @@ def render_user_admin():
                         st.rerun()
 
         selected_tid = st.session_state.get("admin_user_selected_tid")
-        visible_ids = {u["tid"] for u in visible}
+        visible_ids = {u["tid"] for u in page_users}
         if selected_tid not in visible_ids:
             selected_tid = None
             st.session_state.pop("admin_user_selected_tid", None)
@@ -310,7 +393,7 @@ def render_user_admin():
             st.rerun()
         if selected_tid:
             with st.spinner("Tool-Daten werden zusammengeführt …"):
-                detail = _load_user_detail(selected_tid)
+                detail = _load_user_detail(str(selected_tid))
             selected = next((u for u in visible if u["tid"] == selected_tid), {})
             st.divider()
             st.markdown(f"## 👤 {str(selected.get('name') or selected_tid)}")
@@ -325,8 +408,15 @@ def render_user_admin():
                     st.write(f"**Creator-Name:** {detail['profile'].get('display_name') or selected.get('name') or '—'}")
                     st.write(f"**Slug:** {detail['profile'].get('slug') or '—'}")
                     st.write(f"**Aktualisiert:** {_fmt_ts(detail['profile'].get('updated_at'))}")
+            if detail.get("query_errors"):
+                st.warning(
+                    "Einige nutzerspezifische Community-Abfragen konnten nicht ausgeführt werden: "
+                    + ", ".join(detail["query_errors"])
+                    + ". Diese Bereiche werden ohne Vollscan ausgelassen. Prüfe die Firebase-Realtime-Database-Regeln "
+                      "auf passende .indexOn-Einträge für author_tid, tid, created_by und owner_tid."
+                )
             st.markdown("### 🧰 Tool-Nutzung & gespeicherte Daten")
-            st.caption("Gespeicherte Einträge zeigen, ob ein Werkzeug genutzt wurde. Direkte Seitenaufrufe werden ab jetzt gezählt; normale Streamlit-Tabs melden keine zuverlässige Auswahl und werden daher nicht als Aufruf gewertet.")
+            st.caption("Gespeicherte Einträge zeigen vorhandene Daten. Sitzungsöffnungen zählen pro Werkzeug höchstens einmal je Login-Sitzung; sie sind keine vollständige Besuchshistorie. Normale Streamlit-Tabs melden keine zuverlässige Auswahl.")
             tools_df = pd.DataFrame(detail["tool_rows"])
             st.dataframe(tools_df, hide_index=True, use_container_width=True)
             st.download_button("⬇️ Tool-Übersicht als CSV", data=tools_df.to_csv(index=False).encode("utf-8-sig"),
@@ -359,11 +449,66 @@ def render_user_admin():
             for key, label in TOOLS:
                 entry = _dict(detail["tool_usage"].get(key))
                 if _number(entry.get("visit_count")) or entry.get("last_used_ms"):
-                    visit_rows.append({"Werkzeug": label, "Aufrufe": _number(entry.get("visit_count")), "Zuletzt geöffnet": _fmt_ts(entry.get("last_used_ms"))})
+                    visit_rows.append({"Werkzeug": label, "Sitzungsöffnungen": _number(entry.get("visit_count")), "Zuletzt genutzt": _fmt_ts(entry.get("last_used_ms"))})
             if visit_rows:
                 st.dataframe(pd.DataFrame(visit_rows), hide_index=True, use_container_width=True)
             else:
-                st.info("Direkte Tool-Aufrufe werden ab jetzt erfasst. Für frühere Besuche gibt es keine verlässliche Verlaufshistorie.")
+                st.info("Sitzungsöffnungen werden je Werkzeug höchstens einmal pro Login-Sitzung gezählt. Frühere Besuche sind nicht vollständig historisiert.")
+
+            # Build a compact timeline from per-user records only; do not scan community roots.
+            activity_rows = []
+            for key, label in TOOLS:
+                entry = _dict(detail["tool_usage"].get(key))
+                ts = _number(entry.get("last_used_ms"))
+                if ts:
+                    activity_rows.append({
+                        "_ts": ts, "Zeit": _fmt_ts(ts), "Ereignis": f"{label} geöffnet",
+                        "Quelle": "Tool-Nutzung",
+                    })
+            for source_name, source_data in (
+                ("Stats-Verlauf", detail.get("stats_history", {})),
+                ("Giveaway-Verlauf", detail.get("giveaway_log", {})),
+            ):
+                values = list(source_data.values()) if isinstance(source_data, dict) else (
+                    source_data if isinstance(source_data, list) else []
+                )
+                for item in values:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_ts = next((item.get(k) for k in (
+                        "ts", "timestamp", "created_at", "createdAt", "time", "updated_at", "at"
+                    ) if item.get(k)), 0)
+                    ts = _number(raw_ts)
+                    if not ts:
+                        continue
+                    event = next((item.get(k) for k in (
+                        "action", "event", "type", "name", "title", "status"
+                    ) if item.get(k)), source_name)
+                    activity_rows.append({
+                        "_ts": ts, "Zeit": _fmt_ts(ts),
+                        "Ereignis": str(event)[:140], "Quelle": source_name,
+                    })
+            last_seen = _number(detail["presence"].get("last_seen"))
+            if last_seen:
+                activity_rows.append({
+                    "_ts": last_seen, "Zeit": _fmt_ts(last_seen),
+                    "Ereignis": "Letzte bekannte Aktivität", "Quelle": "Presence",
+                })
+            last_login = _number(detail["web_auth"].get("last_login_ms"))
+            if last_login:
+                activity_rows.append({
+                    "_ts": last_login, "Zeit": _fmt_ts(last_login),
+                    "Ereignis": "Website-Login", "Quelle": "Web-Auth",
+                })
+            activity_rows.sort(key=lambda row: row["_ts"], reverse=True)
+            st.markdown("### 🧭 Aktivitätsverlauf")
+            if activity_rows:
+                timeline = pd.DataFrame(activity_rows[:30]).drop(columns=["_ts"])
+                st.dataframe(timeline, hide_index=True, use_container_width=True)
+                st.caption(f"Die letzten {min(30, len(activity_rows))} Ereignisse aus vorhandenen, nutzerspezifischen Daten. Es werden keine fehlenden historischen Ereignisse erfunden.")
+            else:
+                st.info("Noch keine zeitgestempelten Aktivitätsereignisse für dieses Konto vorhanden.")
+
             report = {
                 "twitch_id": selected_tid, "name": selected.get("name"), "status": selected.get("status"),
                 "website_login": bool(selected.get("web_login")), "login_count": _number(detail["web_auth"].get("login_count")),
