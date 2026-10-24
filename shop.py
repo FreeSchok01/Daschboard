@@ -708,9 +708,6 @@ def render_shop(games):
         else:
             _cart_box(tid, profile.get("twitch_username"), items, have)
     _render_order_downloads(tid, load_items(active_only=False))
-    with st.expander("📥 Gekaufte Module erneut herunterladen"):
-        st.caption("Bereits bezahlte Game-Downloads kannst du jederzeit mit Twitch-Konto und Bestellcode erneut aufrufen.")
-        st.markdown("Nutze den Download-Bereich oberhalb der rechtlichen Hinweise, um den Code zu prüfen und verfügbare Dateien zu öffnen.")
     with st.expander("Rechtliches & Hilfe"):
         settings = st.secrets.get("shop", {})
         st.markdown(
