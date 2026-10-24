@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from firebase_admin import db
 
+from privacy_security import is_valid_twitch_id, safe_exception_label
+
 TZ = ZoneInfo("Europe/Berlin")
 EVENTS_PATH = "streamdex_events"
 SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{6,40}$")
@@ -20,6 +22,144 @@ def _event_ref(event_id):
     if not isinstance(event_id, str) or not SLUG_RE.fullmatch(event_id):
         return None
     return db.reference(f"{EVENTS_PATH}/{event_id}")
+
+
+def _owned_event_ref(event_id, owner_tid):
+    """Re-read and authorize every owner mutation; never trust the card's stale data."""
+    if not is_valid_twitch_id(owner_tid):
+        return None, None
+    ref = _event_ref(event_id)
+    if ref is None:
+        return None, None
+    event = ref.get()
+    if not isinstance(event, dict) or str(event.get("owner_tid") or "") != str(owner_tid):
+        return None, None
+    return ref, event
+
+
+def _set_owned_event_status(event_id, owner_tid, status):
+    if status not in ("open", "closed"):
+        return False
+    ref = _event_ref(event_id)
+    if ref is None or not is_valid_twitch_id(owner_tid):
+        return False
+    result = {"ok": False}
+
+    def update(current):
+        result["ok"] = False
+        if not isinstance(current, dict) or str(current.get("owner_tid") or "") != str(owner_tid):
+            return current
+        current = dict(current)
+        current["status"] = status
+        result["ok"] = True
+        return current
+
+    try:
+        ref.transaction(update)
+    except Exception:
+        return False
+    return bool(result["ok"])
+
+
+def _delete_owned_event(event_id, owner_tid):
+    ref, _event = _owned_event_ref(event_id, owner_tid)
+    if ref is None:
+        return False
+    try:
+        ref.delete()
+        return True
+    except Exception:
+        return False
+
+
+def _remove_owned_event_participant(event_id, owner_tid, participant_id):
+    ref, event = _owned_event_ref(event_id, owner_tid)
+    if ref is None or not isinstance(participant_id, str) or not SLUG_RE.fullmatch(participant_id):
+        return False
+    participants = event.get("participants") if isinstance(event.get("participants"), dict) else {}
+    if participant_id not in participants:
+        return False
+    try:
+        ref.child(f"participants/{participant_id}").delete()
+        return True
+    except Exception:
+        return False
+
+
+def _current_registrant_tid():
+    """Attribute an event RSVP to a currently valid web session when available."""
+    tid = str(st.session_state.get("authenticated_tid") or "")
+    try:
+        started = float(st.session_state.get("authenticated_at") or 0)
+    except (TypeError, ValueError):
+        return ""
+    age = time.time() - started
+    if is_valid_twitch_id(tid) and 0 <= age <= 2 * 60 * 60:
+        return tid
+    return ""
+
+
+def _register_event_participant(event_id, name, platform, registrant_tid=""):
+    """Atomically enforce event status, capacity and duplicate-name checks."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Bitte gib einen Anzeigenamen ein.")
+    name = name.strip()[:60]
+    if platform not in ("Twitch", "Discord", "Web"):
+        raise ValueError("Bitte wähle eine gültige Plattform.")
+    ref = _event_ref(event_id)
+    if ref is None:
+        raise ValueError("Der Event-Link ist ungültig.")
+    participant_id = secrets.token_urlsafe(12).replace("-", "_")
+    registrant_tid = str(registrant_tid or "")
+    if not is_valid_twitch_id(registrant_tid):
+        registrant_tid = ""
+    outcome = {"error": "write_failed"}
+    now_ms = int(datetime.now(TZ).timestamp() * 1000)
+
+    def register(current):
+        outcome["error"] = "write_failed"
+        if not isinstance(current, dict):
+            outcome["error"] = "not_found"
+            return current
+        if current.get("status") != "open":
+            outcome["error"] = "closed"
+            return current
+        participants = current.get("participants")
+        participants = dict(participants) if isinstance(participants, dict) else {}
+        capacity = max(0, min(10000, int(current.get("capacity") or 0)))
+        if any(
+            isinstance(value, dict)
+            and str(value.get("display_name") or "").strip().casefold() == name.casefold()
+            for value in participants.values()
+        ):
+            outcome["error"] = "duplicate"
+            return current
+        if capacity and len(participants) >= capacity:
+            outcome["error"] = "full"
+            return current
+        updated = dict(current)
+        participants[participant_id] = {
+            "display_name": name,
+            "platform": platform,
+            "registered_at": _now_label(),
+            "registered_ts": now_ms,
+            "registrant_tid": registrant_tid,
+        }
+        updated["participants"] = participants
+        outcome["error"] = ""
+        return updated
+
+    ref.transaction(register)
+    if outcome["error"]:
+        messages = {
+            "not_found": "Dieses Event wurde nicht gefunden.",
+            "closed": "Die Anmeldung ist geschlossen.",
+            "duplicate": "Dieser Anzeigename ist für dieses Event bereits angemeldet.",
+            "full": "Dieses Event ist bereits voll.",
+            "write_failed": "Die Anmeldung konnte nicht gespeichert werden.",
+        }
+        raise ValueError(messages.get(outcome["error"], messages["write_failed"]))
+    return participant_id
 
 
 def _load_events(owner_tid=None, include_closed=True):
@@ -54,6 +194,9 @@ def _participant_list(event):
 
 
 def render_event_manager(owner_tid, twitch_username):
+    if not is_valid_twitch_id(owner_tid):
+        st.error("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
+        return
     st.subheader("🎉 StreamDex Events")
     st.caption("Erstelle Community-Events und teile den öffentlichen Anmeldelink. Die Anmeldung wird in Firebase gespeichert.")
     with st.expander("➕ Neues Event erstellen", expanded=not bool(_load_events(owner_tid))):
@@ -91,7 +234,8 @@ def render_event_manager(owner_tid, twitch_username):
                     st.info("Öffne den Link deiner Streamlit-App mit diesem Parameter, um die öffentliche Eventseite aufzurufen.")
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Event konnte nicht gespeichert werden: {exc}")
+                    print(f"[events] Event create failed ({safe_exception_label(exc)})")
+                    st.error("Das Event konnte nicht gespeichert werden. Bitte versuche es erneut.")
 
     events = _load_events(owner_tid)
     if not events:
@@ -113,11 +257,13 @@ def render_event_manager(owner_tid, twitch_username):
                 st.write("")
                 if event.get("status") == "open":
                     if st.button("Anmeldung schließen", key=f"sdx_close_{event_id}", use_container_width=True):
-                        _event_ref(event_id).update({"status": "closed"})
+                        if not _set_owned_event_status(event_id, owner_tid, "closed"):
+                            st.error("Du kannst dieses Event nicht ändern oder es existiert nicht mehr.")
                         st.rerun()
                 else:
                     if st.button("Wieder öffnen", key=f"sdx_open_{event_id}", use_container_width=True):
-                        _event_ref(event_id).update({"status": "open"})
+                        if not _set_owned_event_status(event_id, owner_tid, "open"):
+                            st.error("Du kannst dieses Event nicht ändern oder es existiert nicht mehr.")
                         st.rerun()
                 if st.button("Event löschen", key=f"sdx_delete_{event_id}", use_container_width=True):
                     st.session_state[f"sdx_confirm_delete_{event_id}"] = True
@@ -125,7 +271,8 @@ def render_event_manager(owner_tid, twitch_username):
                 st.warning("Dieses Event samt Anmeldungen endgültig löschen?")
                 c1, c2 = st.columns(2)
                 if c1.button("Ja, löschen", key=f"sdx_yes_delete_{event_id}", type="primary"):
-                    _event_ref(event_id).delete()
+                    if not _delete_owned_event(event_id, owner_tid):
+                        st.error("Du kannst dieses Event nicht löschen oder es existiert nicht mehr.")
                     st.session_state.pop(f"sdx_confirm_delete_{event_id}", None)
                     st.rerun()
                 if c2.button("Abbrechen", key=f"sdx_no_delete_{event_id}"):
@@ -138,13 +285,15 @@ def render_event_manager(owner_tid, twitch_username):
                         cols[0].write(p.get("display_name", "Unbekannt"))
                         cols[1].caption(p.get("platform", ""))
                         if cols[2].button("Entfernen", key=f"sdx_remove_{event_id}_{p['id']}"):
-                            db.reference(f"{EVENTS_PATH}/{event_id}/participants/{p['id']}").delete()
+                            if not _remove_owned_event_participant(event_id, owner_tid, str(p["id"])):
+                                st.error("Diese Anmeldung konnte nicht entfernt werden.")
                             st.rerun()
 
 
 def render_public_events():
     st.title("🎉 StreamDex Events")
     st.caption("Community-Events entdecken und anmelden.")
+    st.caption("Anmeldungen und Anzeigenamen sind für Besucher dieser Event-Seite sichtbar. Bitte nutze keine privaten Kontaktdaten als Anzeigenamen.")
     events = _load_events(include_closed=False)
     if not events:
         st.info("Aktuell sind keine offenen Events verfügbar.")
@@ -163,26 +312,15 @@ def render_public_events():
                 platform = st.selectbox("Plattform", ["Twitch", "Discord", "Web"], key=f"sdx_platform_{event_id}")
                 submit = st.form_submit_button("Jetzt anmelden", type="primary", use_container_width=True)
             if submit:
-                if event.get("status") != "open":
-                    st.error("Die Anmeldung ist geschlossen.")
-                elif not name.strip():
-                    st.error("Bitte gib einen Anzeigenamen ein.")
-                elif any(p.get("display_name", "").strip().casefold() == name.strip().casefold() for p in people):
-                    st.warning("Dieser Anzeigename ist für dieses Event bereits angemeldet.")
-                elif cap and len(people) >= cap:
-                    st.error("Dieses Event ist bereits voll. Eine Warteliste ist in dieser ersten Version noch nicht verfügbar.")
-                else:
-                    try:
-                        db.reference(f"{EVENTS_PATH}/{event_id}/participants").push({
-                            "display_name": name.strip(),
-                            "platform": platform,
-                            "registered_at": _now_label(),
-                            "registered_ts": int(datetime.now(TZ).timestamp() * 1000),
-                        })
-                        st.success("Du bist angemeldet!")
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Anmeldung fehlgeschlagen: {exc}")
+                try:
+                    _register_event_participant(event_id, name, platform, _current_registrant_tid())
+                    st.success("Du bist angemeldet!")
+                    st.rerun()
+                except ValueError as exc:
+                    st.warning(str(exc))
+                except Exception as exc:
+                    print(f"[events] Public registration failed ({safe_exception_label(exc)})")
+                    st.error("Die Anmeldung konnte nicht gespeichert werden. Bitte versuche es erneut.")
 
 
 def render_public_event(event_id):
@@ -208,21 +346,15 @@ def render_public_event(event_id):
             platform = st.selectbox("Plattform", ["Twitch", "Discord", "Web"])
             submit = st.form_submit_button("Jetzt anmelden", type="primary", use_container_width=True)
         if submit:
-            if not name.strip():
-                st.error("Bitte gib einen Anzeigenamen ein.")
-            elif any(p.get("display_name", "").strip().casefold() == name.strip().casefold() for p in people):
-                st.warning("Dieser Anzeigename ist bereits angemeldet.")
-            elif cap and len(people) >= cap:
-                st.error("Das Event ist voll. Eine Warteliste ist noch nicht verfügbar.")
-            else:
-                ref.child("participants").push({
-                    "display_name": name.strip(),
-                    "platform": platform,
-                    "registered_at": _now_label(),
-                    "registered_ts": int(datetime.now(TZ).timestamp() * 1000),
-                })
+            try:
+                _register_event_participant(event_id, name, platform, _current_registrant_tid())
                 st.success("Du bist angemeldet!")
                 st.rerun()
+            except ValueError as exc:
+                st.warning(str(exc))
+            except Exception as exc:
+                print(f"[events] Public event registration failed ({safe_exception_label(exc)})")
+                st.error("Die Anmeldung konnte nicht gespeichert werden. Bitte versuche es erneut.")
     st.subheader(f"Teilnehmer ({len(people)})")
     if people:
         for person in people:
