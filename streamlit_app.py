@@ -22,7 +22,7 @@ from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
 from events import render_public_events, render_public_event
 from lurk import lurk_panel
-from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, render_shop, render_tour_skip
+from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, handle_paypal_return, render_shop, render_tour_skip
 from stats_panel import stats_panel
 from streamer_dashboard import handle_twitch_oauth_callback, has_active_streamer_login, render_streamer_dashboard
 from privacy_security import admin_session_is_valid, safe_exception_label
@@ -492,6 +492,51 @@ def support_main():
 
 
 def main():
+    # PayPal leitet den Käufer nach Freigabe oder Abbruch zurück zum StreamDex-Shop.
+    # Capture und Freischaltung laufen serverseitig, bevor normale Seiten gerendert werden.
+    if "shop" in st.query_params and "paypal_cancel" in st.query_params:
+        st.set_page_config(page_title="StreamDex Shop", page_icon="🛒", layout="wide")
+        init_firebase()
+        order_code = str(st.query_params.get("order_ref", "") or "").strip().upper()
+        username = str(st.query_params.get("u", "") or "")
+        if order_code.startswith("SDX-") and len(order_code) == 10:
+            pending = db.reference(f"shop/orders/{order_code}").get()
+            if (isinstance(pending, dict) and pending.get("status") == "pending"
+                    and pending.get("payment_provider") == "paypal"):
+                st.session_state["cart_tid"] = str(pending.get("tid") or "")
+                st.session_state["order"] = (order_code, str(pending.get("price") or "0.00"))
+        st.session_state["flash"] = "Die PayPal-Zahlung wurde abgebrochen. Es wurde nichts freigeschaltet."
+        st.query_params.clear()
+        st.query_params["shop"] = "1"
+        if username:
+            st.query_params["u"] = username
+        st.rerun()
+        return
+
+    if "shop" in st.query_params and "paypal_return" in st.query_params and "token" in st.query_params:
+        st.set_page_config(page_title="StreamDex Shop", page_icon="🛒", layout="wide")
+        init_firebase()
+        paypal_order_id = str(st.query_params.get("token", "") or "")
+        payer_id = str(st.query_params.get("PayerID", "") or "")
+        order_code = str(st.query_params.get("order_ref", "") or "").strip().upper()
+        username = str(st.query_params.get("u", "") or "")
+        ok, message = handle_paypal_return(paypal_order_id, payer_id)
+        st.session_state["flash"] = message
+        if order_code.startswith("SDX-") and len(order_code) == 10:
+            returned = db.reference(f"shop/orders/{order_code}").get()
+            if isinstance(returned, dict) and str(returned.get("tid") or ""):
+                st.session_state["cart_tid"] = str(returned.get("tid"))
+                if ok and returned.get("status") == "paid":
+                    st.session_state["download_order_code"] = order_code
+                elif returned.get("status") == "pending":
+                    st.session_state["order"] = (order_code, str(returned.get("price") or "0.00"))
+        st.query_params.clear()
+        st.query_params["shop"] = "1"
+        if username:
+            st.query_params["u"] = username
+        st.rerun()
+        return
+
     # Twitch leitet den Authorization-Code an die App-Startseite zurück.
     # Callback vor allen anderen Routen verarbeiten, damit Code und State nie als Shop-URL landen.
     if "code" in st.query_params or "error" in st.query_params:
