@@ -158,6 +158,7 @@ def memory_db(monkeypatch):
     database = MemoryDatabase()
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
+    monkeypatch.setattr(shop, "db", database)
     return database
 
 
