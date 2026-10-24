@@ -4,3 +4,4 @@ httpx>=0.27
 firebase-admin>=6.5
 pandas
 tzdata
+streamlit-cookies-controller==0.0.4
