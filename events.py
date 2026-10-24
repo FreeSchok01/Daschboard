@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 
 TZ = ZoneInfo("Europe/Berlin")
 EVENTS_PATH = "streamdex_events"
@@ -54,6 +55,9 @@ def _participant_list(event):
 
 
 def render_event_manager(owner_tid, twitch_username):
+    if not has_active_user_session(st.session_state, owner_tid):
+        st.error("Für die Eventverwaltung ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     st.subheader("🎉 StreamDex Events")
     st.caption("Erstelle Community-Events und teile den öffentlichen Anmeldelink. Die Anmeldung wird in Firebase gespeichert.")
     with st.expander("➕ Neues Event erstellen", expanded=not bool(_load_events(owner_tid))):
@@ -91,7 +95,8 @@ def render_event_manager(owner_tid, twitch_username):
                     st.info("Öffne den Link deiner Streamlit-App mit diesem Parameter, um die öffentliche Eventseite aufzurufen.")
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Event konnte nicht gespeichert werden: {exc}")
+                    print(f"[events] Event speichern fehlgeschlagen: {type(exc).__name__}")
+                    st.error("Event konnte nicht gespeichert werden. Bitte versuche es später erneut.")
 
     events = _load_events(owner_tid)
     if not events:
@@ -182,7 +187,8 @@ def render_public_events():
                         st.success("Du bist angemeldet!")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Anmeldung fehlgeschlagen: {exc}")
+                        print(f"[events] Event-Anmeldung fehlgeschlagen: {type(exc).__name__}")
+                        st.error("Anmeldung fehlgeschlagen. Bitte versuche es später erneut.")
 
 
 def render_public_event(event_id):
@@ -215,14 +221,18 @@ def render_public_event(event_id):
             elif cap and len(people) >= cap:
                 st.error("Das Event ist voll. Eine Warteliste ist noch nicht verfügbar.")
             else:
-                ref.child("participants").push({
-                    "display_name": name.strip(),
-                    "platform": platform,
-                    "registered_at": _now_label(),
-                    "registered_ts": int(datetime.now(TZ).timestamp() * 1000),
-                })
-                st.success("Du bist angemeldet!")
-                st.rerun()
+                try:
+                    ref.child("participants").push({
+                        "display_name": name.strip()[:60],
+                        "platform": platform,
+                        "registered_at": _now_label(),
+                        "registered_ts": int(datetime.now(TZ).timestamp() * 1000),
+                    })
+                    st.success("Du bist angemeldet!")
+                    st.rerun()
+                except Exception as exc:
+                    print(f"[events] Öffentliche Anmeldung fehlgeschlagen: {type(exc).__name__}")
+                    st.error("Anmeldung fehlgeschlagen. Bitte versuche es später erneut.")
     st.subheader(f"Teilnehmer ({len(people)})")
     if people:
         for person in people:
