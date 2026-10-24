@@ -705,7 +705,7 @@ _DELETE_PATHS = [
     "support_read/{t}", "giveaway_log/{t}",
     "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
     "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
-    "presence/{t}", "creator_profiles/{t}",
+    "creator_profiles/{t}", "presence/{t}",
 ]
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
 _KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
@@ -722,11 +722,54 @@ ACCOUNT_DATA_TABLE = """
 """
 
 
-def _safe_get(path):
+def _account_area_label(path):
+    """Human-readable names for data-access and deletion error messages."""
+    root = str(path or "").strip("/").split("/", 1)[0]
+    labels = {
+        "stats": "StreamDex-Statistiken",
+        "stats_history": "Statistik-Verlauf",
+        "chats": "Chat-Nachrichten",
+        "chat_meta": "Chat-Metadaten",
+        "gifts": "Geschenke",
+        "lurk": "Lurk-Daten",
+        "support_read": "Support-Lesestatus",
+        "giveaway_log": "Giveaway-Verlauf",
+        "radar_analytics": "Insight-Verläufe",
+        "streamdex_planner": "Planner-Termine",
+        "streamdex_clips": "Clip-Sammlung",
+        "streamdex_web_auth": "Web-Anmeldedaten",
+        "streamdex_tool_usage": "Nutzungsstatistiken",
+        "presence": "Online-Status",
+        "creator_profiles": "Creator-Profil",
+        "creator_profile_slugs": "öffentlicher Profil-Link",
+        "streamdex_events": "Community-Events",
+        "feedback_inbox": "Feedback-Einträge",
+        "community_polls": "Community-Umfragen",
+    }
+    return labels.get(root, "Datenbereich")
+
+
+def _safe_get(path, errors=None):
     try:
         return db.reference(path).get()
-    except Exception as e:
-        return {"_fehler": f"{type(e).__name__}"}
+    except Exception:
+        if errors is not None:
+            message = f"{_account_area_label(path)} konnten nicht gelesen werden."
+            if message not in errors:
+                errors.append(message)
+            return None
+        return {"_fehler": "Datenbereich konnte nicht gelesen werden."}
+
+
+def _build_account_export_json(tid, data, exported_at=None):
+    """Build the account JSON export in one testable, deterministic place."""
+    payload = {
+        "exportiert_am": exported_at or datetime.now(TZ).isoformat(timespec="seconds"),
+        "twitch_id": str(tid),
+        "hinweis": "Zeitstempel (ts, last_seen, …) sind Millisekunden seit 1970 (UTC).",
+        "daten": data if isinstance(data, dict) else {},
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
 def _load_feedback(tid):
@@ -739,51 +782,62 @@ def _load_feedback(tid):
     return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
 
 
-def _collect_account_data(tid):
-    """Alle gespeicherten Daten dieser Twitch-ID (nur nicht-leere Bereiche)."""
+def _collect_account_data(tid, errors=None):
+    """Collect the current account's data and optionally return readable per-area errors."""
+    errors = errors if errors is not None else []
     out = {}
     for path in _KEEP_PATHS + _DELETE_PATHS:
         p = path.format(t=tid)
-        val = _safe_get(p)
+        val = _safe_get(p, errors=errors)
         if val not in (None, {}, []):
             out[p] = val
-    fb = _load_feedback(tid)
-    if fb:
-        out["feedback_inbox (nur deine Einträge)"] = fb
-    events = _safe_get("streamdex_events")
+    try:
+        fb = _load_feedback(tid)
+        if fb:
+            out["feedback_inbox (nur deine Einträge)"] = fb
+    except Exception:
+        message = "Feedback-Einträge konnten nicht gelesen werden."
+        if message not in errors:
+            errors.append(message)
+    events = _safe_get("streamdex_events", errors=errors)
     if isinstance(events, dict):
-        own_events = {key: value for key, value in events.items()
-                      if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)}
+        own_events = {
+            key: value for key, value in events.items()
+            if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)
+        }
         if own_events:
             out["streamdex_events (eigene Events)"] = own_events
     return out
 
-
 def _delete_account_data(tid):
-    """Löscht alle Daten unter der eigenen Twitch-ID. Gibt (Anzahl gelöschter Bereiche, Fehlerliste) zurück."""
+    """Delete account-owned data and return (number of removals, readable error messages)."""
     removed, errors = 0, []
+
     try:
         for key in list(_load_feedback(tid)):
             db.reference(f"feedback_inbox/{key}").delete()
             removed += 1
-    except Exception as e:
-        errors.append(f"feedback_inbox: {type(e).__name__}")
+    except Exception:
+        errors.append("Deine Feedback-Einträge konnten nicht gelöscht werden.")
+
     try:
         profile = db.reference(f"creator_profiles/{tid}").get() or {}
         old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
         if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
             db.reference(f"creator_profile_slugs/{old_slug}").delete()
-    except Exception as e:
-        errors.append(f"creator_profile_slugs: {type(e).__name__}")
+    except Exception:
+        errors.append("Dein öffentlicher Profil-Link konnte nicht freigegeben werden.")
+
     try:
-        global_events = _safe_get("streamdex_events")
+        global_events = db.reference("streamdex_events").get() or {}
         if isinstance(global_events, dict):
             for event_id, event in global_events.items():
                 if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
                     db.reference(f"streamdex_events/{event_id}").delete()
                     removed += 1
-    except Exception as e:
-        errors.append(f"streamdex_events: {type(e).__name__}")
+    except Exception:
+        errors.append("Deine Community-Events konnten nicht gelöscht werden.")
+
     for path in _DELETE_PATHS:
         p = path.format(t=tid)
         try:
@@ -791,10 +845,10 @@ def _delete_account_data(tid):
             if ref.get() is not None:
                 ref.delete()
                 removed += 1
-        except Exception as e:
-            errors.append(f"{p}: {type(e).__name__}")
-    return removed, errors
+        except Exception:
+            errors.append(f"{_account_area_label(p)} konnten nicht gelöscht werden.")
 
+    return removed, list(dict.fromkeys(errors))
 
 def _render_account_tab(tid, username, is_online):
     st.subheader("🧾 Konto & Datenschutz")
@@ -806,22 +860,22 @@ def _render_account_tab(tid, username, is_online):
     # --- Daten ansehen & exportieren (wird erst auf Klick geladen) ---
     st.markdown("### 📥 Meine Daten")
     if st.button("Meine Daten laden", key="acct_load"):
-        st.session_state["acct_data"] = {"tid": tid, "data": _collect_account_data(tid)}
+        export_errors = []
+        account_data = _collect_account_data(tid, errors=export_errors)
+        st.session_state["acct_data"] = {"tid": tid, "data": account_data, "errors": export_errors}
     cached = st.session_state.get("acct_data")
     if cached and cached.get("tid") == tid:
-        data = cached["data"]
-        if not data:
+        data = cached.get("data") or {}
+        export_errors = cached.get("errors") or []
+        if export_errors:
+            st.warning("Einige Datenbereiche konnten nicht vollständig gelesen werden: " + " ".join(export_errors)
+                       + " Bitte prüfe die Firebase-Berechtigungen und lade die Daten erneut.")
+        if not data and not export_errors:
             st.info("Unter deiner Twitch-ID sind keine Daten gespeichert.")
-        else:
-            payload = {
-                "exportiert_am": datetime.now(TZ).isoformat(timespec="seconds"),
-                "twitch_id": tid,
-                "hinweis": "Zeitstempel (ts, last_seen, …) sind Millisekunden seit 1970 (UTC).",
-                "daten": data,
-            }
+        elif data:
             st.download_button(
                 "⬇️ Alles als JSON herunterladen",
-                data=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                data=_build_account_export_json(tid, data),
                 file_name=f"streamdex_daten_{tid}.json",
                 mime="application/json",
                 key="acct_dl",
@@ -852,8 +906,8 @@ def _render_account_tab(tid, username, is_online):
     if st.button("🗑️ Endgültig löschen", type="primary", disabled=not ready, key="acct_delete"):
         removed, errors = _delete_account_data(tid)
         if errors:
-            st.error("Nicht alles konnte gelöscht werden. Bitte versuche es erneut oder melde dich beim Support. "
-                     f"(Betroffen: {', '.join(errors)})")
+            st.error("Die Kontolöschung war unvollständig. Diese Bereiche sind betroffen: "
+                     + " ".join(errors) + " Bitte behebe die Firebase-Berechtigungen und starte den Löschvorgang erneut.")
         else:
             st.session_state.pop("authenticated_tid", None)
             st.session_state.pop("acct_data", None)
