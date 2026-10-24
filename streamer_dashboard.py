@@ -791,31 +791,118 @@ def _load_feedback(tid):
     return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
 
 
+def _require_account_owner(tid):
+    """Require a current server-side session for the requested Twitch account."""
+    if not has_active_user_session(st.session_state, tid):
+        raise PermissionError("Für diese Kontodaten ist eine gültige Sitzung des Eigentümers erforderlich.")
+    return str(tid)
+
+
 def _collect_account_data(tid, errors=None):
-    """Collect the current account's data and optionally return readable per-area errors."""
+    """Collect account-owned data and only this account's community contributions."""
+    tid = _require_account_owner(tid)
     errors = errors if errors is not None else []
     out = {}
-    for path in _KEEP_PATHS + _DELETE_PATHS:
-        p = path.format(t=tid)
-        val = _safe_get(p, errors=errors)
-        if val not in (None, {}, []):
-            out[p] = val
-    try:
-        fb = _load_feedback(tid)
-        if fb:
-            out["feedback_inbox (nur deine Einträge)"] = fb
-    except Exception:
-        message = "Feedback-Einträge konnten nicht gelesen werden."
-        if message not in errors:
-            errors.append(message)
+
+    # Account-rooted records are safe to export because their path contains the validated ID.
+    for template in _KEEP_PATHS + _DELETE_PATHS:
+        path = account_path(template, tid)
+        value = _safe_get(path, errors=errors)
+        if value not in (None, {}, []):
+            out[path] = value
+
+    # Global community collections: export only own posts and own vote values, never other voters' IDs.
+    feedback_root = _safe_get("feedback_inbox", errors=errors)
+    own_feedback, feedback_votes = {}, {}
+    if isinstance(feedback_root, dict):
+        for key, value in feedback_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = tid in votes
+                own_feedback[str(key)] = row
+            elif tid in votes:
+                feedback_votes[str(key)] = votes[tid]
+    if own_feedback:
+        out["feedback_inbox (nur deine Einträge)"] = own_feedback
+    if feedback_votes:
+        out["feedback_votes (nur deine Stimmen)"] = feedback_votes
+
+    wishlist_root = _safe_get("streamdex_community_wishlist", errors=errors)
+    own_wishes, wishlist_votes = {}, {}
+    if isinstance(wishlist_root, dict):
+        for key, value in wishlist_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("author_tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = tid in votes
+                own_wishes[str(key)] = row
+            elif tid in votes:
+                wishlist_votes[str(key)] = votes[tid]
+    if own_wishes:
+        out["streamdex_community_wishlist (eigene Beiträge)"] = own_wishes
+    if wishlist_votes:
+        out["streamdex_community_wishlist_votes (nur deine Stimmen)"] = wishlist_votes
+
+    poll_root = _safe_get("community_polls", errors=errors)
+    own_polls, poll_votes = {}, {}
+    if isinstance(poll_root, dict):
+        for key, value in poll_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("created_by") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = votes.get(tid)
+                own_polls[str(key)] = row
+            elif tid in votes:
+                poll_votes[str(key)] = votes[tid]
+    if own_polls:
+        out["community_polls (eigene Umfragen)"] = own_polls
+    if poll_votes:
+        out["community_poll_votes (nur deine Stimmen)"] = poll_votes
+
+    quiz_root = _safe_get("streamdex_quiz_rooms", errors=errors)
+    own_quiz_rooms, quiz_answers = {}, {}
+    if isinstance(quiz_root, dict):
+        for code, room in quiz_root.items():
+            if not isinstance(room, dict):
+                continue
+            answers = room.get("answers") if isinstance(room.get("answers"), dict) else {}
+            my_answers = answers.get(tid)
+            if my_answers not in (None, {}, []):
+                quiz_answers[str(code)] = my_answers
+            if str(room.get("created_by") or "") == tid:
+                row = {k: v for k, v in room.items() if k != "answers"}
+                row["participant_count"] = len(answers)
+                if my_answers not in (None, {}, []):
+                    row["my_answers"] = my_answers
+                own_quiz_rooms[str(code)] = row
+    if own_quiz_rooms:
+        out["streamdex_quiz_rooms (eigene Räume)"] = own_quiz_rooms
+    if quiz_answers:
+        out["streamdex_quiz_answers (nur deine Antworten)"] = quiz_answers
+
     events = _safe_get("streamdex_events", errors=errors)
     if isinstance(events, dict):
-        own_events = {
-            key: value for key, value in events.items()
-            if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)
-        }
+        own_events = {}
+        for key, value in events.items():
+            if not isinstance(value, dict) or str(value.get("owner_tid") or "") != tid:
+                continue
+            row = {k: v for k, v in value.items() if k != "participants"}
+            participants = value.get("participants") if isinstance(value.get("participants"), dict) else {}
+            row["participant_count"] = len(participants)
+            own_events[str(key)] = row
         if own_events:
             out["streamdex_events (eigene Events)"] = own_events
+
     return out
 
 def _delete_account_data(tid):
