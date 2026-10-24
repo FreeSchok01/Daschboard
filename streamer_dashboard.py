@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import ACCOUNT_DELETE_PATHS, ACCOUNT_KEEP_PATHS, account_path, has_active_user_session
 
 from beta_apply import _apply_form, render_logged_in_beta_status
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
@@ -699,16 +700,10 @@ def _daily_series(history, key, days, today=None):
 # ----------------------------------------------------------------------------
 # Wird beim Löschen entfernt (alles, was unter der eigenen Twitch-ID liegt). presence ZULETZT,
 # damit der Login bei einem Fehler mittendrin noch funktioniert und man es erneut versuchen kann.
-_DELETE_PATHS = [
-    "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
-    "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
-    "support_read/{t}", "giveaway_log/{t}",
-    "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
-    "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
-    "presence/{t}", "creator_profiles/{t}",
-]
-# Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
-_KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
+# All deletion/export roots are centralized in streamdex_security.py and tested.
+# Purchase/entitlement data is retained intentionally and disclosed in the UI.
+_DELETE_PATHS = list(ACCOUNT_DELETE_PATHS)
+_KEEP_PATHS = list(ACCOUNT_KEEP_PATHS)
 
 ACCOUNT_DATA_TABLE = """
 | Was | Wozu |
@@ -718,81 +713,231 @@ ACCOUNT_DATA_TABLE = """
 | Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
 | Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
 | Support-Nachrichten und Feedback | Support |
+| Ideen, Turniere, Glücksrad, Ziele, Moderationsprotokolle, Teamdaten, Quizbeiträge und Tool-Einstellungen | Deine privaten StreamDex-Werkzeuge |
+| Eigene Community-Beiträge, Stimmen, selbst erstellte Umfragen und Events | Community-Funktionen |
 | Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
 """
 
+def _require_account_owner(tid):
+    if not has_active_user_session(st.session_state, tid):
+        raise PermissionError("Für diese Kontodaten ist eine gültige Sitzung des Eigentümers erforderlich.")
+    return str(tid)
+
 
 def _safe_get(path):
-    try:
-        return db.reference(path).get()
-    except Exception as e:
-        return {"_fehler": f"{type(e).__name__}"}
+    """Fail closed: never turn a database read error into an apparently complete export."""
+    return db.reference(path).get()
 
 
 def _load_feedback(tid):
-    """Feedback-Einträge dieser Twitch-ID. Mit Index auf 'tid' direkt, sonst Fallback über 'ts' (letzte 1000)."""
-    ref = db.reference("feedback_inbox")
-    try:
-        data = ref.order_by_child("tid").equal_to(str(tid)).get() or {}
-    except Exception:
-        data = ref.order_by_child("ts").limit_to_last(1000).get() or {}
-    return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
+    """Read the full inbox so export/deletion never silently ignores old records."""
+    data = _safe_get("feedback_inbox") or {}
+    if not isinstance(data, dict):
+        raise RuntimeError("Feedback-Daten haben ein ungültiges Format.")
+    return {
+        k: v for k, v in data.items()
+        if isinstance(v, dict) and str(v.get("tid") or "") == str(tid)
+    }
 
 
 def _collect_account_data(tid):
-    """Alle gespeicherten Daten dieser Twitch-ID (nur nicht-leere Bereiche)."""
+    """Collect account-owned data only; exclude secrets and other users' private fields."""
+    tid = _require_account_owner(tid)
     out = {}
-    for path in _KEEP_PATHS + _DELETE_PATHS:
-        p = path.format(t=tid)
-        val = _safe_get(p)
-        if val not in (None, {}, []):
-            out[p] = val
-    fb = _load_feedback(tid)
-    if fb:
-        out["feedback_inbox (nur deine Einträge)"] = fb
-    events = _safe_get("streamdex_events")
-    if isinstance(events, dict):
-        own_events = {key: value for key, value in events.items()
-                      if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)}
-        if own_events:
-            out["streamdex_events (eigene Events)"] = own_events
+    for template in _KEEP_PATHS + _DELETE_PATHS:
+        path = account_path(template, tid)
+        value = _safe_get(path)
+        if value not in (None, {}, []):
+            out[path] = value
+
+    community = {}
+
+    # User-authored feedback and the current user's votes, without exporting voter IDs.
+    feedback_root = _safe_get("feedback_inbox") or {}
+    own_feedback, feedback_votes = {}, {}
+    if isinstance(feedback_root, dict):
+        for key, value in feedback_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = bool(votes.get(tid))
+                own_feedback[str(key)] = row
+            elif tid in votes:
+                feedback_votes[str(key)] = votes[tid]
+    if own_feedback:
+        community["feedback_submissions"] = own_feedback
+    if feedback_votes:
+        community["feedback_votes"] = feedback_votes
+
+    # Community wishlist: include own posts and own vote records only.
+    wishlist_root = _safe_get("streamdex_community_wishlist") or {}
+    own_wishes, wishlist_votes = {}, {}
+    if isinstance(wishlist_root, dict):
+        for key, value in wishlist_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("author_tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = tid in votes
+                own_wishes[str(key)] = row
+            elif tid in votes:
+                wishlist_votes[str(key)] = votes[tid]
+    if own_wishes:
+        community["wishlist_posts"] = own_wishes
+    if wishlist_votes:
+        community["wishlist_votes"] = wishlist_votes
+
+    # Polls: never export other participants' vote identities or answers.
+    poll_root = _safe_get("community_polls") or {}
+    own_polls, poll_votes = {}, {}
+    if isinstance(poll_root, dict):
+        for key, value in poll_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("created_by") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = votes.get(tid)
+                own_polls[str(key)] = row
+            elif tid in votes:
+                poll_votes[str(key)] = votes[tid]
+    if own_polls:
+        community["polls_created"] = own_polls
+    if poll_votes:
+        community["poll_votes"] = poll_votes
+
+    # Quiz rooms are shared. Include one's own rooms with only one's own answers,
+    # plus answers submitted by this account in other rooms.
+    quiz_root = _safe_get("streamdex_quiz_rooms") or {}
+    own_rooms, quiz_answers = {}, {}
+    if isinstance(quiz_root, dict):
+        for code, value in quiz_root.items():
+            if not isinstance(value, dict):
+                continue
+            answers = value.get("answers") if isinstance(value.get("answers"), dict) else {}
+            my_answers = answers.get(tid)
+            if my_answers not in (None, {}, []):
+                quiz_answers[str(code)] = my_answers
+            if str(value.get("created_by") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "answers"}
+                row["participant_count"] = len(answers)
+                if my_answers not in (None, {}, []):
+                    row["my_answers"] = my_answers
+                own_rooms[str(code)] = row
+    if own_rooms:
+        community["quiz_rooms_created"] = own_rooms
+    if quiz_answers:
+        community["quiz_answers"] = quiz_answers
+
+    # Own events only; participant records belong to other users and are not exported.
+    events_root = _safe_get("streamdex_events") or {}
+    own_events = {}
+    if isinstance(events_root, dict):
+        for event_id, value in events_root.items():
+            if isinstance(value, dict) and str(value.get("owner_tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "participants"}
+                participants = value.get("participants") if isinstance(value.get("participants"), dict) else {}
+                row["participant_count"] = len(participants)
+                own_events[str(event_id)] = row
+    if own_events:
+        community["events_created"] = own_events
+
+    if community:
+        out["community (nur eigene Beiträge und Stimmen)"] = community
     return out
 
 
 def _delete_account_data(tid):
-    """Löscht alle Daten unter der eigenen Twitch-ID. Gibt (Anzahl gelöschter Bereiche, Fehlerliste) zurück."""
+    """Delete account-owned records. Failures are reported without exposing raw database errors."""
+    tid = _require_account_owner(tid)
     removed, errors = 0, []
-    try:
-        for key in list(_load_feedback(tid)):
-            db.reference(f"feedback_inbox/{key}").delete()
-            removed += 1
-    except Exception as e:
-        errors.append(f"feedback_inbox: {type(e).__name__}")
-    try:
-        profile = db.reference(f"creator_profiles/{tid}").get() or {}
-        old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
-        if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
-            db.reference(f"creator_profile_slugs/{old_slug}").delete()
-    except Exception as e:
-        errors.append(f"creator_profile_slugs: {type(e).__name__}")
-    try:
-        global_events = _safe_get("streamdex_events")
-        if isinstance(global_events, dict):
-            for event_id, event in global_events.items():
-                if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
+
+    def read_root(path, label):
+        try:
+            value = _safe_get(path)
+            return value if isinstance(value, dict) else {}
+        except Exception as exc:
+            errors.append(f"{label}: {type(exc).__name__}")
+            return None
+
+    # Remove the user's votes from community posts and polls, then remove their own posts.
+    for root_path, owner_field, label in (
+        ("feedback_inbox", "tid", "feedback_inbox"),
+        ("streamdex_community_wishlist", "author_tid", "streamdex_community_wishlist"),
+        ("community_polls", "created_by", "community_polls"),
+    ):
+        root = read_root(root_path, label)
+        if root is None:
+            continue
+        for key, value in root.items():
+            if not isinstance(value, dict):
+                continue
+            is_owner = str(value.get(owner_field) or "") == tid
+            try:
+                votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+                if tid in votes:
+                    db.reference(f"{root_path}/{key}/votes/{tid}").delete()
+                    removed += 1
+                if is_owner:
+                    db.reference(f"{root_path}/{key}").delete()
+                    removed += 1
+            except Exception as exc:
+                errors.append(f"{label}: {type(exc).__name__}")
+
+    # Quiz answers are keyed by Twitch ID inside shared rooms; delete only this user's
+    # answer records in other people's rooms. Delete rooms created by the departing user.
+    quiz_root = read_root("streamdex_quiz_rooms", "streamdex_quiz_rooms")
+    if quiz_root is not None:
+        for code, room in quiz_root.items():
+            if not isinstance(room, dict):
+                continue
+            try:
+                if str(room.get("created_by") or "") == tid:
+                    db.reference(f"streamdex_quiz_rooms/{code}").delete()
+                    removed += 1
+                elif tid in (room.get("answers") if isinstance(room.get("answers"), dict) else {}):
+                    db.reference(f"streamdex_quiz_rooms/{code}/answers/{tid}").delete()
+                    removed += 1
+            except Exception as exc:
+                errors.append(f"streamdex_quiz_rooms: {type(exc).__name__}")
+
+    # Remove public events owned by this account, including participant lists on those events.
+    events_root = read_root("streamdex_events", "streamdex_events")
+    if events_root is not None:
+        for event_id, event in events_root.items():
+            if isinstance(event, dict) and str(event.get("owner_tid") or "") == tid:
+                try:
                     db.reference(f"streamdex_events/{event_id}").delete()
                     removed += 1
-    except Exception as e:
-        errors.append(f"streamdex_events: {type(e).__name__}")
-    for path in _DELETE_PATHS:
-        p = path.format(t=tid)
+                except Exception as exc:
+                    errors.append(f"streamdex_events: {type(exc).__name__}")
+
+    # Clean the public profile slug mapping only when it still points to this account.
+    try:
+        profile = _safe_get(account_path("creator_profiles/{t}", tid)) or {}
+        old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
+        if old_slug and str(_safe_get(f"creator_profile_slugs/{old_slug}") or "") == tid:
+            db.reference(f"creator_profile_slugs/{old_slug}").delete()
+            removed += 1
+    except Exception as exc:
+        errors.append(f"creator_profile_slugs: {type(exc).__name__}")
+
+    # Presence is intentionally the last path removed.
+    for template in _DELETE_PATHS:
+        path = account_path(template, tid)
         try:
-            ref = db.reference(p)
+            ref = db.reference(path)
             if ref.get() is not None:
                 ref.delete()
                 removed += 1
-        except Exception as e:
-            errors.append(f"{p}: {type(e).__name__}")
+        except Exception as exc:
+            errors.append(f"{path}: {type(exc).__name__}")
     return removed, errors
 
 
