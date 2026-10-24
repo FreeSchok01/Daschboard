@@ -185,46 +185,15 @@ def _twitch_credentials():
 
 
 def _make_twitch_state(client_secret):
-    """Erzeugt einen zeitlich begrenzten, signierten OAuth-state-Wert."""
-    timestamp = str(int(time.time()))
-    nonce = secrets.token_urlsafe(24)
-    payload = f"{timestamp}.{nonce}"
-    signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{payload}.{signature}"
+    """Create the signed, short-lived state value used in the Twitch OAuth redirect."""
+    return create_signed_oauth_state(client_secret, secrets.token_urlsafe(24))
 
 
 def _valid_twitch_state(state, client_secret):
-    """Prüft Signatur und Ablaufzeit des OAuth-state-Werts."""
-    if not isinstance(state, str):
-        return False
-    pieces = state.split(".")
-    if len(pieces) != 3:
-        return False
-
-    timestamp_text, nonce, supplied_signature = pieces
-    if not nonce or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
-        return False
-    try:
-        timestamp = int(timestamp_text)
-    except (TypeError, ValueError):
-        return False
-
-    age = int(time.time()) - timestamp
-    if age < -60 or age > TWITCH_STATE_MAX_AGE_S:
-        return False
-
-    payload = f"{timestamp_text}.{nonce}"
-    expected_signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected_signature, supplied_signature)
-
+    """Validate state signature and expiry before exchanging an OAuth code."""
+    return validate_signed_oauth_state(
+        state, client_secret, max_age_seconds=TWITCH_STATE_MAX_AGE_S
+    )
 
 def _twitch_authorization_url():
     """Liefert (Autorisierungs-URL, Fehlermeldung)."""
@@ -427,7 +396,7 @@ def _verify_and_consume_token(token: str):
     try:
         ref.transaction(_take)
     except Exception as e:
-        return _fail(f"Transaktion fehlgeschlagen: {type(e).__name__}: {e}")
+        return _fail(f"Firebase-Transaktion fehlgeschlagen: {type(e).__name__}")
     try:
         ref.delete()   # Markierung entfernen (Token ist ohnehin schon unbrauchbar)
     except Exception:
@@ -435,20 +404,19 @@ def _verify_and_consume_token(token: str):
 
     data = consumed.get("data")
     if not isinstance(data, dict):
-        return _fail(f"Kein Eintrag gefunden (data={data!r}). Token schon eingelöst, "
-                     "oder das Dashboard liest in einer anderen Datenbank.")
+        return _fail("Token-Eintrag fehlt oder wurde bereits eingelöst.")
 
     try:
         created_at = int(data.get("ts") or 0)
     except (TypeError, ValueError):
-        return _fail(f"ts ungültig: {data!r}")
+        return _fail("Token-Zeitstempel ungültig.")
     age_ms = int(time.time() * 1000) - created_at
-    if not created_at or age_ms > TOKEN_MAX_AGE_MS:
-        return _fail(f"Abgelaufen: Alter {age_ms / 1000:.0f} s (erlaubt {TOKEN_MAX_AGE_MS // 1000} s), ts={created_at}")
+    if not created_at or age_ms < -60_000 or age_ms > TOKEN_MAX_AGE_MS:
+        return _fail("Token abgelaufen oder Zeitstempel ungültig.")
 
     tid = str(data.get("tid") or "")
-    if not TID_RE.match(tid):
-        return _fail(f"tid ungültig: {tid!r}")
+    if not TID_RE.fullmatch(tid):
+        return _fail("Token enthält keine gültige Twitch-ID.")
     return tid
 
 
