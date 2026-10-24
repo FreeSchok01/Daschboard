@@ -443,7 +443,7 @@ def test_wishlist_mutations_recheck_owner(memory_db):
     assert not streamdex_suite._set_owned_wishlist_status("wish123", "99999", "Erledigt")
     assert not streamdex_suite._delete_owned_wishlist_item("wish123", "99999")
     assert memory_db.reference("streamdex_community_wishlist/wish123/status").get() == "Neu"
-    assert streamdex_suite._set_owned_wishlist_status("wish123", "12345", "Erledigt")
+    assert streamdex_suite._set_owned_wishlist_status("wish123", "12345", "Umgesetzt")
     assert streamdex_suite._delete_owned_wishlist_item("wish123", "12345")
     assert memory_db.reference("streamdex_community_wishlist/wish123").get() is None
 
