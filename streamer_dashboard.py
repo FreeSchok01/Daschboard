@@ -899,8 +899,11 @@ def _delete_account_data(tid):
     except Exception as exc:
         errors.append(f"creator_profile_slugs: {type(exc).__name__}")
 
-    # Presence is intentionally the last path removed.
+    # Presence is intentionally the last path removed, and only if every prior
+    # deletion succeeded. Keeping it lets the signed-in owner retry a partial cleanup.
     for template in _DELETE_PATHS:
+        if template == "presence/{t}" and errors:
+            break
         path = account_path(template, tid)
         try:
             ref = db.reference(path)
