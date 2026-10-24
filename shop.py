@@ -305,18 +305,62 @@ def fulfill(code, manual=False):
 
 
 CSS = """<style>
-.block-container{max-width:1180px;padding-top:1.5rem}
-.hero{background:linear-gradient(135deg,#9146FF 0%,#5b21b6 55%,#1e1b4b 100%);border-radius:22px;padding:2.4rem 2.2rem;color:#fff;margin-bottom:1.2rem;box-shadow:0 10px 40px #9146ff33}
-.hero h1{margin:0;font-size:2.4rem;color:#fff;padding:0}.hero p{margin:.5rem 0 0;opacity:.92;font-size:1.05rem}
-.steps{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem}.steps span{background:#ffffff22;border-radius:999px;padding:.25rem .8rem;font-size:.85rem}
-.banner{background:#3b2a05;border:1px solid #f5b301;color:#ffd166;border-radius:12px;padding:.7rem 1rem;margin-bottom:1rem}
-.ct{font-size:1.15rem;font-weight:700;margin-bottom:.2rem}.cd{opacity:.72;font-size:.9rem;min-height:2.7em}
-.price{font-size:1.6rem;font-weight:800;color:#b388ff;margin:.4rem 0}.old{text-decoration:line-through;opacity:.5;font-size:.95rem;margin-left:.5rem;font-weight:400;color:#aaa}
-.badge{display:inline-block;background:#22c55e22;color:#4ade80;border-radius:999px;padding:.1rem .7rem;font-size:.8rem;font-weight:700}
-.badge.save{background:#f5b30126;color:#fbbf24}
-.chips span{display:inline-block;background:#ffffff14;border-radius:8px;padding:.05rem .5rem;margin:.1rem .2rem 0 0;font-size:.78rem}
-div[data-testid="stVerticalBlockBorderWrapper"]{border-radius:16px}
-.stButton>button,.stLinkButton>a{border-radius:12px;font-weight:600}
+.block-container{max-width:1320px;padding-top:1.35rem;padding-bottom:3rem}
+:root{--shop-purple:#8b5cf6;--shop-cyan:#22d3ee;--shop-line:rgba(148,163,184,.18);--shop-muted:#9aa8c7}
+.sd-shop-hero{position:relative;overflow:hidden;border-radius:24px;padding:clamp(1.4rem,4vw,3rem);margin:0 0 1.4rem;color:#fff;
+background:radial-gradient(ellipse at 88% 12%,rgba(34,211,238,.22),transparent 34%),radial-gradient(ellipse at 2% 100%,rgba(139,92,246,.26),transparent 40%),linear-gradient(125deg,#0e142b 0%,#161538 56%,#0d243b 100%);
+border:1px solid rgba(167,139,250,.28);box-shadow:0 24px 60px rgba(3,7,18,.28),inset 0 1px 0 rgba(255,255,255,.06)}
+.sd-shop-eyebrow{display:flex;align-items:center;gap:9px;font-size:.7rem;letter-spacing:.17em;text-transform:uppercase;font-weight:800;color:#c4b5fd}
+.sd-shop-dot{width:8px;height:8px;background:#22d3ee;border-radius:50%;box-shadow:0 0 14px #22d3ee;display:inline-block}
+.sd-shop-hero h1{font-size:clamp(2rem,4vw,3.25rem)!important;line-height:1.05!important;letter-spacing:-.055em!important;color:#fff!important;margin:.8rem 0 .7rem!important;padding:0!important}
+.sd-shop-hero h1 span{background:linear-gradient(100deg,#c4b5fd,#67e8f9);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sd-shop-hero p{max-width:760px;color:#c2cce3;font-size:1rem;line-height:1.7;margin:0}
+.sd-shop-hero-foot{display:flex;gap:8px;flex-wrap:wrap;margin-top:1.35rem}
+.sd-shop-hero-foot span{padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.055);border:1px solid rgba(203,213,225,.14);font-size:.76rem;color:#dbeafe;font-weight:700}
+.sd-shop-section-title{display:flex;align-items:center;gap:10px;margin:.4rem 0 .25rem;font-size:1.12rem;font-weight:800;letter-spacing:-.02em}
+.sd-shop-section-sub{color:var(--shop-muted);font-size:.86rem;margin:0 0 1rem}
+.sd-shop-account{background:linear-gradient(135deg,rgba(20,28,52,.94),rgba(12,24,42,.92));border:1px solid var(--shop-line);border-radius:18px;padding:1rem 1.1rem;margin-bottom:1.15rem}
+.sd-shop-account-tag{display:inline-flex;align-items:center;gap:7px;padding:5px 9px;border-radius:999px;background:rgba(34,197,94,.09);border:1px solid rgba(34,197,94,.23);color:#86efac;font-size:.72rem;font-weight:800}
+.sd-shop-account-copy{color:#aab8d4;font-size:.82rem;line-height:1.55}
+.sd-shop-step-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:1.25rem 0}
+.sd-shop-step{background:rgba(15,23,42,.62);border:1px solid var(--shop-line);border-radius:14px;padding:12px 13px}
+.sd-shop-step b{display:block;font-size:.82rem;color:#edf2ff;margin-bottom:3px}
+.sd-shop-step span{font-size:.74rem;line-height:1.45;color:#94a3c8}
+.ct{font-size:1.14rem;font-weight:800;letter-spacing:-.02em;line-height:1.35;margin:.7rem 0 .3rem;color:#f4f5ff}
+.cd{font-size:.84rem;line-height:1.6;color:#aab6d0;min-height:2.8em}
+.sd-shop-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.sd-shop-kind{display:inline-block;padding:4px 9px;border-radius:999px;font-size:.66rem;letter-spacing:.1em;font-weight:900;text-transform:uppercase;background:rgba(139,92,246,.15);border:1px solid rgba(167,139,250,.27);color:#c4b5fd}
+.sd-shop-kind.pack{background:rgba(34,211,238,.09);border-color:rgba(34,211,238,.25);color:#67e8f9}
+.sd-shop-state{font-size:.7rem;color:#86efac;font-weight:800}
+.sd-shop-icon{display:flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:16px;margin:.9rem 0 .55rem;
+font-size:1.65rem;background:radial-gradient(circle at 35% 20%,rgba(196,181,253,.22),transparent 60%),linear-gradient(135deg,rgba(139,92,246,.18),rgba(34,211,238,.07));border:1px solid rgba(167,139,250,.23)}
+.price{font-size:1.72rem;line-height:1.3;font-weight:900;letter-spacing:-.04em;color:#c4b5fd;margin:.8rem 0 .45rem}
+.price .unit{font-size:.77rem;font-weight:600;letter-spacing:0;color:#9aa8c7}
+.old{text-decoration:line-through;opacity:.58;font-size:.86rem;margin-left:.45rem;font-weight:500;color:#b9c3d9;letter-spacing:0}
+.badge{display:inline-flex;align-items:center;gap:4px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.22);color:#86efac;border-radius:999px;padding:4px 9px;font-size:.7rem;font-weight:800}
+.badge.save{background:rgba(245,179,1,.1);border-color:rgba(245,179,1,.24);color:#fcd34d}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin:.55rem 0}
+.chips span{display:inline-block;background:rgba(255,255,255,.045);border:1px solid rgba(148,163,184,.14);border-radius:7px;padding:4px 7px;font-size:.68rem;color:#c7d2e8}
+.sd-shop-price-row{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.sd-shop-filter-note{font-size:.75rem;color:#a6b5d2;margin:.15rem 0 .7rem}
+.sd-shop-empty{border:1px dashed rgba(148,163,184,.28);background:rgba(15,23,42,.45);border-radius:15px;padding:1.1rem;color:#aab6d0;font-size:.86rem;line-height:1.6}
+.sd-shop-cart-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:.7rem}
+.sd-shop-cart-count{display:inline-flex;align-items:center;justify-content:center;min-width:25px;height:25px;padding:0 7px;border-radius:99px;background:rgba(139,92,246,.18);border:1px solid rgba(167,139,250,.25);color:#ddd6fe;font-weight:800;font-size:.72rem}
+.sd-shop-cart-line{padding:9px 0;border-bottom:1px solid rgba(148,163,184,.13)}
+.sd-shop-total-label{font-size:.76rem;color:#9aa8c7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}
+.sd-shop-total{font-size:1.8rem;font-weight:900;letter-spacing:-.045em;color:#d8b4fe;margin:.1rem 0 .35rem}
+.sd-shop-checkout-note{font-size:.75rem;line-height:1.55;color:#9eacc8}
+.sd-shop-checkout-step{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(148,163,184,.12)}
+.sd-shop-checkout-step b{display:block;font-size:.82rem;color:#eef2ff}
+.sd-shop-checkout-step span{font-size:.76rem;color:#a5b4cf;line-height:1.5}
+.sd-shop-checkout-num{flex:0 0 27px;height:27px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:rgba(139,92,246,.16);border:1px solid rgba(167,139,250,.2);color:#ddd6fe;font-weight:900;font-size:.75rem}
+.banner{background:linear-gradient(110deg,rgba(120,53,15,.24),rgba(245,158,11,.08));border:1px solid rgba(245,179,1,.3);color:#fde68a;border-radius:13px;padding:.8rem 1rem;margin:0 0 1.1rem}
+div[data-testid="stVerticalBlockBorderWrapper"]{border-radius:17px}
+.stButton>button,.stLinkButton>a,.stFormSubmitButton>button{border-radius:11px;font-weight:800}
+.stButton>button[kind="primary"],.stFormSubmitButton>button[kind="primary"]{box-shadow:0 6px 19px rgba(139,92,246,.18)}
+div[data-testid="stExpander"] details{background:rgba(12,18,37,.74);border:1px solid var(--shop-line);border-radius:13px}
+.sd-shop-legal{font-size:.8rem;color:#9aa8c7;margin-top:.5rem}
+@media(max-width:760px){.sd-shop-step-row{grid-template-columns:1fr}.sd-shop-hero{border-radius:18px}.sd-shop-account{padding:.8rem}.ct{font-size:1.02rem}}
 </style>"""
 
 
@@ -331,36 +375,100 @@ def _rm(i):
 
 
 def _card(iid, it, items, have, cart):
-    g = it.get("games", [])
+    games = it.get("games", [])
     pack = it.get("kind") == "pack"
     with st.container(border=True):
+        label_map = {
+            k: v["name"] for v in items.values()
+            if v.get("kind", "game") == "game" for k in v.get("games", [])
+        }
         chips = ""
         if pack:
-            lab = {k: v["name"] for v in items.values() if v.get("kind") == "game" for k in v.get("games", [])}
-            chips = '<div class="chips">' + "".join(f"<span>{html.escape(lab.get(x, x))}</span>" for x in g) + "</div>"
-        single = sum(Decimal(_price(v["price"])) for v in items.values() if v.get("kind") == "game" and set(v.get("games", [])) <= set(g))
-        old = f'<span class="old">{single} €</span>' if pack and single > Decimal(_price(it["price"])) else ""
-        save = f'<span class="badge save">Spare {single - Decimal(_price(it["price"]))} €</span>' if old else ""
-        st.markdown(f'<div class="ct">{html.escape(it["name"])}</div><div class="cd">{html.escape(it.get("desc", ""))}</div>{chips}'
-                    f'<div class="price">{_price(it["price"])} €{old}</div>{save}', unsafe_allow_html=True)
-        if g and set(g) <= have:
-            st.markdown('<span class="badge">✅ Freigeschaltet</span>', unsafe_allow_html=True)
+            chips = '<div class="chips">' + "".join(
+                f"<span>{html.escape(label_map.get(game, game))}</span>" for game in games
+            ) + "</div>"
+        single_value = sum(
+            Decimal(_price(item["price"]))
+            for item in items.values()
+            if item.get("kind", "game") == "game"
+            and set(item.get("games", [])) <= set(games)
+        )
+        item_price = Decimal(_price(it["price"]))
+        old = f'<span class="old">{single_value:.2f} €</span>' if pack and single_value > item_price else ""
+        savings = (
+            f'<span class="badge save">↘ Spare {(single_value - item_price):.2f} €</span>'
+            if old else ""
+        )
+        category = "PACK" if pack else "EINZEL-GAME"
+        category_class = "sd-shop-kind pack" if pack else "sd-shop-kind"
+        icon = "🎁" if pack else next(
+            (char for char in str(it.get("name", ""))[:4] if ord(char) > 255),
+            "🎮",
+        )
+        title = html.escape(str(it.get("name") or iid))
+        description = html.escape(str(it.get("desc") or ""))
+        status = (
+            '<span class="sd-shop-state">✓ Freigeschaltet</span>'
+            if games and set(games) <= have else ""
+        )
+        st.markdown(
+            f'<div class="sd-shop-card-top"><span class="{category_class}">{category}</span>{status}</div>'
+            f'<div class="sd-shop-icon">{html.escape(icon)}</div>'
+            f'<div class="ct">{title}</div><div class="cd">{description}</div>{chips}'
+            f'<div class="sd-shop-price-row"><div class="price">{item_price:.2f} <span class="unit">EUR</span></div>{old}</div>'
+            f'{savings}',
+            unsafe_allow_html=True,
+        )
+        if games and set(games) <= have:
+            st.caption("Dieses Angebot ist für deinen Kanal bereits freigeschaltet.")
         elif iid in cart:
-            st.button("✔ Im Warenkorb (entfernen)", key=f"rm_c_{iid}", on_click=_rm, args=(iid,), use_container_width=True)
+            st.button(
+                "✓ Im Warenkorb · entfernen",
+                key=f"rm_c_{iid}",
+                on_click=_rm,
+                args=(iid,),
+                use_container_width=True,
+            )
         else:
-            st.button("🛒 In den Warenkorb", key=f"add_{iid}", on_click=_add, args=(iid,), type="primary" if pack else "secondary", use_container_width=True)
-
+            st.button(
+                "Zum Warenkorb  →",
+                key=f"add_{iid}",
+                on_click=_add,
+                args=(iid,),
+                type="primary",
+                use_container_width=True,
+            )
 
 def _order_box():
     key = "skip_order" if st.session_state.get("skip_order") else "order"
     code, price = st.session_state[key]
     with st.container(border=True):
-        st.markdown("### 💳 Jetzt bezahlen")
-        st.markdown(f"**1.** Öffne die Tip-Seite  \n**2.** Betrag: **{price} €** (oder mehr)  \n**3.** Nachricht: exakt diesen Code")
+        st.markdown(
+            '<div class="sd-shop-eyebrow"><span class="sd-shop-dot"></span> CHECKOUT</div>'
+            '<div class="ct">Bestellung abschließen</div>'
+            '<div class="cd">Noch ein Schritt – dann sind deine Module bereit.</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">1</span>'
+            '<div><b>Tip-Seite öffnen</b><span>Öffne deine StreamElements-Tip-Seite und sende den angezeigten Betrag.</span></div></div>'
+            '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">2</span>'
+            '<div><b>Bestellcode eintragen</b><span>Füge den Code als Nachricht beim Tip exakt so ein.</span></div></div>'
+            '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">3</span>'
+            '<div><b>Zahlung bestätigen</b><span>Danach hier prüfen lassen und freischalten.</span></div></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="sd-shop-total-label">Zu zahlen</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sd-shop-total">{html.escape(str(price))} €</div>', unsafe_allow_html=True)
         st.code(code, language=None)
-        st.link_button("➡️ Zur Tip-Seite", st.secrets["streamelements"]["tip_url"], use_container_width=True)
-        st.caption("Danach hier auf „Zahlung prüfen“ klicken.")
-        if st.button("🔍 Zahlung prüfen", type="primary", use_container_width=True):
+        st.link_button(
+            "Tip-Seite öffnen  ↗",
+            st.secrets["streamelements"]["tip_url"],
+            type="primary",
+            use_container_width=True,
+        )
+        st.caption("Nach dem Tip hier auf „Zahlung prüfen“ klicken.")
+        if st.button("Zahlung prüfen", type="primary", use_container_width=True):
             ok, msg = fulfill(code)
             if ok:
                 if key == "order":
@@ -370,66 +478,110 @@ def _order_box():
                 st.success(msg)
             else:
                 st.warning(msg)
-        if st.button("Abbrechen", use_container_width=True):
+        if st.button("Bestellung abbrechen", use_container_width=True):
             cancel_order(code)
             st.session_state.pop(key)
             st.rerun()
-
-
 def _cart_box(tid, name, items, have):
-    ids, total, save, _ = cart_view(st.session_state.get("cart", []), items, have)
+    ids, total, savings, _ = cart_view(st.session_state.get("cart", []), items, have)
     with st.container(border=True):
-        st.markdown("### 🛒 Warenkorb")
+        st.markdown(
+            f'<div class="sd-shop-cart-head"><div class="ct">Dein Warenkorb</div>'
+            f'<span class="sd-shop-cart-count">{len(ids)}</span></div>',
+            unsafe_allow_html=True,
+        )
         if not ids:
-            st.caption("Noch leer. Wähle links Packs oder einzelne Games.")
+            st.markdown(
+                '<div class="sd-shop-empty"><strong>Noch ist hier Platz.</strong><br>'
+                'Wähle ein einzelnes Game oder ein Pack aus. Deine Auswahl erscheint hier.</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown('<div class="sd-shop-legal">🔒 Du bezahlst nur die Module, die du auswählst.</div>', unsafe_allow_html=True)
             return
-        for i in ids:
-            a, b = st.columns([5, 1])
-            a.markdown(f"{html.escape(items[i]['name'])}  \n**{_price(items[i]['price'])} €**")
-            b.button("✕", key=f"x_{i}", on_click=_rm, args=(i,))
+        for item_id in ids:
+            left, right = st.columns([5, 1])
+            left.markdown(
+                f'<div class="sd-shop-cart-line"><b>{html.escape(items[item_id]["name"])}</b><br>'
+                f'<span class="sd-shop-total-label">{_price(items[item_id]["price"])} €</span></div>',
+                unsafe_allow_html=True,
+            )
+            right.button("✕", key=f"x_{item_id}", on_click=_rm, args=(item_id,), help="Aus dem Warenkorb entfernen")
         st.divider()
-        cc = st.session_state.get("coupon")
-        ok, cp, _m = validate_coupon(cc) if cc else (False, None, "")
-        if cc and not ok:
+        coupon_code = st.session_state.get("coupon")
+        valid_coupon, coupon, _message = validate_coupon(coupon_code) if coupon_code else (False, None, "")
+        if coupon_code and not valid_coupon:
             st.session_state.pop("coupon", None)
-        if ok:
-            x, y = st.columns([4, 1])
-            x.markdown(f'🎟️ **{cp["code"]}** · ' + (f'Guthaben {float(cp.get("balance") or 0):.2f} €' if cp.get("type") == "amount" else f'−{cp.get("percent")} %'))
-            y.button("✕", key="x_coupon", on_click=lambda: st.session_state.pop("coupon", None))
+        if valid_coupon:
+            col_text, col_remove = st.columns([4, 1])
+            col_text.markdown(
+                '<div class="sd-shop-cart-line">🎟️ <b>'
+                + html.escape(str(coupon["code"]))
+                + "</b><br><span class='sd-shop-total-label'>"
+                + (f'Guthaben {float(coupon.get("balance") or 0):.2f} €' if coupon.get("type") == "amount"
+                   else f'Rabatt {coupon.get("percent")} %')
+                + "</span></div>",
+                unsafe_allow_html=True,
+            )
+            col_remove.button("✕", key="x_coupon", on_click=lambda: st.session_state.pop("coupon", None), help="Gutschein entfernen")
         else:
-            x, y = st.columns([3, 2])
-            code_in = x.text_input("Code", key="coupon_in", label_visibility="collapsed", placeholder="Gutschein / Partner-Code")
-            if y.button("Einlösen", use_container_width=True):
-                good, _c, msg = validate_coupon(code_in)
+            col_code, col_apply = st.columns([3, 1.5])
+            code_input = col_code.text_input(
+                "Gutschein- oder Partner-Code",
+                key="coupon_in",
+                placeholder="Code eingeben",
+                label_visibility="collapsed",
+            )
+            if col_apply.button("Einlösen", use_container_width=True):
+                good, _coupon, message = validate_coupon(code_input)
                 if good:
-                    st.session_state["coupon"] = code_in.strip().upper()
+                    st.session_state["coupon"] = code_input.strip().upper()
                     st.rerun()
                 else:
-                    st.error(msg)
-        final, disc = apply_coupon(total, cp if ok else None)
-        old = f'<span class="old">{total} €</span>' if disc > 0 else ""
-        st.markdown(f'<div class="price">Gesamt: {final} €{old}</div>' + (f'<span class="badge save">Du sparst {save + disc} €</span>' if save + disc > 0 else ""), unsafe_allow_html=True)
-        agree = st.checkbox("Ich stimme zu, dass die Freischaltung sofort erfolgt und mein Widerrufsrecht damit erlischt.")
-        if st.button("🎁 Kostenlos freischalten" if final == 0 else "Bestellung anlegen", type="primary", disabled=not agree, use_container_width=True):
+                    st.error(message)
+        final, discount = apply_coupon(total, coupon if valid_coupon else None)
+        st.markdown('<div class="sd-shop-total-label">Gesamtsumme</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="sd-shop-total">{final:.2f} €</div>'
+            + (f'<span class="old">{total:.2f} €</span>' if discount > 0 else "")
+            + (f'<div style="margin-top:.35rem"><span class="badge save">Du sparst {savings + discount:.2f} €</span></div>'
+               if savings + discount > 0 else ""),
+            unsafe_allow_html=True,
+        )
+        agree = st.checkbox(
+            "Ich stimme der sofortigen Freischaltung zu und bestätige die Hinweise zum Widerrufsrecht."
+        )
+        if st.button(
+            "🎁 Kostenlos freischalten" if final == 0 else "Sichere Bestellung erstellen",
+            type="primary",
+            disabled=not agree,
+            use_container_width=True,
+        ):
             try:
-                oc, op = create_cart_order(tid, name, ids, items, cc if ok else "", st.session_state.get("gift_data"))
-            except ValueError as e:
-                st.error(str(e))
+                order_code, order_price = create_cart_order(
+                    tid, name, ids, items, coupon_code if valid_coupon else "",
+                    st.session_state.get("gift_data"),
+                )
+            except ValueError as exc:
+                st.error(str(exc))
             else:
                 st.session_state["cart"] = []
-                if Decimal(op) == 0:
-                    st.session_state["flash"] = fulfill(oc, manual=True)[1]
-                    st.session_state["download_order_code"] = oc
+                if Decimal(order_price) == 0:
+                    st.session_state["flash"] = fulfill(order_code, manual=True)[1]
+                    st.session_state["download_order_code"] = order_code
                 else:
-                    st.session_state["order"] = (oc, op)
+                    st.session_state["order"] = (order_code, order_price)
                 st.rerun()
-
-
 def render_shop(games):
     st.markdown(CSS, unsafe_allow_html=True)
-    st.markdown('<div class="hero"><h1>🛒 Streamdex Shop</h1><p>Schalte Chat-Games für deinen Twitch-Kanal frei: einzeln oder im Pack.</p>'
-                '<div class="steps"><span>1 · Twitch-Name eingeben</span><span>2 · Warenkorb füllen</span><span>3 · Per Tip bezahlen</span><span>4 · Nach ca. 1 Min. aktiv</span></div></div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sd-shop-hero">'
+        '<div class="sd-shop-eyebrow"><span class="sd-shop-dot"></span> STREAMDEX OS · MODUL-STORE</div>'
+        '<h1>Mach deinen Stream <span>interaktiver.</span></h1>'
+        '<p>Stelle dir deinen StreamDex zusammen: einzelne Chat-Games für deinen Kanal oder günstige Packs für das komplette Community-Erlebnis. Einmal auswählen, bequem per Tip bezahlen und direkt in der App nutzen.</p>'
+        '<div class="sd-shop-hero-foot"><span>🎮 Einzelmodule</span><span>🎁 Bundle-Angebote</span><span>⚡ Freischaltung in ca. 1 Minute</span><span>🔐 Sichere Bestellprüfung</span></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     if st.session_state.get("flash"):
         st.success(st.session_state.pop("flash"))
         st.balloons()
@@ -437,55 +589,136 @@ def render_shop(games):
         db.reference("shop/items").set(default_items(games))
     cfg = shop_settings()
     if cfg.get("banner"):
-        st.markdown(f'<div class="banner">📢 {html.escape(str(cfg["banner"]))}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="banner">📣 {html.escape(str(cfg["banner"]))}</div>', unsafe_allow_html=True)
     if cfg.get("open", True) is False:
-        st.info("Der Shop ist gerade geschlossen. Schau bald wieder vorbei!")
+        st.markdown(
+            '<div class="sd-shop-empty"><strong>Shop gerade pausiert.</strong><br>'
+            'Wir sind bald wieder für dich da. Bereits gekaufte Downloads kannst du weiter unten über deinen Bestellcode aufrufen.</div>',
+            unsafe_allow_html=True,
+        )
         return
-    name = st.text_input("Dein Twitch-Name", value=str(st.query_params.get("u", "")), placeholder="z.B. meinkanal")
+
+    st.markdown('<div class="sd-shop-section-title">01 · Dein Twitch-Kanal</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sd-shop-section-sub">Damit deine Käufe beim richtigen Kanal landen, wähle zuerst dein registriertes Konto aus.</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        account_col, helper_col = st.columns([1.1, 1], gap="large", vertical_alignment="center")
+        with account_col:
+            name = st.text_input(
+                "Twitch-Name",
+                value=str(st.query_params.get("u", "")),
+                placeholder="z. B. mein_twitchkanal",
+                help="Verwende den Twitch-Namen, mit dem du StreamDex bereits einmal gestartet hast.",
+            )
+        with helper_col:
+            st.markdown(
+                '<div class="sd-shop-account-copy"><span class="sd-shop-account-tag">● KANAL-ZUORDNUNG</span>'
+                '<p>Dein Kauf wird deinem Streamer-Konto zugeordnet. Du musst dich nicht mit deinem Twitch-Passwort im Shop anmelden.</p>'
+                '<p>Dein Kanal muss StreamDex mindestens einmal gestartet haben, damit er hier gefunden wird.</p></div>',
+                unsafe_allow_html=True,
+            )
     if not name.strip():
-        st.info("Gib deinen Twitch-Namen ein. Du musst die Streamdex-App mindestens einmal gestartet haben.")
+        st.markdown(
+            '<div class="sd-shop-empty"><strong>Starte mit deinem Twitch-Namen.</strong><br>'
+            'Sobald dein registrierter Kanal erkannt wurde, kannst du Games auswählen und zum Warenkorb hinzufügen.</div>',
+            unsafe_allow_html=True,
+        )
         return
-    tid, p = find_streamer(name)
+    tid, profile = find_streamer(name)
     if not tid:
-        st.error("Kein Konto mit diesem Namen gefunden. Starte die Streamdex-App einmal mit deinem Twitch-Account.")
+        st.error("Kanal nicht gefunden. Starte StreamDex einmal mit diesem Twitch-Account und versuche es danach erneut.")
         return
     if st.session_state.get("cart_tid") != tid:
         st.session_state.update(cart=[], cart_tid=tid)
         st.session_state.pop("order", None)
         st.session_state.pop("download_order_code", None)
+        st.session_state.pop("coupon", None)
     have, items = owned_games(tid), load_items()
     if not items:
-        st.info("Aktuell gibt es keine Angebote.")
+        st.info("Aktuell gibt es keine aktiven Angebote.")
         return
-    st.caption(f"✅ Konto: **{p.get('twitch_username')}** · App {p.get('app_version', '?')} · {len(have)} Game(s) freigeschaltet")
-    gift = st.toggle(f"🎁 Als Geschenk für {p.get('twitch_username')} kaufen", value=str(st.query_params.get("gift", "")) == "1")
+    st.markdown(
+        '<div class="sd-shop-account"><div class="sd-shop-account-tag">✓ KANAL ERKANNT</div>'
+        f'<div class="ct">{html.escape(str(profile.get("twitch_username") or name))}</div>'
+        f'<div class="sd-shop-account-copy">StreamDex-Version: {html.escape(str(profile.get("app_version", "?")))} · '
+        f'{len(have)} Game(s) bereits freigeschaltet</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    gift = st.toggle(
+        "🎁 Als Geschenk für diesen Kanal kaufen",
+        value=str(st.query_params.get("gift", "")) == "1",
+        help="Die gekauften Games werden für den oben ausgewählten Twitch-Kanal freigeschaltet.",
+    )
     st.session_state["gift_data"] = None
     if gift:
-        g1, g2 = st.columns(2)
-        gf = g1.text_input("Dein Name (optional)", max_chars=40, placeholder="z.B. dein Twitch-Name")
-        gm = g2.text_input("Nachricht (optional)", max_chars=100, placeholder="z.B. Viel Spaß mit den Games!")
-        st.session_state["gift_data"] = {"from": gf.strip(), "msg": gm.strip()}
-        st.caption("Bezahle wie gewohnt per Tip. Der Streamer bekommt die Freischaltung automatisch.")
+        with st.container(border=True):
+            st.markdown('<div class="ct">Eine kleine Nachricht mitschicken</div>', unsafe_allow_html=True)
+            gift_from_col, gift_msg_col = st.columns(2)
+            gift_from = gift_from_col.text_input("Dein Name (optional)", max_chars=40, placeholder="Dein Twitch-Name")
+            gift_message = gift_msg_col.text_input("Grußnachricht (optional)", max_chars=100, placeholder="Viel Spaß mit den Games!")
+            st.session_state["gift_data"] = {"from": gift_from.strip(), "msg": gift_message.strip()}
+            st.caption("Der Empfänger bekommt die Freischaltung automatisch nach erfolgreicher Zahlung.")
+
+    st.markdown('<div class="sd-shop-section-title">02 · Module entdecken</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sd-shop-section-sub">Einzelne Games nach Bedarf oder mehrere Module im Pack zum Vorteilspreis.</div>', unsafe_allow_html=True)
+    search_col, hint_col = st.columns([1.2, 1], vertical_alignment="center")
+    search_term = search_col.text_input(
+        "Games suchen",
+        placeholder="Name oder Funktion …",
+        key="shop_search_term",
+    ).strip().lower()
+    hint_col.markdown(
+        '<div class="sd-shop-account-copy">Tipp: Bereits freigeschaltete Module sind markiert und lassen sich nicht versehentlich erneut kaufen.</div>',
+        unsafe_allow_html=True,
+    )
     cart = st.session_state.get("cart", [])
-    left, right = st.columns([3, 1.3], gap="large")
+    left, right = st.columns([2.15, 1], gap="large")
     with left:
-        t_packs, t_games = st.tabs(["🎁 Packs (sparen)", "🎮 Einzelne Games"])
-        for tab, kind, n in ((t_packs, "pack", 2), (t_games, "game", 3)):
+        packs_tab, games_tab = st.tabs(["🎁 Packs & Bundles", "🎮 Einzelne Games"])
+        for tab, kind, columns_count in ((packs_tab, "pack", 2), (games_tab, "game", 2)):
             with tab:
-                lst = [(k, v) for k, v in items.items() if v.get("kind", "game") == kind]
-                for r in range(0, len(lst), n):
-                    for col, (k, v) in zip(st.columns(n), lst[r:r + n]):
+                catalog = [
+                    (item_id, item) for item_id, item in items.items()
+                    if item.get("kind", "game") == kind
+                    and (
+                        not search_term
+                        or search_term in item_id.lower()
+                        or search_term in str(item.get("name", "")).lower()
+                        or search_term in str(item.get("desc", "")).lower()
+                    )
+                ]
+                st.markdown(
+                    f'<div class="sd-shop-filter-note">{len(catalog)} Angebot(e) · '
+                    f'{"Bundle-Rabatte" if kind == "pack" else "Einzeln freischaltbare Module"}</div>',
+                    unsafe_allow_html=True,
+                )
+                if not catalog:
+                    st.markdown(
+                        '<div class="sd-shop-empty">Keine passenden Angebote gefunden. Passe deine Suche an.</div>',
+                        unsafe_allow_html=True,
+                    )
+                for row_start in range(0, len(catalog), columns_count):
+                    cols = st.columns(columns_count, gap="medium")
+                    for col, (item_id, item) in zip(cols, catalog[row_start:row_start + columns_count]):
                         with col:
-                            _card(k, v, items, have, cart)
+                            _card(item_id, item, items, have, cart)
     with right:
         if st.session_state.get("order"):
             _order_box()
         else:
-            _cart_box(tid, p.get("twitch_username"), items, have)
+            _cart_box(tid, profile.get("twitch_username"), items, have)
     _render_order_downloads(tid, load_items(active_only=False))
-    with st.expander("Rechtliches"):
-        s = st.secrets.get("shop", {})
-        st.markdown(f"[Impressum]({s.get('impressum_url', '#')}) · [AGB]({s.get('agb_url', '#')}) · [Widerruf]({s.get('widerruf_url', '#')})")
+    with st.expander("📥 Gekaufte Module erneut herunterladen"):
+        st.caption("Bereits bezahlte Game-Downloads kannst du jederzeit mit Twitch-Konto und Bestellcode erneut aufrufen.")
+        st.markdown("Nutze den Download-Bereich oberhalb der rechtlichen Hinweise, um den Code zu prüfen und verfügbare Dateien zu öffnen.")
+    with st.expander("Rechtliches & Hilfe"):
+        settings = st.secrets.get("shop", {})
+        st.markdown(
+            f"[Impressum]({settings.get('impressum_url', '#')}) · "
+            f"[AGB]({settings.get('agb_url', '#')}) · "
+            f"[Widerruf]({settings.get('widerruf_url', '#')})"
+        )
+        st.caption("Fragen zur Freischaltung? Prüfe zuerst den Bestellcode und den Status der Zahlung.")
 
 
 SKIP_PRICE = "2.00"
