@@ -1067,29 +1067,38 @@ def _render_account_tab(tid, username, is_online):
     # --- Löschen ---
     st.markdown("### 🗑️ Meine Daten löschen")
     st.warning(
-        "Gelöscht werden Status, Statistiken, Verlauf, Support-Chat und deine Feedback-Einträge auf dem Server. "
-        "Das lässt sich **nicht rückgängig machen**."
+        "Die Löschung entfernt private Daten aus Dashboard und StreamDex-Tools sowie eigene Community-Beiträge, "
+        "Umfragen, Stimmen, Quizräume und selbst erstellte Events. Sie ist **nicht rückgängig zu machen**."
     )
     st.markdown(
-        "**Bleibt bestehen:** Kauf- und Freischaltungsdaten (damit bezahlte Games erhalten bleiben), "
-        "die Sperrliste (Missbrauchsschutz) und alles, was nur auf deinem PC liegt (Einstellungen, Logs). "
-        "Dein Twitch-Konto ist nicht betroffen. Startest du die App danach wieder, legt sie neue Einträge an."
+        "**Bleibt bestehen:** Kauf-/Freischaltungsdaten, Beta-Zugang und erforderliche Sperrlisteninformationen. "
+        "Öffentliche Event-Anmeldungen ohne Twitch-ID lassen sich nicht sicher deinem Konto zuordnen. "
+        "Lokale PC-Einstellungen/Logs und dein Twitch-Konto selbst werden nicht verändert."
     )
-    if is_online:
-        st.info("Deine Desktop-App läuft gerade und würde die Daten sofort neu anlegen. "
-                "Schließe die App zuerst, warte etwa 3 Minuten, bis dein Status „Offline“ ist, und lade diese Seite neu.")
+    clients_online = bool(is_online) or _has_active_desktop_client(tid)
+    if clients_online:
+        st.info("StreamDex oder Lurk meldet sich noch online oder der Status lässt sich nicht zuverlässig prüfen. "
+                "Schließe beide Desktop-Apps und lade diese Seite erneut, bevor du löschst.")
     confirm = st.checkbox("Ich habe verstanden, dass meine Daten dauerhaft gelöscht werden.", key="acct_confirm")
     typed = st.text_input(f"Zur Bestätigung deinen Twitch-Namen eingeben: **{username}**", key="acct_typed")
-    ready = confirm and typed.strip().lower() == str(username).strip().lower() and not is_online
+    ready = confirm and typed.strip().casefold() == str(username).strip().casefold() and not clients_online
     if st.button("🗑️ Endgültig löschen", type="primary", disabled=not ready, key="acct_delete"):
-        removed, errors = _delete_account_data(tid)
+        try:
+            removed, errors = _delete_account_data(tid)
+        except PermissionError:
+            st.error("Die Sitzung ist abgelaufen. Bitte melde dich erneut an, bevor du Daten löschst.")
+            return
         if errors:
-            st.error("Die Kontolöschung war unvollständig. Diese Bereiche sind betroffen: "
-                     + " ".join(errors) + " Bitte behebe die Firebase-Berechtigungen und starte den Löschvorgang erneut.")
+            st.error(
+                "Die Kontolöschung war unvollständig. Das Konto bleibt zur Wiederholung auffindbar. "
+                "Betroffene Bereiche: " + " ".join(errors)
+                + " Bitte behebe die Firebase-Berechtigungen und starte den Löschvorgang erneut."
+            )
         else:
-            st.session_state.pop("authenticated_tid", None)
-            st.session_state.pop("acct_data", None)
+            st.session_state.clear()
             st.session_state["acct_deleted"] = removed
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
             st.rerun()
 
 
