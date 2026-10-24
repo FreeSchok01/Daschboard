@@ -15,7 +15,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from firebase_admin import db
-from streamdex_security import ACCOUNT_DELETE_PATHS, ACCOUNT_KEEP_PATHS, account_path, has_active_user_session
+from streamdex_security import (ACCOUNT_DELETE_PATHS, ACCOUNT_KEEP_PATHS, account_path,
+                                 create_signed_oauth_state, has_active_user_session,
+                                 validate_signed_oauth_state)
 
 from beta_apply import _apply_form, render_logged_in_beta_status
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
@@ -181,46 +183,15 @@ def _twitch_credentials():
 
 
 def _make_twitch_state(client_secret):
-    """Erzeugt einen zeitlich begrenzten, signierten OAuth-state-Wert."""
-    timestamp = str(int(time.time()))
-    nonce = secrets.token_urlsafe(24)
-    payload = f"{timestamp}.{nonce}"
-    signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{payload}.{signature}"
+    """Create the signed, short-lived state value used in the Twitch OAuth redirect."""
+    return create_signed_oauth_state(client_secret, secrets.token_urlsafe(24))
 
 
 def _valid_twitch_state(state, client_secret):
-    """Prüft Signatur und Ablaufzeit des OAuth-state-Werts."""
-    if not isinstance(state, str):
-        return False
-    pieces = state.split(".")
-    if len(pieces) != 3:
-        return False
-
-    timestamp_text, nonce, supplied_signature = pieces
-    if not nonce or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
-        return False
-    try:
-        timestamp = int(timestamp_text)
-    except (TypeError, ValueError):
-        return False
-
-    age = int(time.time()) - timestamp
-    if age < -60 or age > TWITCH_STATE_MAX_AGE_S:
-        return False
-
-    payload = f"{timestamp_text}.{nonce}"
-    expected_signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected_signature, supplied_signature)
-
+    """Validate state signature and expiry before exchanging an OAuth code."""
+    return validate_signed_oauth_state(
+        state, client_secret, max_age_seconds=TWITCH_STATE_MAX_AGE_S
+    )
 
 def _twitch_authorization_url():
     """Liefert (Autorisierungs-URL, Fehlermeldung)."""
