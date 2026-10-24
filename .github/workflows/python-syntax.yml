@@ -25,6 +25,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
       - name: Compile application modules
-        run: python -m py_compile streamlit_app.py streamer_dashboard.py onboarding.py admin_users.py radar.py feedback_hub.py streamdex_suite.py beta_apply.py downloads.py planner.py creator_profile.py legacy.py clips_manager.py community_events.py
+        run: python -m py_compile streamlit_app.py streamer_dashboard.py onboarding.py admin_users.py radar.py feedback_hub.py streamdex_suite.py beta_apply.py downloads.py planner.py creator_profile.py legacy.py clips_manager.py community_events.py privacy_security.py events.py supporter.py
       - name: Run regression tests (mocked Twitch and Firebase)
         run: python -m pytest -q
