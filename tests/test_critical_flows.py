@@ -151,6 +151,16 @@ def memory_db(monkeypatch):
     database = MemoryDatabase()
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
+    # Unit-test account 12345 is authenticated; ownership checks stay enabled in the tests.
+    monkeypatch.setattr(
+        streamer_dashboard,
+        "st",
+        _fake_streamlit(session_state={
+            "authenticated_tid": "12345",
+            "authenticated_at": time.time(),
+            "auth_method": "twitch",
+        }),
+    )
     return database
 
 
