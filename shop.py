@@ -3,9 +3,10 @@ Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nac
 import html
 import re
 import secrets
+import time
 from datetime import date
 from decimal import Decimal
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import pandas as pd
 import requests
@@ -439,6 +440,258 @@ def _card(iid, it, items, have, cart):
                 use_container_width=True,
             )
 
+
+
+PAYPAL_RETURN_BASE = "https://streamdex.streamlit.app/"
+
+
+def _paypal_config():
+    """Return server-side PayPal app configuration, or None until secrets are configured."""
+    try:
+        settings = st.secrets["paypal"]
+        client_id = str(settings.get("client_id", "") or "").strip()
+        client_secret = str(settings.get("client_secret", "") or "").strip()
+        mode = str(settings.get("mode", "sandbox") or "sandbox").strip().lower()
+        brand_name = str(settings.get("brand_name", "StreamDex") or "StreamDex").strip()[:127]
+    except Exception:
+        return None
+    if not client_id or not client_secret or mode not in {"sandbox", "live"}:
+        return None
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "mode": mode,
+        "brand_name": brand_name or "StreamDex",
+        "base_url": "https://api-m.paypal.com" if mode == "live" else "https://api-m.sandbox.paypal.com",
+    }
+
+
+def paypal_checkout_enabled():
+    """Whether a complete PayPal app config is present in Streamlit Secrets."""
+    return _paypal_config() is not None
+
+
+def _paypal_api_request(config, method, path, payload=None):
+    """Call PayPal REST API with server-only credentials and generic browser-safe errors."""
+    try:
+        token_response = requests.post(
+            f"{config['base_url']}/v1/oauth2/token",
+            auth=(config["client_id"], config["client_secret"]),
+            data={"grant_type": "client_credentials"},
+            headers={"Accept": "application/json", "Accept-Language": "de_DE"},
+            timeout=15,
+        )
+        token_response.raise_for_status()
+        token_data = token_response.json()
+        access_token = str(token_data.get("access_token") or "") if isinstance(token_data, dict) else ""
+        if not access_token:
+            raise RuntimeError("PayPal access token missing")
+
+        response = requests.request(
+            method.upper(),
+            f"{config['base_url']}{path}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError("Unexpected PayPal response")
+        return data
+    except Exception as exc:
+        # Never log credentials, access tokens, or raw provider response bodies.
+        print(f"[shop] PayPal API request failed ({type(exc).__name__})")
+        raise RuntimeError(
+            "PayPal ist gerade nicht erreichbar oder hat die Anfrage abgelehnt. Bitte versuche es erneut."
+        ) from None
+
+
+def _paypal_return_url(route, username, order_code):
+    query = {
+        "shop": "1",
+        route: "1",
+        "u": str(username or "")[:100],
+        "order_ref": str(order_code or "")[:10],
+    }
+    return f"{PAYPAL_RETURN_BASE}?{urlencode(query)}"
+
+
+def create_paypal_checkout(order_code):
+    """Create a PayPal order from a server-side pending shop order, never from client-supplied prices."""
+    order_code = str(order_code or "").strip().upper()
+    if not re.fullmatch(r"SDX-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}", order_code):
+        raise ValueError("Ungültiger Bestellcode.")
+    order_ref = db.reference(f"shop/orders/{order_code}")
+    order = order_ref.get()
+    if not isinstance(order, dict) or order.get("status") != "pending":
+        raise ValueError("Diese Bestellung ist nicht mehr offen.")
+
+    config = _paypal_config()
+    if not config:
+        raise RuntimeError("Der PayPal-Checkout ist noch nicht konfiguriert.")
+
+    now = int(time.time())
+    saved_url = str(order.get("paypal_approval_url") or "")
+    try:
+        created_at = int(order.get("paypal_created_at") or 0)
+    except (TypeError, ValueError):
+        created_at = 0
+    # Reuse the same approval link for two hours to reduce duplicate payment attempts.
+    if (saved_url.startswith("https://") and created_at > 0
+            and 0 <= now - created_at < 7200):
+        return saved_url
+
+    price = _price(order.get("price", "0"))
+    if Decimal(price) <= 0:
+        raise ValueError("Kostenlose Bestellungen benötigen keinen PayPal-Checkout.")
+
+    return_url = _paypal_return_url("paypal_return", order.get("name", ""), order_code)
+    cancel_url = _paypal_return_url("paypal_cancel", order.get("name", ""), order_code)
+    payload = {
+        "intent": "CAPTURE",
+        "purchase_units": [{
+            "reference_id": order_code,
+            "custom_id": order_code,
+            "invoice_id": order_code,
+            "description": str(order.get("item_name") or "StreamDex Game-Module")[:127],
+            "amount": {"currency_code": "EUR", "value": price},
+        }],
+        "payment_source": {
+            "paypal": {
+                "experience_context": {
+                    "brand_name": config["brand_name"],
+                    "locale": "de-DE",
+                    "shipping_preference": "NO_SHIPPING",
+                    "user_action": "PAY_NOW",
+                    "return_url": return_url,
+                    "cancel_url": cancel_url,
+                }
+            }
+        },
+    }
+    response = _paypal_api_request(config, "POST", "/v2/checkout/orders", payload)
+    paypal_order_id = str(response.get("id") or "").strip()
+    links = response.get("links") if isinstance(response.get("links"), list) else []
+    approval_url = ""
+    for link in links:
+        if not isinstance(link, dict) or link.get("rel") not in {"payer-action", "approve"}:
+            continue
+        candidate = str(link.get("href") or "")
+        parsed = urlparse(candidate)
+        if parsed.scheme == "https" and parsed.hostname and (
+            parsed.hostname == "paypal.com" or parsed.hostname.endswith(".paypal.com")
+        ):
+            approval_url = candidate
+            break
+    if not paypal_order_id or not approval_url:
+        raise RuntimeError("PayPal hat keinen gültigen Checkout-Link zurückgegeben.")
+
+    order_ref.update({
+        "payment_provider": "paypal",
+        "paypal_order_id": paypal_order_id,
+        "paypal_approval_url": approval_url,
+        "paypal_created_at": now,
+        "paypal_mode": config["mode"],
+    })
+    return approval_url
+
+
+def _find_order_for_paypal_id(paypal_order_id):
+    """Find the one pending order to which a PayPal order ID was assigned."""
+    orders = db.reference("shop/orders").get() or {}
+    if not isinstance(orders, dict):
+        return None, None
+    for code, order in orders.items():
+        if (isinstance(order, dict)
+                and str(order.get("paypal_order_id") or "") == paypal_order_id):
+            return str(code), order
+    return None, None
+
+
+def handle_paypal_return(paypal_order_id, payer_id=""):
+    """Capture only a matching completed EUR payment, then run the existing one-time fulfilment."""
+    paypal_order_id = str(paypal_order_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", paypal_order_id):
+        return False, "Die PayPal-Rückgabe enthält keine gültige Bestellkennung."
+    order_code, order = _find_order_for_paypal_id(paypal_order_id)
+    if not order_code or not isinstance(order, dict):
+        return False, "Die PayPal-Bestellung wurde in StreamDex nicht gefunden."
+    if order.get("status") == "paid":
+        return True, f"Diese Bestellung wurde bereits freigeschaltet: {order.get('item_name', order_code)}."
+    if order.get("status") != "pending" or order.get("payment_provider") != "paypal":
+        return False, "Diese Bestellung ist nicht mehr für eine PayPal-Zahlung offen."
+
+    config = _paypal_config()
+    if not config:
+        return False, "Der PayPal-Checkout ist momentan nicht verfügbar. Bitte melde dich beim StreamDex-Support."
+
+    try:
+        result = _paypal_api_request(
+            config, "POST", f"/v2/checkout/orders/{paypal_order_id}/capture", {}
+        )
+        if str(result.get("status") or "").upper() != "COMPLETED":
+            return False, "PayPal hat die Zahlung noch nicht als abgeschlossen bestätigt."
+
+        units = result.get("purchase_units")
+        if not isinstance(units, list) or not units or not isinstance(units[0], dict):
+            return False, "PayPal hat keine überprüfbaren Bestelldetails zurückgegeben."
+        unit = units[0]
+        external_reference = str(unit.get("custom_id") or unit.get("reference_id") or "")
+        if external_reference != order_code:
+            return False, "Die PayPal-Zahlung passt nicht zu dieser StreamDex-Bestellung."
+
+        payments = unit.get("payments") if isinstance(unit.get("payments"), dict) else {}
+        captures = payments.get("captures") if isinstance(payments.get("captures"), list) else []
+        completed = [
+            item for item in captures
+            if isinstance(item, dict) and str(item.get("status") or "").upper() == "COMPLETED"
+        ]
+        if not completed:
+            return False, "PayPal hat noch keine abgeschlossene Zahlung gemeldet."
+        capture = completed[0]
+        amount = capture.get("amount") if isinstance(capture.get("amount"), dict) else {}
+        if str(amount.get("currency_code") or "").upper() != "EUR":
+            return False, "Die PayPal-Zahlung hat eine unerwartete Währung."
+        if Decimal(str(amount.get("value") or "0")).quantize(Decimal("0.01")) != Decimal(
+            _price(order.get("price", "0"))
+        ):
+            return False, "Der bestätigte PayPal-Betrag stimmt nicht mit der Bestellung überein."
+        capture_id = str(capture.get("id") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{5,80}", capture_id):
+            return False, "PayPal hat keine gültige Zahlungskennung zurückgegeben."
+
+        capture_ref = db.reference(f"shop/used_paypal_captures/{capture_id}")
+        existing = capture_ref.get()
+        if existing and (not isinstance(existing, dict) or existing.get("order") != order_code):
+            return False, "Diese PayPal-Zahlung wurde bereits einer anderen Bestellung zugeordnet."
+        if not existing:
+            def reserve(current):
+                if current:
+                    if isinstance(current, dict) and current.get("order") == order_code:
+                        return current
+                    raise _Skip()
+                return {"order": order_code, "paypal_order_id": paypal_order_id}
+            try:
+                capture_ref.transaction(reserve)
+            except _Skip:
+                return False, "Diese PayPal-Zahlung wurde bereits verarbeitet."
+
+        db.reference(f"shop/orders/{order_code}").update({
+            "payment_provider": "paypal",
+            "paypal_capture_id": capture_id,
+            "paypal_captured_at": int(time.time()),
+        })
+        return fulfill(order_code, manual=True)
+    except Exception as exc:
+        print(f"[shop] PayPal return failed ({type(exc).__name__})")
+        return False, "Die PayPal-Zahlung konnte nicht verifiziert werden. Bitte versuche es erneut oder kontaktiere den Support."
+
+
 def _order_box():
     key = "skip_order" if st.session_state.get("skip_order") else "order"
     code, price = st.session_state[key]
@@ -446,42 +699,84 @@ def _order_box():
         st.markdown(
             '<div class="sd-shop-eyebrow"><span class="sd-shop-dot"></span> CHECKOUT</div>'
             '<div class="ct">Bestellung abschließen</div>'
-            '<div class="cd">Noch ein Schritt – dann sind deine Module bereit.</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">1</span>'
-            '<div><b>Tip-Seite öffnen</b><span>Öffne deine StreamElements-Tip-Seite und sende den angezeigten Betrag.</span></div></div>'
-            '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">2</span>'
-            '<div><b>Bestellcode eintragen</b><span>Füge den Code als Nachricht beim Tip exakt so ein.</span></div></div>'
-            '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">3</span>'
-            '<div><b>Zahlung bestätigen</b><span>Danach hier prüfen lassen und freischalten.</span></div></div>',
+            '<div class="cd">Sichere Zahlung und automatische Zuordnung zu deinem StreamDex-Kauf.</div>',
             unsafe_allow_html=True,
         )
         st.markdown('<div class="sd-shop-total-label">Zu zahlen</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sd-shop-total">{html.escape(str(price))} €</div>', unsafe_allow_html=True)
-        st.code(code, language=None)
-        st.link_button(
-            "Tip-Seite öffnen  ↗",
-            st.secrets["streamelements"]["tip_url"],
-            type="primary",
-            use_container_width=True,
-        )
-        st.caption("Nach dem Tip hier auf „Zahlung prüfen“ klicken.")
-        if st.button("Zahlung prüfen", type="primary", use_container_width=True):
-            ok, msg = fulfill(code)
-            if ok:
-                if key == "order":
-                    st.session_state["download_order_code"] = code
-                st.session_state.pop(key)
-                st.balloons()
-                st.success(msg)
-            else:
-                st.warning(msg)
-        if st.button("Bestellung abbrechen", use_container_width=True):
-            cancel_order(code)
-            st.session_state.pop(key)
-            st.rerun()
+
+        config = _paypal_config()
+        if config and key == "order":
+            st.markdown(
+                '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">1</span>'
+                '<div><b>Mit PayPal bezahlen</b><span>Dein Bestellcode wird automatisch intern zugeordnet – kein Kopieren in eine Tip-Nachricht.</span></div></div>'
+                '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">2</span>'
+                '<div><b>Zu StreamDex zurückkehren</b><span>Nach der PayPal-Prüfung schalten wir deine gekauften Games frei.</span></div></div>',
+                unsafe_allow_html=True,
+            )
+            approval_url = ""
+            if st.button("PayPal-Checkout starten", type="primary", use_container_width=True):
+                try:
+                    approval_url = create_paypal_checkout(code)
+                except (RuntimeError, ValueError) as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state[f"paypal_url_{code}"] = approval_url
+            approval_url = approval_url or str(st.session_state.get(f"paypal_url_{code}") or "")
+            if not approval_url:
+                saved_order = db.reference(f"shop/orders/{code}").get() or {}
+                approval_url = str(saved_order.get("paypal_approval_url") or "")
+            if approval_url:
+                st.link_button(
+                    "🔒 Sicher mit PayPal bezahlen",
+                    approval_url,
+                    type="primary",
+                    use_container_width=True,
+                )
+                st.caption("Auf der PayPal-Seite wird StreamDex als Checkout-Markenname angefordert.")
+                st.info("Wenn du den PayPal-Dialog schließt, bleibt diese Bestellung offen. Bezahlt wird sie erst nach bestätigter Zahlung.")
+            elif not st.session_state.get(f"paypal_url_{code}"):
+                st.caption("Nach dem Start erscheint der sichere PayPal-Link hier.")
+            if not db.reference(f"shop/orders/{code}").get().get("paypal_order_id"):
+                if st.button("Bestellung abbrechen", use_container_width=True, key=f"cancel_order_{code}"):
+                    cancel_order(code)
+                    st.session_state.pop(key, None)
+                    st.rerun()
+        else:
+            if not config:
+                st.info("PayPal-Checkout noch nicht konfiguriert. Bis dahin bleibt der bisherige StreamElements-Ablauf verfügbar.")
+            st.markdown(
+                '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">1</span>'
+                '<div><b>Tip-Seite öffnen</b><span>Öffne die StreamElements-Seite und sende den angezeigten Betrag.</span></div></div>'
+                '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">2</span>'
+                '<div><b>Bestellcode übernehmen</b><span>Kopiere den Code aus dem Feld unten und füge ihn als Tip-Nachricht ein.</span></div></div>'
+                '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">3</span>'
+                '<div><b>Zahlung prüfen</b><span>Nach dem Tip hier prüfen lassen und freischalten.</span></div></div>',
+                unsafe_allow_html=True,
+            )
+            st.code(code, language=None)
+            st.link_button(
+                "Zur Tip-Seite  ↗",
+                st.secrets["streamelements"]["tip_url"],
+                type="primary",
+                use_container_width=True,
+            )
+            st.caption("Das Code-Feld hat eine Kopierfunktion. StreamElements unterstützt hier kein verlässlich dokumentiertes automatisches Vorbefüllen der Nachricht.")
+            if st.button("Zahlung prüfen", type="primary", use_container_width=True):
+                ok, msg = fulfill(code)
+                if ok:
+                    if key == "order":
+                        st.session_state["download_order_code"] = code
+                    st.session_state.pop(key)
+                    st.balloons()
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+            if st.button("Bestellung abbrechen", use_container_width=True, key=f"cancel_order_{code}"):
+                cancel_order(code)
+                st.session_state.pop(key, None)
+                st.rerun()
+
 def _cart_box(tid, name, items, have):
     ids, total, savings, _ = cart_view(st.session_state.get("cart", []), items, have)
     with st.container(border=True):
