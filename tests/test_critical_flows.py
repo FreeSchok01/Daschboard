@@ -182,7 +182,7 @@ def test_twitch_authorization_url_requests_expected_scopes(monkeypatch):
     assert streamer_dashboard._valid_twitch_state(query["state"][0], "test-secret")
 
 
-def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypatch):
+def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypatch, memory_db):
     fake_st = _fake_streamlit({"code": "temporary-code", "state": "valid-state"})
     monkeypatch.setattr(streamer_dashboard, "st", fake_st)
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
@@ -218,7 +218,7 @@ def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypat
     assert fake_st.session_state["twitch_oauth_access_token"] == "unit-test-access-token"
     assert fake_st.session_state["twitch_oauth_refresh_token"] == "unit-test-refresh-token"
     assert "channel:manage:schedule" in fake_st.session_state["twitch_oauth_scopes"]
-    assert all("token" not in str(key).lower() for key in fake_st.session_state if key.startswith("firebase_"))
+    assert memory_db.root == {}  # OAuth credentials must never be written to Firebase.
 
 
 def test_twitch_oauth_callback_rejects_invalid_state_with_clear_notice(monkeypatch):
