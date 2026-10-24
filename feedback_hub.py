@@ -7,6 +7,7 @@ import time
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -154,6 +155,9 @@ def _cast_poll_vote(poll_id, tid, chosen_option):
 
 def render_feedback_hub(tid, username):
     """Einstiegspunkt für das angemeldete StreamDex-Feedback-Modul."""
+    if not has_active_user_session(st.session_state, tid):
+        st.error("Für Feedback ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     st.markdown(
         """
         <div class="sd-feedback-hero">
