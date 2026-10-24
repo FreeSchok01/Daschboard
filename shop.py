@@ -12,6 +12,8 @@ import requests
 import streamlit as st
 from firebase_admin import db
 
+from r2_storage import is_valid_r2_object_key
+
 
 class _Skip(Exception):
     pass
@@ -34,7 +36,7 @@ PACKS = {
 
 
 def default_items(games):
-    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n, "download_url": ""}
+    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n, "download_url": "", "r2_object_key": ""}
           for n, (k, p) in enumerate(PRICES.items()) if k in games}
     for n, (k, (nm, ds, gm, p)) in enumerate(PACKS.items()):
         it[k] = {"kind": "pack", "name": nm, "desc": ds, "price": p, "games": [g for g in gm if g in games], "active": True, "sort": 100 + n}
@@ -773,7 +775,7 @@ def admin_shop_panel(games):
     game_items = [(k, v) for k, v in items.items() if v.get("kind", "game") == "game"]
     pack_items = [(k, v) for k, v in items.items() if v.get("kind") == "pack"]
     active_count = sum(1 for _, item in items.items() if item.get("active", True))
-    links_count = sum(1 for _, item in game_items if _safe_download_url(item.get("download_url")))
+    links_count = sum(1 for _, item in game_items if _safe_download_url(item.get("download_url")) or is_valid_r2_object_key(item.get("r2_object_key")))
     m1, m2, m3 = st.columns(3)
     m1.metric("Artikel gesamt", len(items))
     m2.metric("Im Shop aktiv", active_count)
@@ -845,9 +847,10 @@ def admin_shop_panel(games):
                             label = str(item.get("name", item_id))
                             kind = item.get("kind", "game")
                             kind_label = "🎁 PACK" if kind == "pack" else "🎮 EINZEL-GAME"
-                            link_ready = bool(_safe_download_url(item.get("download_url")))
+                            r2_ready = is_valid_r2_object_key(item.get("r2_object_key"))
+                            link_ready = bool(_safe_download_url(item.get("download_url")) or r2_ready)
                             state_label = (
-                                "Link hinterlegt" if link_ready else "Download-Link fehlt"
+                                "Privates R2-Objekt hinterlegt" if r2_ready else ("Link hinterlegt" if link_ready else "Download-Link fehlt")
                             ) if kind == "game" else "Downloads der enthaltenen Games"
                             state_class = "shop-admin-ready" if link_ready else "shop-admin-missing"
                             if kind == "pack":
@@ -883,12 +886,20 @@ def admin_shop_panel(games):
                                         "Download-Link (HTTPS)",
                                         value=str(item.get("download_url") or ""),
                                         placeholder="https://…/game.zip",
-                                        help="Direkter Link zur ZIP- oder EXE-Datei. Käufer sehen ihn nach erfolgreicher Zahlung.",
+                                        help="Bestehender direkter Link. R2-Downloads werden dagegen nur nach serverseitiger Freischaltungsprüfung signiert.",
                                         key=f"shop_admin_download_{item_id}",
+                                    ).strip()
+                                    r2_object_key = st.text_input(
+                                        "Privater R2-Objektschlüssel (optional)",
+                                        value=str(item.get("r2_object_key") or ""),
+                                        placeholder="games/spielname/v1.0.zip",
+                                        help="Nur den Objektschlüssel aus dem privaten R2-Bucket eintragen, niemals eine öffentliche URL oder Zugangsdaten.",
+                                        key=f"shop_admin_r2_key_{item_id}",
                                     ).strip()
                                 else:
                                     download_url = ""
-                                    st.caption("Ein Pack verwendet die Download-Links seiner einzelnen Games.")
+                                    r2_object_key = ""
+                                    st.caption("Ein Pack verwendet die Downloads seiner einzelnen Games.")
                                 saved = st.form_submit_button(
                                     "Änderungen speichern",
                                     type="primary",
@@ -899,6 +910,8 @@ def admin_shop_panel(games):
                                     st.error("Der Preis muss zwischen 0,50 € und 500 € liegen.")
                                 elif kind == "game" and download_url and not _safe_download_url(download_url):
                                     st.error("Bitte einen gültigen HTTPS-Link ohne Zugangsdaten eintragen.")
+                                elif kind == "game" and r2_object_key and not is_valid_r2_object_key(r2_object_key):
+                                    st.error("Bitte einen gültigen R2-Objektschlüssel ohne führenden Slash, Backslash oder ..-Pfadsegment eintragen.")
                                 else:
                                     patch = {
                                         "price": float(price),
@@ -906,6 +919,7 @@ def admin_shop_panel(games):
                                     }
                                     if kind == "game":
                                         patch["download_url"] = _safe_download_url(download_url)
+                                        patch["r2_object_key"] = r2_object_key
                                     db.reference(f"shop/items/{item_id}").update(patch)
                                     st.toast(f"{label} gespeichert.", icon="✅")
                                     st.rerun()
@@ -920,7 +934,8 @@ def admin_shop_panel(games):
             pr = st.number_input("Preis (€)", 0.5, 500.0, float(cur.get("price", 4.99)), 0.5)
             gm = st.multiselect("Schaltet frei", list(games), default=[g for g in cur.get("games", []) if g in games], format_func=lambda k: games[k])
             act = st.checkbox("Aktiv", value=cur.get("active", True))
-            dl_url = st.text_input("Direkter Download-Link (HTTPS; nur Einzel-Games)", value=cur.get("download_url", ""), disabled=kd == "pack", help="Link zur ZIP- oder EXE-Datei dieses Games. Wird erst nach bezahlter Bestellung angezeigt.")
+            dl_url = st.text_input("Direkter Download-Link (HTTPS; nur Einzel-Games)", value=cur.get("download_url", ""), disabled=kd == "pack", help="Optionaler bestehender Link für Bestell-Downloads.")
+            r2_key = st.text_input("Privater R2-Objektschlüssel (nur Einzel-Games)", value=cur.get("r2_object_key", ""), disabled=kd == "pack", help="Objektschlüssel aus deinem privaten R2-Bucket, z. B. games/spiel/v1.0.zip.")
             if st.form_submit_button("💾 Speichern"):
                 key = (iid if pick == "➕ Neu" else pick).strip().lower()
                 if not key.replace("_", "").isalnum() or not nm.strip() or not gm:
@@ -929,10 +944,13 @@ def admin_shop_panel(games):
                     st.error("Ein Einzel-Game-Artikel muss genau ein Game freischalten. Nutze für mehrere Games den Typ „pack“.")
                 elif dl_url.strip() and kd == "game" and not _safe_download_url(dl_url):
                     st.error("Der Download-Link muss eine gültige HTTPS-Adresse ohne Zugangsdaten enthalten.")
+                elif r2_key.strip() and kd == "game" and not is_valid_r2_object_key(r2_key):
+                    st.error("Bitte einen gültigen R2-Objektschlüssel ohne führenden Slash, Backslash oder ..-Pfadsegment eintragen.")
                 else:
                     db.reference(f"shop/items/{key}").set({"kind": kd, "name": nm.strip(), "desc": ds.strip(), "price": pr, "games": gm,
                                                           "active": act, "sort": cur.get("sort", 50 if kd == "game" else 150),
-                                                          "download_url": _safe_download_url(dl_url) if kd == "game" else ""})
+                                                          "download_url": _safe_download_url(dl_url) if kd == "game" else "",
+                                                          "r2_object_key": r2_key.strip() if kd == "game" else ""})
                     st.rerun()
         if pick != "➕ Neu" and st.button("🗑️ Artikel löschen"):
             db.reference(f"shop/items/{pick}").delete()

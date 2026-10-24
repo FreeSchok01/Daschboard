@@ -18,7 +18,7 @@ from firebase_admin import db
 
 from beta_apply import _apply_form, render_logged_in_beta_status
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
-                       settings as download_settings, update_notice)
+                       render_owned_game_downloads, settings as download_settings, update_notice)
 from shop import owned_games, CSS
 from events import render_event_manager
 from planner import render_planner
@@ -1545,6 +1545,7 @@ def _render_member_downloads_and_beta(authed_tid, twitch_username, beta_info=Non
             st.markdown("#### StreamDex herunterladen")
             st.caption("Die Download-Links sind nur nach der Anmeldung verfügbar.")
             render_public_downloads(cfg)
+            render_owned_game_downloads(authed_tid)
             if beta_info:
                 st.divider()
                 st.markdown("#### Deine Beta-Version")
