@@ -69,15 +69,30 @@ def _try_login(username, pw):
     return None
 
 
+SUPPORT_SESSION_MAX_AGE_SECONDS = 4 * 60 * 60
+
+
 def supporter_login():
     """Zeigt das Login, bis sich ein aktiver Supporter angemeldet hat. Gibt {'user','name'} zurück."""
     u = st.session_state.get("sup_user")
     if u:
-        rec = db.reference(f"supporters/{u}").get()        # Deaktivierung wirkt sofort
-        if isinstance(rec, dict) and rec.get("active", True):
-            return {"user": u, "name": rec.get("name") or u}
-        st.session_state.clear()
+        try:
+            started = float(st.session_state.get("sup_authenticated_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            started = 0
+        age = time.time() - started
+        if not started or age < 0 or age > SUPPORT_SESSION_MAX_AGE_SECONDS:
+            st.session_state.clear()
+            st.session_state["sup_session_expired"] = True
+            u = None
+        else:
+            rec = db.reference(f"supporters/{u}").get()  # Deaktivierung wirkt sofort
+            if isinstance(rec, dict) and rec.get("active", True):
+                return {"user": u, "name": rec.get("name") or u}
+            st.session_state.clear()
     st.title("🛟 Streamdex Support")
+    if st.session_state.pop("sup_session_expired", False):
+        st.warning("Deine Support-Sitzung ist abgelaufen. Bitte melde dich erneut an.")
     with st.form("sup_login"):
         user = st.text_input("Benutzername")
         pw = st.text_input("Passwort", type="password")
@@ -87,6 +102,7 @@ def supporter_login():
                 st.error(f"Zu viele Fehlversuche. Bitte in {LOCK_SECONDS // 60} Minuten erneut versuchen.")
             elif res:
                 st.session_state["sup_user"] = res
+                st.session_state["sup_authenticated_at"] = time.time()
                 st.rerun()
             else:
                 time.sleep(1.0)
@@ -196,7 +212,8 @@ def _team_messages(me, only_important):
     try:
         msgs = _load_team()
     except Exception as e:
-        st.error(f"Team-Chat konnte nicht geladen werden: {e}")
+        print(f"[streamdex] Team-chat load failed: {type(e).__name__}")
+        st.error("Der Team-Chat konnte nicht geladen werden. Bitte versuche es später erneut.")
         return
     important = [m for m in msgs if m.get("important")]
     if important:
@@ -219,7 +236,8 @@ def _team_messages(me, only_important):
                     try:
                         _toggle_important(m, me)
                     except Exception as e:
-                        st.error(f"Fehlgeschlagen: {e}")
+                        print(f"[streamdex] Team-chat update failed: {type(e).__name__}")
+                        st.error("Die Aktion konnte nicht ausgeführt werden.")
                     st.rerun(scope="fragment")
 
 
@@ -234,6 +252,7 @@ def team_chat_panel(me):
             try:
                 _send_team(me, text, imp)
             except Exception as e:
-                st.error(f"Senden fehlgeschlagen: {e}")
+                print(f"[streamdex] Team-chat send failed: {type(e).__name__}")
+                st.error("Die Nachricht konnte nicht gesendet werden.")
     with area:
         _team_messages(me, only)
