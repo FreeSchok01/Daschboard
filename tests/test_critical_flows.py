@@ -479,10 +479,13 @@ def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
         info=lambda message: pytest.fail(f"Unexpected login hint: {message}"),
     )
     monkeypatch.setattr(streamer_dashboard, "st", fake_st)
+    browser_binding = "browser_binding_12345678901234567890"
+    monkeypatch.setattr(streamer_dashboard, "_ensure_oauth_browser_binding", lambda: browser_binding)
     monkeypatch.setattr(
         streamer_dashboard,
         "_twitch_authorization_url",
-        lambda: ("https://id.twitch.tv/oauth2/authorize?client_id=test&state=abc", None),
+        lambda binding: ("https://id.twitch.tv/oauth2/authorize?client_id=test&state=abc", None)
+        if binding == browser_binding else (None, "Unexpected browser binding"),
     )
 
     streamer_dashboard._render_twitch_login()
