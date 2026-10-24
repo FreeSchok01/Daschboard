@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+from streamlit_cookies_controller import CookieController
 from firebase_admin import db
 
 from beta_apply import _apply_form, render_logged_in_beta_status
@@ -165,6 +166,43 @@ TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
 TWITCH_USERS_URL = "https://api.twitch.tv/helix/users"
 TWITCH_STATE_MAX_AGE_S = 10 * 60
+TWITCH_BROWSER_COOKIE = "streamdex_oauth_browser"
+
+
+def _oauth_browser_binding_status(create=False):
+    """Return (controller_ready, browser binding); cookie is browser-local, not session-local."""
+    try:
+        controller = CookieController(key="streamdex_oauth_cookie_controller")
+        cookies = controller.getAll()
+    except Exception:
+        return False, None
+    if cookies is None:
+        return False, None
+    value = cookies.get(TWITCH_BROWSER_COOKIE) if isinstance(cookies, dict) else None
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{32,100}", value):
+        return True, value
+    if create:
+        try:
+            controller.set(
+                TWITCH_BROWSER_COOKIE,
+                secrets.token_urlsafe(32),
+                max_age=TWITCH_STATE_MAX_AGE_S,
+                secure=True,
+                same_site="lax",
+            )
+        except Exception as exc:
+            print(f"[dashboard] OAuth browser cookie setup failed ({safe_exception_label(exc)})")
+    return True, None
+
+
+def _ensure_oauth_browser_binding():
+    """Create a short-lived, random browser cookie before showing the OAuth link."""
+    ready, binding = _oauth_browser_binding_status(create=True)
+    return binding if ready else None
+
+
+def _oauth_browser_binding_key(binding):
+    return hashlib.sha256(str(binding).encode("utf-8")).hexdigest()
 
 
 def _twitch_credentials():
@@ -203,8 +241,8 @@ def _valid_twitch_state(state, client_secret):
     )
 
 
-def _register_twitch_state(state):
-    """Store only a SHA-256 digest of a pending OAuth state and prune expired entries."""
+def _register_twitch_state(state, browser_binding):
+    """Store only state and browser-binding digests; never persist raw values."""
     now_ms = int(time.time() * 1000)
     root = db.reference("streamdex_oauth_states")
     records = root.get() or {}
@@ -217,14 +255,15 @@ def _register_twitch_state(state):
                     pass
     digest = oauth_state_key(state)
     root.child(digest).set({
+        "browser_binding_hash": _oauth_browser_binding_key(browser_binding),
         "issued_at_ms": now_ms,
         "expires_at_ms": now_ms + TWITCH_STATE_MAX_AGE_S * 1000,
         "consumed": False,
     })
 
 
-def _consume_twitch_state(state):
-    """Atomically consume an OAuth state once; raw state values are never persisted."""
+def _consume_twitch_state(state, browser_binding):
+    """Atomically consume state only from the browser that initiated OAuth."""
     digest = oauth_state_key(state)
     ref = db.reference(f"streamdex_oauth_states/{digest}")
     outcome = {"accepted": False}
@@ -233,6 +272,11 @@ def _consume_twitch_state(state):
     def consume(current):
         outcome["accepted"] = False
         if not oauth_state_record_is_active(current, now_ms):
+            return current
+        if not hmac.compare_digest(
+            str(current.get("browser_binding_hash") or ""),
+            _oauth_browser_binding_key(browser_binding),
+        ):
             return current
         outcome["accepted"] = True
         updated = dict(current)
@@ -252,8 +296,10 @@ def _consume_twitch_state(state):
     return bool(outcome["accepted"])
 
 
-def _twitch_authorization_url():
-    """Liefert (Autorisierungs-URL, Fehlermeldung)."""
+def _twitch_authorization_url(browser_binding):
+    """Liefert eine OAuth-URL, gebunden an den Browser-Cookie."""
+    if not isinstance(browser_binding, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,100}", browser_binding):
+        return None, "Die Browser-Sitzung wird vorbereitet. Bitte warte kurz und versuche es erneut."
     try:
         client_id, client_secret = _twitch_credentials()
     except ValueError as exc:
@@ -261,7 +307,7 @@ def _twitch_authorization_url():
 
     state = _make_twitch_state(client_secret)
     try:
-        _register_twitch_state(state)
+        _register_twitch_state(state, browser_binding)
     except Exception as exc:
         print(f"[dashboard] OAuth state registration failed ({safe_exception_label(exc)})")
         return None, "Die Twitch-Anmeldung ist gerade nicht verfügbar. Bitte versuche es später erneut."
@@ -310,6 +356,11 @@ def handle_twitch_oauth_callback():
     if not has_code and not has_error:
         return False
 
+    cookie_ready, browser_binding = _oauth_browser_binding_status()
+    if not cookie_ready:
+        # Keep callback parameters until the cookie component has hydrated and rerun.
+        return False
+
     code = str(st.query_params.get("code", "") or "").strip()
     state = str(st.query_params.get("state", "") or "").strip()
     provider_error = str(st.query_params.get("error", "") or "").strip()
@@ -327,7 +378,7 @@ def handle_twitch_oauth_callback():
             return _return_to_dashboard(
                 "Der Twitch-Anmeldelink ist abgelaufen oder ungültig. Bitte starte die Anmeldung erneut."
             )
-        if not _consume_twitch_state(state):
+        if not browser_binding or not _consume_twitch_state(state, browser_binding):
             return _return_to_dashboard(
                 "Dieser Twitch-Anmeldelink wurde bereits verwendet oder ist abgelaufen. Bitte starte die Anmeldung erneut."
             )
@@ -441,7 +492,11 @@ def _clear_authenticated_session():
 
 def _render_twitch_login():
     """Startet den zuverlässigen Twitch-OAuth-Link für Streamlit Cloud."""
-    url, error = _twitch_authorization_url()
+    browser_binding = _ensure_oauth_browser_binding()
+    if not browser_binding:
+        st.info("Browser-Sitzung wird vorbereitet. Falls die Anmeldung nicht erscheint, lade die Seite bitte einmal neu.")
+        return
+    url, error = _twitch_authorization_url(browser_binding)
     if error:
         st.error(error)
         st.info("In Streamlit Secrets müssen die Twitch-Zugangsdaten unter [twitch] mit client_id und client_secret stehen.")
