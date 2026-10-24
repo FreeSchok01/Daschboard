@@ -900,6 +900,24 @@ def _collect_account_data(tid, errors=None):
 
     shared_roots = _read_shared_account_roots(errors)
     shared_data = collect_user_shared_data(tid, shared_roots)
+
+    # Keep established export keys while adding the other user-owned contributions.
+    feedback_data = shared_data.pop("feedback", {})
+    submitted_feedback = feedback_data.get("submitted") if isinstance(feedback_data, dict) else {}
+    feedback_votes = feedback_data.get("votes") if isinstance(feedback_data, dict) else {}
+    if submitted_feedback:
+        out["feedback_inbox (nur deine Einträge)"] = submitted_feedback
+    if feedback_votes:
+        shared_data["feedback_votes (eigene Stimmen)"] = feedback_votes
+
+    event_data = shared_data.pop("events", {})
+    own_events = event_data.get("created") if isinstance(event_data, dict) else {}
+    event_registrations = event_data.get("your_registrations") if isinstance(event_data, dict) else {}
+    if own_events:
+        out["streamdex_events (eigene Events)"] = own_events
+    if event_registrations:
+        shared_data["event_registrations (eigene Anmeldungen)"] = event_registrations
+
     if shared_data:
         out["community_activity (nur deine Beiträge, Stimmen, Antworten und Anmeldungen)"] = shared_data
     return out
@@ -936,6 +954,9 @@ def _delete_account_data(tid):
 
     for path in _DELETE_PATHS:
         p = path.format(t=tid)
+        # Keep profile metadata if slug removal failed, so retry can still find the slug.
+        if p == f"creator_profiles/{tid}" and any("Profil-Link" in item for item in errors):
+            continue
         # Presence is deliberately last: keep the account recognizable for a retry if
         # any previous deletion failed. A partial deletion must never look successful.
         if p == f"presence/{tid}" and errors:
