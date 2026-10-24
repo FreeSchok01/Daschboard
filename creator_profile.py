@@ -6,6 +6,7 @@ from urllib.parse import quote
 import streamlit as st
 from firebase_admin import db
 from radar import fetch_public_live_status
+from privacy_security import is_valid_twitch_id
 
 PROFILE_ROOT = "creator_profiles"
 SLUG_ROOT = "creator_profile_slugs"
@@ -15,7 +16,51 @@ URL_FIELDS = ("twitch_url", "youtube_url", "tiktok_url", "instagram_url",
 
 
 def _profile_ref(tid):
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Invalid Twitch account ID.")
     return db.reference(f"{PROFILE_ROOT}/{str(tid)}")
+
+
+def _claim_slug_reservation(slug, tid):
+    """Atomically reserve a public slug for exactly one Twitch account."""
+    if not SLUG_RE.fullmatch(str(slug or "")) or not is_valid_twitch_id(tid):
+        return False
+    ref = db.reference(f"{SLUG_ROOT}/{slug}")
+    outcome = {"claimed": False}
+
+    def claim(current):
+        outcome["claimed"] = False
+        if current in (None, "") or str(current) == str(tid):
+            outcome["claimed"] = True
+            return str(tid)
+        return current
+
+    try:
+        ref.transaction(claim)
+    except Exception:
+        return False
+    return bool(outcome["claimed"])
+
+
+def _release_slug_reservation(slug, tid):
+    """Release only a slug that is still owned by this same account."""
+    if not SLUG_RE.fullmatch(str(slug or "")) or not is_valid_twitch_id(tid):
+        return False
+    ref = db.reference(f"{SLUG_ROOT}/{slug}")
+    outcome = {"released": False}
+
+    def release(current):
+        outcome["released"] = False
+        if str(current or "") == str(tid):
+            outcome["released"] = True
+            return None
+        return current
+
+    try:
+        ref.transaction(release)
+    except Exception:
+        return False
+    return bool(outcome["released"])
 
 
 def _slug_from_name(name, tid):
@@ -35,6 +80,9 @@ def _safe_https(value):
 def render_creator_profile(tid, twitch_username=""):
     """Private profile editor. All edits are scoped to the authenticated Twitch ID."""
     tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        st.error("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
+        return
     try:
         ref = _profile_ref(tid)
         saved = ref.get() or {}
@@ -112,6 +160,10 @@ def render_creator_profile(tid, twitch_username=""):
             if claimed_by and str(claimed_by) != tid:
                 st.error("Dieser Profil-Link ist bereits vergeben. Bitte wähle einen anderen Slug.")
                 return
+            claimed_new_slug = bool(published and not claimed_by)
+            if published and not _claim_slug_reservation(slug, tid):
+                st.error("Dieser Profil-Link wurde gerade von einem anderen Konto reserviert. Bitte wähle einen anderen Slug.")
+                return
 
             profile = {
                 "owner_tid": tid,
@@ -135,8 +187,16 @@ def render_creator_profile(tid, twitch_username=""):
             old_slug = str(saved.get("slug") or "")
             if old_slug and old_slug != slug and str(db.reference(f"{SLUG_ROOT}/{old_slug}").get() or "") == tid:
                 updates[f"{SLUG_ROOT}/{old_slug}"] = None
-            updates[f"{SLUG_ROOT}/{slug}"] = tid if published else None
-            db.reference("/").update(updates)
+            if published:
+                updates[f"{SLUG_ROOT}/{slug}"] = tid
+            elif str(slug_ref.get() or "") == tid:
+                updates[f"{SLUG_ROOT}/{slug}"] = None
+            try:
+                db.reference("/").update(updates)
+            except Exception:
+                if claimed_new_slug:
+                    _release_slug_reservation(slug, tid)
+                raise
             st.session_state[f"creator_profile_saved_{tid}"] = True
             st.success("Dein Creator-Profil wurde gespeichert.")
             st.rerun()
