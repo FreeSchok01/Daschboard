@@ -396,10 +396,10 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
 
 
-def test_twitch_login_uses_current_tab_instead_of_opening_a_new_tab(monkeypatch):
+def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
     rendered = []
     fake_st = SimpleNamespace(
-        markdown=lambda content, **kwargs: rendered.append((content, kwargs)),
+        link_button=lambda label, url, **kwargs: rendered.append((label, url, kwargs)),
         error=lambda message: pytest.fail(f"Unexpected login error: {message}"),
         info=lambda message: pytest.fail(f"Unexpected login hint: {message}"),
     )
@@ -413,8 +413,8 @@ def test_twitch_login_uses_current_tab_instead_of_opening_a_new_tab(monkeypatch)
     streamer_dashboard._render_twitch_login()
 
     assert len(rendered) == 1
-    markup, options = rendered[0]
-    assert 'target="_top"' in markup
-    assert 'target="_blank"' not in markup
-    assert 'href="https://id.twitch.tv/oauth2/authorize?client_id=test&amp;state=abc"' in markup
-    assert options.get("unsafe_allow_html") is True
+    label, url, options = rendered[0]
+    assert label == "🟣 Mit Twitch anmelden"
+    assert url == "https://id.twitch.tv/oauth2/authorize?client_id=test&state=abc"
+    assert options["type"] == "primary"
+    assert options["use_container_width"] is True
