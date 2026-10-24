@@ -1,6 +1,7 @@
 """StreamDex Events: Eventverwaltung und öffentliche Anmeldung via Firebase Realtime Database."""
 import re
 import secrets
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -94,7 +95,9 @@ def _current_registrant_tid():
     except (TypeError, ValueError):
         return ""
     age = time.time() - started
-    if is_valid_twitch_id(tid) and 0 <= age <= 2 * 60 * 60:
+    if (is_valid_twitch_id(tid)
+            and st.session_state.get("auth_method") in ("twitch", "desktop")
+            and 0 <= age <= 2 * 60 * 60):
         return tid
     return ""
 
