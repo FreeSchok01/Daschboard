@@ -1023,6 +1023,12 @@ def _has_active_desktop_client(tid):
 
 
 def _render_account_tab(tid, username, is_online):
+    try:
+        _require_account_owner(tid)
+    except PermissionError:
+        st.error("Deine Sitzung ist abgelaufen oder passt nicht zu diesem Konto. Bitte melde dich erneut an.")
+        return
+
     st.subheader("🧾 Konto & Datenschutz")
     st.caption("Hier siehst du, welche Daten Streamdex unter deiner Twitch-ID gespeichert hat, kannst sie exportieren "
                "oder löschen.")
@@ -1040,11 +1046,11 @@ def _render_account_tab(tid, username, is_online):
         data = cached.get("data") or {}
         export_errors = cached.get("errors") or []
         if export_errors:
-            st.warning("Einige Datenbereiche konnten nicht vollständig gelesen werden: " + " ".join(export_errors)
-                       + " Bitte prüfe die Firebase-Berechtigungen und lade die Daten erneut.")
-        if not data and not export_errors:
+            st.warning("Der Export ist unvollständig. Es wurde kein Download angeboten. Betroffene Bereiche: "
+                       + " ".join(export_errors) + " Bitte prüfe die Firebase-Berechtigungen und lade die Daten erneut.")
+        elif not data:
             st.info("Unter deiner Twitch-ID sind keine Daten gespeichert.")
-        elif data:
+        else:
             st.download_button(
                 "⬇️ Alles als JSON herunterladen",
                 data=_build_account_export_json(tid, data),
