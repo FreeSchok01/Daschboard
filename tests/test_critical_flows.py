@@ -684,3 +684,110 @@ def test_event_registration_still_supports_anonymous_visitors(memory_db):
     events._register_event_participant("event_123", "Guest A", "Web", "")
     events._register_event_participant("event_123", "Guest B", "Web", "")
     assert len(memory_db.reference("streamdex_events/event_123/participants").get()) == 2
+
+def test_tebex_checkout_creates_basket_and_saves_url(monkeypatch, memory_db):
+    monkeypatch.setattr(shop, "st", SimpleNamespace(secrets={
+        "tebex": {"account_token": "test-token-1234567890", "packages": {"slot": "12345"}}
+    }))
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345",
+        "name": "testcreator",
+        "status": "pending",
+        "item_name": "Slot Machine",
+        "items": ["slot"],
+        "price": "2.99",
+        "gross": "2.99",
+        "games": ["slot"],
+        "ts": int(time.time() * 1000),
+    })
+    calls = []
+
+    def fake_request(config, method, path, payload=None):
+        calls.append((method, path, payload))
+        if method == "POST" and path.endswith("/baskets"):
+            return {"data": {"ident": "basket-ident-123456"}}
+        if method == "GET" and path.endswith("/basket-ident-123456"):
+            return {"data": {
+                "ident": "basket-ident-123456",
+                "currency": "EUR",
+                "base_price": 2.99,
+                "links": {"checkout": "https://checkout.tebex.io/checkout/basket-ident-123456"},
+            }}
+        return {"data": {}}
+
+    monkeypatch.setattr(shop, "_tebex_api_request", fake_request)
+    url = shop.create_tebex_checkout("SDX-ABC234")
+
+    assert url == "https://checkout.tebex.io/checkout/basket-ident-123456"
+    assert ("POST", "baskets/basket-ident-123456/packages", {"package_id": "12345", "quantity": 1}) in calls
+    saved = memory_db.reference("shop/orders/SDX-ABC234").get()
+    assert saved["payment_provider"] == "tebex"
+    assert saved["tebex_basket_ident"] == "basket-ident-123456"
+    assert saved["tebex_checkout_url"] == url
+
+
+def test_tebex_return_verifies_completed_basket_and_fulfils_once(monkeypatch, memory_db):
+    monkeypatch.setattr(shop, "_tebex_config", lambda: {
+        "account_token": "test-token-1234567890", "packages": {"slot": "12345"}
+    })
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345",
+        "name": "testcreator",
+        "status": "pending",
+        "item_name": "Slot Machine",
+        "price": "2.99",
+        "games": ["slot"],
+        "payment_provider": "tebex",
+        "tebex_basket_ident": "basket-ident-123456",
+    })
+    calls = []
+
+    def fake_request(config, method, path, payload=None):
+        calls.append((method, path))
+        return {"data": {
+            "ident": "basket-ident-123456",
+            "complete": True,
+            "custom": {"streamdex_order": "SDX-ABC234"},
+            "currency": "EUR",
+            "base_price": 2.99,
+        }}
+
+    monkeypatch.setattr(shop, "_tebex_api_request", fake_request)
+    ok, message = shop.handle_tebex_return("SDX-ABC234")
+
+    assert ok is True
+    assert "freigeschaltet" in message
+    assert memory_db.reference("shop/orders/SDX-ABC234/status").get() == "paid"
+    assert memory_db.reference("game_flags/streamers/12345/slot").get() is True
+    assert memory_db.reference("shop/orders/SDX-ABC234/tip_id").get() == "tebex:basket-ident-123456"
+
+    # Repeated returns do not call Tebex again or repeat fulfilment.
+    again, _ = shop.handle_tebex_return("SDX-ABC234")
+    assert again is True
+    assert len(calls) == 1
+
+
+def test_tebex_return_rejects_incomplete_or_wrong_price_basket(monkeypatch, memory_db):
+    monkeypatch.setattr(shop, "_tebex_config", lambda: {
+        "account_token": "test-token-1234567890", "packages": {"slot": "12345"}
+    })
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345", "name": "testcreator", "status": "pending",
+        "item_name": "Slot Machine", "price": "2.99", "games": ["slot"],
+        "payment_provider": "tebex", "tebex_basket_ident": "basket-ident-123456",
+    })
+    monkeypatch.setattr(shop, "_tebex_api_request", lambda *a, **k: {"data": {
+        "ident": "basket-ident-123456",
+        "complete": True,
+        "custom": {"streamdex_order": "SDX-ABC234"},
+        "currency": "EUR",
+        "base_price": 0.01,
+    }})
+
+    ok, message = shop.handle_tebex_return("SDX-ABC234")
+
+    assert ok is False
+    assert "Betrag" in message
+    assert memory_db.reference("shop/orders/SDX-ABC234/status").get() == "pending"
+    assert memory_db.reference("game_flags/streamers/12345/slot").get() is None
+
