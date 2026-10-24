@@ -250,7 +250,7 @@ def _find_tip(code, price):
     return None
 
 
-def fulfill(code, manual=False):
+def fulfill(code, manual=False, payment_id=None):
     """Gibt (ok, Text) zurück. Ein Tip und eine Bestellung werden höchstens einmal verbucht."""
     ref = db.reference(f"shop/orders/{code.strip().upper()}")
     order = ref.get()
@@ -258,7 +258,7 @@ def fulfill(code, manual=False):
         return False, "Unbekannter Bestellcode."
     if order.get("status") == "paid":
         return True, f"Bereits verbucht: **{order['item_name']}** für {order['name']}."
-    tip_id = "manuell"
+    tip_id = str(payment_id or "manuell") if manual else "manuell"
     if not manual:
         try:
             tip = _find_tip(ref.key, order["price"])
@@ -443,6 +443,224 @@ def _card(iid, it, items, have, cart):
 
 
 PAYPAL_RETURN_BASE = "https://streamdex.streamlit.app/"
+TEBEX_API_BASE = "https://headless.tebex.io/api"
+
+
+def _tebex_config():
+    """Return Tebex Headless configuration. The account token identifies the public webstore."""
+    try:
+        settings = st.secrets["tebex"]
+        account_token = str(settings.get("account_token", "") or "").strip()
+        packages = settings.get("packages", {})
+    except Exception:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,120}", account_token):
+        return None
+    if not isinstance(packages, dict):
+        packages = {}
+    package_map = {
+        str(key): str(value).strip()
+        for key, value in packages.items()
+        if str(key).strip() and re.fullmatch(r"[0-9]+", str(value).strip())
+    }
+    return {"account_token": account_token, "packages": package_map}
+
+
+def _tebex_api_request(config, method, path, payload=None):
+    """Call the public Tebex Headless API and return JSON, hiding transport details from customers."""
+    url = f"{TEBEX_API_BASE}/{path.lstrip('/')}"
+    try:
+        response = requests.request(
+            method.upper(),
+            url,
+            json=payload,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not isinstance(result, dict):
+            raise ValueError("Ungültige Antwort vom Tebex-Shop.")
+        return result
+    except requests.RequestException as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (400, 404, 422):
+            raise ValueError(
+                "Tebex hat den Warenkorb abgelehnt. Prüfe, ob alle Paket-IDs und ein verwendeter Gutschein im Tebex-Store existieren."
+            ) from exc
+        raise RuntimeError(
+            "Der Tebex-Shop ist momentan nicht erreichbar. Bitte versuche es gleich erneut."
+        ) from exc
+    except (ValueError, TypeError) as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith(("Tebex hat", "Ungültige Antwort")):
+            raise
+        raise RuntimeError("Tebex hat eine ungültige Antwort zurückgegeben.") from exc
+
+
+def _tebex_response_data(response):
+    data = response.get("data", response) if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        raise ValueError("Tebex hat keine gültigen Warenkorbdaten zurückgegeben.")
+    return data
+
+
+def _tebex_return_url(route, username, order_code):
+    query = {
+        "shop": "1",
+        route: "1",
+        "u": str(username or "")[:100],
+        "order_ref": str(order_code or "")[:10],
+    }
+    return f"{PAYPAL_RETURN_BASE}?{urlencode(query)}"
+
+
+def create_tebex_checkout(order_code):
+    """Create/reuse a Tebex basket for a pending StreamDex order, using only server-side order data."""
+    order_code = str(order_code or "").strip().upper()
+    if not re.fullmatch(r"SDX-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}", order_code):
+        raise ValueError("Ungültiger Bestellcode.")
+    order_ref = db.reference(f"shop/orders/{order_code}")
+    order = order_ref.get()
+    if not isinstance(order, dict) or order.get("status") != "pending":
+        raise ValueError("Diese Bestellung ist nicht mehr offen.")
+    if order.get("item") == "tourskip":
+        raise ValueError("Das Überspringen des Rundgangs kann derzeit nicht über Tebex bezahlt werden.")
+
+    config = _tebex_config()
+    if not config:
+        raise RuntimeError("Der Tebex-Shop ist noch nicht eingerichtet.")
+    now = int(time.time())
+    saved_url = str(order.get("tebex_checkout_url") or "")
+    try:
+        created_at = int(order.get("tebex_created_at") or 0)
+    except (TypeError, ValueError):
+        created_at = 0
+    saved_ident = str(order.get("tebex_basket_ident") or "")
+    if (saved_url.startswith("https://") and urlparse(saved_url).hostname in {"checkout.tebex.io", "pay.tebex.io"}
+            and re.fullmatch(r"[A-Za-z0-9-]{8,120}", saved_ident)
+            and created_at > 0 and 0 <= now - created_at < 7200):
+        return saved_url
+
+    ids = order.get("items")
+    if not isinstance(ids, list) or not ids:
+        raise ValueError("Diese Bestellung enthält keine gültigen Shop-Produkte.")
+    package_ids = []
+    for item_id in ids:
+        package_id = config["packages"].get(str(item_id))
+        if not package_id:
+            raise ValueError(
+                f"Für „{item_id}“ fehlt die Tebex-Paket-ID. Lege das Paket in Tebex an und trage seine ID in den Streamlit-Secrets ein."
+            )
+        package_ids.append(package_id)
+
+    expected_price = Decimal(_price(order.get("price", "0")))
+    if expected_price <= 0:
+        raise ValueError("Diese Bestellung hat keinen positiven Zahlbetrag und benötigt keinen Tebex-Checkout.")
+
+    basket_response = _tebex_api_request(
+        config,
+        "POST",
+        f"accounts/{config['account_token']}/baskets",
+        {
+            "complete_url": _tebex_return_url("tebex_return", order.get("name", ""), order_code),
+            "cancel_url": _tebex_return_url("tebex_cancel", order.get("name", ""), order_code),
+            "complete_auto_redirect": True,
+            "custom": {"streamdex_order": order_code},
+        },
+    )
+    basket = _tebex_response_data(basket_response)
+    basket_ident = str(basket.get("ident") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,120}", basket_ident):
+        raise RuntimeError("Tebex hat keine gültige Warenkorb-ID zurückgegeben.")
+
+    for package_id in package_ids:
+        _tebex_api_request(
+            config,
+            "POST",
+            f"baskets/{basket_ident}/packages",
+            {"package_id": package_id, "quantity": 1},
+        )
+
+    if order.get("coupon"):
+        _tebex_api_request(
+            config,
+            "POST",
+            f"accounts/{config['account_token']}/baskets/{basket_ident}/coupons",
+            {"coupon_code": str(order["coupon"])},
+        )
+
+    basket = _tebex_response_data(
+        _tebex_api_request(
+            config, "GET", f"accounts/{config['account_token']}/baskets/{basket_ident}"
+        )
+    )
+    if str(basket.get("currency") or "").upper() != "EUR":
+        raise ValueError("Der Tebex-Warenkorb ist nicht auf EUR eingestellt. Bitte prüfe die Währung deines Tebex-Stores.")
+    try:
+        tebex_base_price = Decimal(_price(basket.get("base_price")))
+    except Exception as exc:
+        raise RuntimeError("Tebex hat keinen prüfbaren Warenkorbpreis zurückgegeben.") from exc
+    if tebex_base_price != expected_price:
+        raise ValueError(
+            f"Der Tebex-Preis ({tebex_base_price:.2f} €) stimmt nicht mit der StreamDex-Bestellung ({expected_price:.2f} €) überein. Prüfe Paketpreise und Gutscheine in Tebex."
+        )
+
+    links = basket.get("links") if isinstance(basket.get("links"), dict) else {}
+    checkout_url = str(links.get("checkout") or "").strip()
+    parsed_checkout = urlparse(checkout_url)
+    if parsed_checkout.scheme != "https" or parsed_checkout.hostname not in {"checkout.tebex.io", "pay.tebex.io"}:
+        raise RuntimeError("Tebex hat keinen gültigen sicheren Checkout-Link zurückgegeben.")
+
+    order_ref.update({
+        "payment_provider": "tebex",
+        "tebex_basket_ident": basket_ident,
+        "tebex_checkout_url": checkout_url,
+        "tebex_created_at": now,
+        "tebex_package_ids": package_ids,
+    })
+    return checkout_url
+
+
+def handle_tebex_return(order_code):
+    """Verify the stored Tebex basket with Tebex before granting anything to a StreamDex account."""
+    order_code = str(order_code or "").strip().upper()
+    if not re.fullmatch(r"SDX-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}", order_code):
+        return False, "Die Tebex-Rückgabe enthält keinen gültigen Bestellcode."
+    order_ref = db.reference(f"shop/orders/{order_code}")
+    order = order_ref.get()
+    if not isinstance(order, dict):
+        return False, "Die StreamDex-Bestellung wurde nicht gefunden."
+    if order.get("status") == "paid":
+        return True, f"Diese Bestellung wurde bereits freigeschaltet: {order.get('item_name', order_code)}."
+    if order.get("status") != "pending" or order.get("payment_provider") != "tebex":
+        return False, "Diese Bestellung ist nicht mehr für eine Tebex-Zahlung offen."
+    basket_ident = str(order.get("tebex_basket_ident") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,120}", basket_ident):
+        return False, "Der Tebex-Warenkorb ist nicht korrekt mit der Bestellung verknüpft."
+    config = _tebex_config()
+    if not config:
+        return False, "Der Tebex-Shop ist momentan nicht verfügbar. Bitte kontaktiere den StreamDex-Support."
+
+    try:
+        basket = _tebex_response_data(
+            _tebex_api_request(
+                config, "GET", f"accounts/{config['account_token']}/baskets/{basket_ident}"
+            )
+        )
+        if basket.get("complete") is not True:
+            return False, "Tebex hat diese Zahlung noch nicht als abgeschlossen bestätigt."
+        custom = basket.get("custom") if isinstance(basket.get("custom"), dict) else {}
+        if str(custom.get("streamdex_order") or "").upper() != order_code:
+            return False, "Die Tebex-Bestellung passt nicht zur StreamDex-Bestellung."
+        if str(basket.get("currency") or "").upper() != "EUR":
+            return False, "Die bestätigte Tebex-Zahlung hatte nicht die erwartete Währung EUR."
+        if Decimal(_price(basket.get("base_price"))) != Decimal(_price(order.get("price", "0"))):
+            return False, "Der bestätigte Tebex-Betrag stimmt nicht mit der StreamDex-Bestellung überein."
+        ok, message = fulfill(order_code, manual=True, payment_id=f"tebex:{basket_ident}")
+        return ok, message
+    except Exception as exc:
+        print(f"[shop] Tebex return failed ({type(exc).__name__})")
+        return False, "Die Tebex-Zahlung konnte nicht verifiziert werden. Bitte versuche es erneut oder kontaktiere den Support."
 
 
 def _paypal_config():
@@ -705,49 +923,50 @@ def _order_box():
         st.markdown('<div class="sd-shop-total-label">Zu zahlen</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sd-shop-total">{html.escape(str(price))} €</div>', unsafe_allow_html=True)
 
-        config = _paypal_config()
-        if config and key == "order":
+        tebex = _tebex_config()
+        if tebex and key == "order":
             st.markdown(
                 '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">1</span>'
-                '<div><b>Mit PayPal bezahlen</b><span>Dein Bestellcode wird automatisch intern zugeordnet – kein Kopieren in eine Tip-Nachricht.</span></div></div>'
+                '<div><b>Sicher mit Tebex bezahlen</b><span>Tebex übernimmt den Checkout. Deine StreamDex-Bestellung wird automatisch zugeordnet.</span></div></div>'
                 '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">2</span>'
-                '<div><b>Zu StreamDex zurückkehren</b><span>Nach der PayPal-Prüfung schalten wir deine gekauften Games frei.</span></div></div>',
+                '<div><b>Zu StreamDex zurückkehren</b><span>Die Freischaltung erfolgt erst, nachdem StreamDex den Status direkt bei Tebex geprüft hat.</span></div></div>',
                 unsafe_allow_html=True,
             )
-            error = st.session_state.pop(f"paypal_error_{code}", "")
+            error = st.session_state.pop(f"tebex_error_{code}", "")
             if error:
                 st.warning(error)
             saved_order = db.reference(f"shop/orders/{code}").get() or {}
-            approval_url = (
-                str(st.session_state.get(f"paypal_url_{code}") or "")
-                or str(saved_order.get("paypal_approval_url") or "")
+            checkout_url = (
+                str(st.session_state.get(f"tebex_url_{code}") or "")
+                or str(saved_order.get("tebex_checkout_url") or "")
             )
-            if not approval_url:
-                if st.button("PayPal-Checkout vorbereiten", type="primary", use_container_width=True):
+            if not checkout_url:
+                if st.button("Tebex-Checkout vorbereiten", type="primary", use_container_width=True):
                     try:
-                        approval_url = create_paypal_checkout(code)
+                        checkout_url = create_tebex_checkout(code)
                     except (RuntimeError, ValueError) as exc:
-                        st.error(str(exc))
+                        st.session_state[f"tebex_error_{code}"] = str(exc)
+                        st.rerun()
                     else:
-                        st.session_state[f"paypal_url_{code}"] = approval_url
-            if approval_url:
+                        st.session_state[f"tebex_url_{code}"] = checkout_url
+            if checkout_url:
                 st.link_button(
-                    "🔒 Sicher mit PayPal bezahlen",
-                    approval_url,
+                    "🔒 Sicher mit Tebex bezahlen",
+                    checkout_url,
                     type="primary",
                     use_container_width=True,
                 )
-                st.caption("Auf PayPal wird StreamDex als Checkout-Markenname angefordert.")
-                st.info("Die Freischaltung erfolgt erst, wenn PayPal die Zahlung bestätigt.")
+                st.caption("Der Zahlbetrag und die Währung werden vor der Freischaltung geprüft. Je nach Land kann Tebex Steuern im Checkout ausweisen.")
+                st.info("Wenn du den Checkout abbrichst, wird nichts freigeschaltet.")
             order_now = db.reference(f"shop/orders/{code}").get() or {}
-            if not order_now.get("paypal_order_id"):
+            if not order_now.get("tebex_basket_ident"):
                 if st.button("Bestellung abbrechen", use_container_width=True, key=f"cancel_order_{code}"):
                     cancel_order(code)
                     st.session_state.pop(key, None)
                     st.rerun()
         else:
-            if not config:
-                st.info("PayPal-Checkout noch nicht konfiguriert. Bis dahin bleibt der bisherige StreamElements-Ablauf verfügbar.")
+            if key == "order":
+                st.info("Tebex ist noch nicht vollständig eingerichtet. Bis dahin bleibt der bisherige StreamElements-Ablauf verfügbar.")
             st.markdown(
                 '<div class="sd-shop-checkout-step"><span class="sd-shop-checkout-num">1</span>'
                 '<div><b>Tip-Seite öffnen</b><span>Öffne die StreamElements-Seite und sende den angezeigten Betrag.</span></div></div>'
@@ -770,7 +989,7 @@ def _order_box():
                 if ok:
                     if key == "order":
                         st.session_state["download_order_code"] = code
-                    st.session_state.pop(key)
+                    st.session_state.pop(key, None)
                     st.balloons()
                     st.success(msg)
                 else:
