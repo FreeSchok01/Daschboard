@@ -274,6 +274,37 @@ a:hover{color:#67e8f9}
   }
 }
 
+
+/* Gemeinsame Navigation für alle angemeldeten StreamDex-OS-Bereiche */
+.sd-os-nav-wrap{margin:0 0 18px}
+.sd-os-nav-label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 2px 8px;
+ color:#93a1c4;font:700 .62rem 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase}
+.sd-os-nav-label strong{color:#bda5ff;font-weight:700}
+.sd-os-nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}
+.sd-os-nav a{display:flex;align-items:center;justify-content:center;gap:7px;min-height:42px;padding:9px 10px;
+ border:1px solid rgba(48,61,103,.78);border-radius:11px;background:linear-gradient(145deg,rgba(13,19,40,.9),rgba(9,14,29,.95));
+ color:#b9c4e2;text-decoration:none;text-align:center;font-size:.76rem;font-weight:750;line-height:1.3;
+ transition:background .16s,border-color .16s,transform .16s;overflow-wrap:anywhere}
+.sd-os-nav a:hover{border-color:rgba(167,139,250,.72);background:linear-gradient(145deg,rgba(38,29,71,.96),rgba(11,23,43,.98));color:#fff;transform:translateY(-1px)}
+.sd-os-nav a.is-active{color:#fff;border-color:rgba(196,181,253,.76);
+ background:linear-gradient(110deg,rgba(124,58,237,.78),rgba(79,70,229,.7) 62%,rgba(8,127,156,.66));
+ box-shadow:0 6px 18px rgba(91,73,232,.16)}
+.sd-os-nav a:focus-visible{outline:2px solid #22d3ee;outline-offset:2px}
+.sd-empty-state{display:flex;align-items:flex-start;gap:14px;padding:18px 19px;margin:8px 0 14px;
+ border:1px dashed rgba(139,92,246,.42);border-radius:14px;
+ background:linear-gradient(135deg,rgba(139,92,246,.075),rgba(34,211,238,.035))}
+.sd-empty-state-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:12px;
+ background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.28);font-size:1.25rem}
+.sd-empty-state-copy{min-width:0}
+.sd-empty-state-copy strong{display:block;color:#f1f5ff;font-size:.94rem;margin:1px 0 5px}
+.sd-empty-state-copy p{color:#aab7d5;font-size:.8rem;line-height:1.65;margin:0}
+@media(max-width:640px){
+ .sd-os-nav{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+ .sd-os-nav a{min-height:44px;padding:9px 7px;font-size:.72rem;border-radius:9px}
+ .sd-os-nav-label{font-size:.58rem}
+ .sd-empty-state{gap:10px;padding:14px}
+ .sd-empty-state-icon{flex-basis:36px;width:36px;height:36px;font-size:1.1rem}
+}
 </style>"""
 
 
@@ -289,3 +320,41 @@ def header_html(subtitle="", status="CORE SYNCED"):
 
 def render_header(subtitle="", status="CORE SYNCED"):
     st.markdown(header_html(subtitle, status), unsafe_allow_html=True)
+
+
+def render_os_navigation(current="dashboard"):
+    """Renders shared, responsive quick navigation for signed-in StreamDex OS pages."""
+    items = (
+        ("dashboard", "⌂ Übersicht", "/?dashboard=1"),
+        ("radar", "◈ Insight", "/?radar=1"),
+        ("planner", "▦ Planner", "/?planner=1"),
+        ("clips", "▶ Clips", "/?clips=1"),
+        ("feedback", "✦ Feedback", "/?feedback=1"),
+        ("community", "♧ Community", "/?community=1"),
+        ("profile", "♙ Profil", "/?profile=1"),
+        ("ideas", "🧩 Tools", "/?ideas=1"),
+    )
+    links = []
+    for key, label, url in items:
+        active = ' class="is-active" aria-current="page"' if key == current else ""
+        links.append(f'<a href="{html.escape(url, quote=True)}"{active}>{html.escape(label)}</a>')
+    st.markdown(
+        '<div class="sd-os-nav-wrap">'
+        '<div class="sd-os-nav-label"><span>STREAMDEX OS</span><strong>Schnellzugriff</strong></div>'
+        '<nav class="sd-os-nav" aria-label="StreamDex Schnellnavigation">'
+        + "".join(links) + '</nav></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_empty_state(title, description, icon="✦"):
+    """Consistent, accessible empty state with a clear next-step explanation."""
+    st.markdown(
+        '<div class="sd-empty-state" role="status">'
+        f'<div class="sd-empty-state-icon" aria-hidden="true">{html.escape(str(icon))}</div>'
+        '<div class="sd-empty-state-copy">'
+        f'<strong>{html.escape(str(title))}</strong>'
+        f'<p>{html.escape(str(description))}</p>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
