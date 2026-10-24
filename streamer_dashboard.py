@@ -999,6 +999,29 @@ def _delete_account_data(tid):
 
     return removed, list(dict.fromkeys(errors))
 
+def _has_active_desktop_client(tid):
+    """Fail closed if StreamDex or Lurk reports online or its status cannot be checked."""
+    now_ms = int(time.time() * 1000)
+    for path in (f"presence/{tid}", f"lurk/presence/{tid}"):
+        try:
+            row = db.reference(path).get() or {}
+        except Exception:
+            return True
+        if not isinstance(row, dict) or row.get("status") != "online":
+            continue
+        try:
+            seen = int(row.get("last_seen") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return True
+        if not seen:
+            return True
+        if seen < 10_000_000_000:
+            seen *= 1000
+        if 0 <= now_ms - seen <= 150_000:
+            return True
+    return False
+
+
 def _render_account_tab(tid, username, is_online):
     st.subheader("🧾 Konto & Datenschutz")
     st.caption("Hier siehst du, welche Daten Streamdex unter deiner Twitch-ID gespeichert hat, kannst sie exportieren "
