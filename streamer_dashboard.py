@@ -15,6 +15,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import (ACCOUNT_DELETE_PATHS, ACCOUNT_KEEP_PATHS, account_path,
+                                 create_signed_oauth_state, has_active_user_session,
+                                 validate_signed_oauth_state)
 
 from beta_apply import _apply_form, render_logged_in_beta_status
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
@@ -701,16 +704,9 @@ def _daily_series(history, key, days, today=None):
 # ----------------------------------------------------------------------------
 # Wird beim Löschen entfernt (alles, was unter der eigenen Twitch-ID liegt). presence ZULETZT,
 # damit der Login bei einem Fehler mittendrin noch funktioniert und man es erneut versuchen kann.
-_DELETE_PATHS = [
-    "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
-    "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
-    "support_read/{t}", "giveaway_log/{t}",
-    "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
-    "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
-    "creator_profiles/{t}", "presence/{t}",
-]
+_DELETE_PATHS = list(ACCOUNT_DELETE_PATHS)
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
-_KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
+_KEEP_PATHS = list(ACCOUNT_KEEP_PATHS)
 
 ACCOUNT_DATA_TABLE = """
 | Was | Wozu |
@@ -720,6 +716,8 @@ ACCOUNT_DATA_TABLE = """
 | Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
 | Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
 | Support-Nachrichten und Feedback | Support |
+| Ideen, Turniere, Glücksrad, Wishlist, Quizantworten, Clips, Ziele, Moderationsprotokolle und Teamdaten | Deine privaten StreamDex-Werkzeuge |
+| Eigene Community-Stimmen, Umfragen und Events | Community-Funktionen |
 | Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
 """
 
@@ -747,6 +745,15 @@ def _account_area_label(path):
         "streamdex_events": "Community-Events",
         "feedback_inbox": "Feedback-Einträge",
         "community_polls": "Community-Umfragen",
+        "streamdex_community_wishlist": "Community-Wunschliste",
+        "streamdex_quiz_rooms": "Quizräume und Antworten",
+        "streamdex_ideas": "Ideen",
+        "streamdex_brackets": "Turnierbäume",
+        "streamdex_wheel": "Glücksrad",
+        "streamdex_goals": "Ziele",
+        "streamdex_modlog": "Moderationsprotokolle",
+        "streamdex_modteam": "Moderationsteam",
+        "beta_seen": "Beta-Hinweise",
     }
     return labels.get(root, "Datenbereich")
 
