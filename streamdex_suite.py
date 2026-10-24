@@ -10,9 +10,13 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from firebase_admin import db
 
+from privacy_security import is_valid_twitch_id
+
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
 MAX_TEXT = 2000
+QUIZ_CODE_RE = re.compile(r"^[A-F0-9]{6}$")
+FIREBASE_CHILD_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 TOOLS = [
     ("ideas", "💡 StreamDex Ideas", "Ideen sammeln, priorisieren und umsetzen."),
     ("bracket", "🏆 StreamDex Bracket", "K.-o.-Turniere erstellen und verwalten."),
@@ -28,7 +32,140 @@ TOOLS = [
 
 
 def _uid(value):
-    return "".join(ch for ch in str(value or "") if ch.isalnum() or ch in "_-")
+    raw = str(value or "")
+    return raw if is_valid_twitch_id(raw) else ""
+
+
+def _set_owned_wishlist_status(wish_id, tid, status):
+    uid = _uid(tid)
+    if not uid or not FIREBASE_CHILD_RE.fullmatch(str(wish_id or "")) or status not in ("Neu", "Geplant", "In Arbeit", "Umgesetzt"):
+        return False
+    ref = db.reference(f"streamdex_community_wishlist/{wish_id}")
+    result = {"ok": False}
+
+    def update(current):
+        result["ok"] = False
+        if not isinstance(current, dict) or str(current.get("author_tid") or "") != uid:
+            return current
+        updated = dict(current)
+        updated["status"] = status
+        result["ok"] = True
+        return updated
+
+    try:
+        ref.transaction(update)
+    except Exception:
+        return False
+    return bool(result["ok"])
+
+
+def _delete_owned_wishlist_item(wish_id, tid):
+    uid = _uid(tid)
+    if not uid or not FIREBASE_CHILD_RE.fullmatch(str(wish_id or "")):
+        return False
+    ref = db.reference(f"streamdex_community_wishlist/{wish_id}")
+    try:
+        current = ref.get()
+        if not isinstance(current, dict) or str(current.get("author_tid") or "") != uid:
+            return False
+        ref.delete()
+        return True
+    except Exception:
+        return False
+
+
+def _save_quiz_answer(code, tid, question_index, choice):
+    """Atomically validate a room is open and store an answer for only the signed-in ID."""
+    uid = _uid(tid)
+    code = str(code or "")
+    if not uid or not QUIZ_CODE_RE.fullmatch(code):
+        raise ValueError("Der Quizraum oder deine Sitzung ist ungültig. Bitte lade die Seite neu.")
+    try:
+        question_index = int(question_index)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("Diese Frage ist ungültig.") from None
+    ref = db.reference(f"streamdex_quiz_rooms/{code}")
+    outcome = {"error": "unavailable"}
+
+    def apply(current):
+        outcome["error"] = "unavailable"
+        if not isinstance(current, dict):
+            outcome["error"] = "missing"
+            return current
+        if current.get("status") == "closed":
+            outcome["error"] = "closed"
+            return current
+        questions = current.get("questions")
+        if not isinstance(questions, list) or not 0 <= question_index < len(questions):
+            outcome["error"] = "question"
+            return current
+        question = questions[question_index]
+        options = question.get("options") if isinstance(question, dict) else []
+        if not isinstance(options, list) or choice not in options:
+            outcome["error"] = "choice"
+            return current
+        all_answers = current.get("answers")
+        all_answers = dict(all_answers) if isinstance(all_answers, dict) else {}
+        user_answers = all_answers.get(uid)
+        user_answers = dict(user_answers) if isinstance(user_answers, dict) else {}
+        if str(question_index) in user_answers:
+            outcome["error"] = "already_answered"
+            return current
+        user_answers[str(question_index)] = {"choice": options.index(choice), "ts": SERVER_TS}
+        all_answers[uid] = user_answers
+        updated = dict(current)
+        updated["answers"] = all_answers
+        outcome["error"] = ""
+        return updated
+
+    try:
+        ref.transaction(apply)
+    except Exception:
+        raise RuntimeError("Die Antwort konnte nicht sicher gespeichert werden.") from None
+    if outcome["error"]:
+        messages = {
+            "missing": "Dieser Quizraum existiert nicht mehr.",
+            "closed": "Dieser Quizraum wurde inzwischen geschlossen.",
+            "question": "Diese Frage existiert nicht mehr.",
+            "choice": "Bitte wähle eine gültige Antwort.",
+            "already_answered": "Diese Frage wurde bereits beantwortet.",
+            "unavailable": "Der Quizraum ist gerade nicht verfügbar.",
+        }
+        raise ValueError(messages.get(outcome["error"], messages["unavailable"]))
+    return True
+
+
+def _manage_owned_quiz(code, tid, action):
+    uid = _uid(tid)
+    code = str(code or "")
+    if not uid or not QUIZ_CODE_RE.fullmatch(code) or action not in ("close", "delete"):
+        return False
+    ref = db.reference(f"streamdex_quiz_rooms/{code}")
+    try:
+        current = ref.get()
+        if not isinstance(current, dict) or str(current.get("created_by") or "") != uid:
+            return False
+        if action == "delete":
+            ref.delete()
+            return True
+        outcome = {"ok": False}
+
+        def close(current_value):
+            outcome["ok"] = False
+            if not isinstance(current_value, dict) or str(current_value.get("created_by") or "") != uid:
+                return current_value
+            if current_value.get("status") == "closed":
+                outcome["ok"] = True
+                return current_value
+            updated = dict(current_value)
+            updated["status"] = "closed"
+            outcome["ok"] = True
+            return updated
+
+        ref.transaction(close)
+        return bool(outcome["ok"])
+    except Exception:
+        return False
 
 
 def _int(value, default=0):
@@ -262,11 +399,13 @@ def _wishlist(tid, username):
                 states = ["Neu", "Geplant", "In Arbeit", "Umgesetzt"]; current = str(wish.get("status") or "Neu")
                 selected = scol.selectbox("Status ändern", states, index=states.index(current) if current in states else 0, key=f"sd_wishlist_status_{wid}")
                 if scol.button("Status speichern", key=f"sd_wishlist_save_{wid}", use_container_width=True):
-                    try: db.reference(f"{root}/{wid}/status").set(selected); st.rerun()
-                    except Exception: _err()
+                    if _set_owned_wishlist_status(wid, tid, selected):
+                        st.rerun()
+                    st.error("Der Wunsch gehört nicht mehr zu deinem Konto oder konnte nicht aktualisiert werden.")
                 if dcol.button("Löschen", key=f"sd_wishlist_delete_{wid}", use_container_width=True):
-                    try: db.reference(f"{root}/{wid}").delete(); st.rerun()
-                    except Exception: _err()
+                    if _delete_owned_wishlist_item(wid, tid):
+                        st.rerun()
+                    st.error("Der Wunsch gehört nicht zu deinem Konto oder konnte nicht gelöscht werden.")
 
 
 def _parse_quiz(raw):
@@ -292,9 +431,16 @@ def _quiz(tid, username):
             submit = st.form_submit_button("Quizraum erstellen", type="primary", use_container_width=True)
         if submit:
             try:
-                questions = _parse_quiz(raw); code = secrets.token_hex(3).upper(); attempts = 0
-                while db.reference(f"{root}/{code}").get() and attempts < 5: code, attempts = secrets.token_hex(3).upper(), attempts + 1
-                db.reference(f"{root}/{code}").set({"code": code, "title": title.strip()[:100] or "StreamDex Quiz", "created_by": _uid(tid), "created_by_name": str(username)[:80], "questions": questions, "created_at": SERVER_TS, "status": "open"})
+                questions = _parse_quiz(raw)
+                code = ""
+                for _attempt in range(10):
+                    candidate = secrets.token_hex(3).upper()
+                    if not db.reference(f"{root}/{candidate}").get():
+                        code = candidate
+                        break
+                if not code:
+                    raise RuntimeError("Kein freier Quizcode verfügbar.")
+                db.reference(f"{root}/{code}").set({"code": code, "title": title.strip()[:100] or "StreamDex Quiz", "created_by": _uid(tid), "created_by_name": str(username)[:80], "questions": questions, "created_at": SERVER_TS, "status": "open", "answers": {}})
                 st.success(f"Quizraum erstellt – Code: {code}"); st.rerun()
             except ValueError as exc: st.warning(str(exc))
             except Exception: _err()
@@ -302,7 +448,14 @@ def _quiz(tid, username):
     except Exception: st.error("Quizräume konnten nicht geladen werden."); return
     if not rooms: st.info("Noch keine offenen Quizräume. Erstelle oben den ersten."); return
     by_code = {str(r.get("code") or r["id"]): r for r in rooms}; code = st.selectbox("Quizraum", list(by_code), format_func=lambda c: f"{by_code[c].get('title') or 'Quiz'} · {c}")
-    room = by_code[code]; questions = room.get("questions") or []; answers_ref = db.reference(f"{root}/{code}/answers/{_uid(tid)}"); answers = answers_ref.get() or {}
+    room = by_code[code]
+    code = str(room.get("code") or "")
+    if not QUIZ_CODE_RE.fullmatch(code):
+        st.error("Dieser Quizraum hat einen ungültigen Code. Bitte erstelle einen neuen Raum.")
+        return
+    questions = room.get("questions") or []
+    answers_ref = db.reference(f"{root}/{code}/answers/{_uid(tid)}")
+    answers = answers_ref.get() or {}
     if not isinstance(answers, dict): answers = {}
     completed = sum(str(i) in answers for i in range(len(questions)))
     score = sum(1 for i, q in enumerate(questions) if str(i) in answers and _int(answers[str(i)].get("choice"), -1) == _int(q.get("correct_index"), -2))
@@ -311,19 +464,32 @@ def _quiz(tid, username):
     next_i = next((i for i in range(len(questions)) if str(i) not in answers), None)
     if next_i is None:
         st.success(f"Quiz abgeschlossen! Ergebnis: {score} von {len(questions)} Punkten.")
-        if st.button("Quiz erneut spielen", key=f"sd_quiz_replay_{code}"): answers_ref.delete(); st.rerun()
+        if st.button("Quiz erneut spielen", key=f"sd_quiz_replay_{code}"):
+            answers_ref.delete()
+            st.rerun()
     else:
         q = questions[next_i]; st.markdown(f"### Frage {next_i + 1} von {len(questions)}"); st.markdown(f"#### {html.escape(str(q.get('question') or 'Frage'))}")
         options = [str(v) for v in q.get("options") or []]
         with st.form(f"sd_quiz_answer_{code}_{next_i}"):
             choice = st.radio("Antwort", options); submit = st.form_submit_button("Antwort abgeben", type="primary", use_container_width=True)
         if submit:
-            try: answers_ref.child(str(next_i)).set({"choice": options.index(choice), "ts": SERVER_TS}); st.rerun()
-            except Exception: _err()
+            try:
+                _save_quiz_answer(code, tid, next_i, choice)
+                st.rerun()
+            except ValueError as exc:
+                st.warning(str(exc))
+            except Exception:
+                _err()
     if str(room.get("created_by") or "") == _uid(tid):
         with st.expander("Quizraum verwalten"):
-            if st.button("Raum schließen", key=f"sd_quiz_close_{code}"): db.reference(f"{root}/{code}/status").set("closed"); st.rerun()
-            if st.button("Raum löschen", key=f"sd_quiz_delete_{code}"): db.reference(f"{root}/{code}").delete(); st.rerun()
+            if st.button("Raum schließen", key=f"sd_quiz_close_{code}"):
+                if not _manage_owned_quiz(code, tid, "close"):
+                    st.error("Du kannst diesen Quizraum nicht schließen.")
+                st.rerun()
+            if st.button("Raum löschen", key=f"sd_quiz_delete_{code}"):
+                if not _manage_owned_quiz(code, tid, "delete"):
+                    st.error("Du kannst diesen Quizraum nicht löschen.")
+                st.rerun()
 
 
 def _clips(tid, username):
@@ -474,5 +640,8 @@ def _modteam(tid, username):
 
 def render_streamdex_suite(tid, username, tool="ideas"):
     """Rendert ein StreamDex-Werkzeug nach erfolgreichem Twitch-Login."""
+    if not _uid(tid):
+        st.error("Deine Sitzung ist ungültig. Bitte melde dich erneut mit Twitch an.")
+        return
     handlers = {"ideas": _ideas, "bracket": _bracket, "wheel": _wheel, "wishlist": _wishlist, "quiz": _quiz, "clips": _clips, "goals": _goals, "modlog": _modlog, "modteam": _modteam}
     handlers.get(str(tool or "ideas"), _ideas)(str(tid), str(username))
