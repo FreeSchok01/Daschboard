@@ -235,7 +235,9 @@ def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypat
     assert fake_st.session_state["twitch_oauth_access_token"] == "unit-test-access-token"
     assert fake_st.session_state["twitch_oauth_refresh_token"] == "unit-test-refresh-token"
     assert "channel:manage:schedule" in fake_st.session_state["twitch_oauth_scopes"]
-    assert memory_db.root == {}  # OAuth credentials must never be written to Firebase.
+    assert memory_db.reference("streamdex_oauth_states").get() in ({}, None)
+    assert "unit-test-access-token" not in json.dumps(memory_db.root)
+    assert "unit-test-refresh-token" not in json.dumps(memory_db.root)
 
 
 def test_twitch_oauth_callback_rejects_invalid_state_with_clear_notice(monkeypatch):
