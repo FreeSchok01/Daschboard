@@ -540,21 +540,74 @@ def admin_shop_panel(games):
     st.caption("Welche Games standardmäßig für ALLE frei sind, stellst du im Tab „🎮 Game-Freigaben“ unter „Global“ ein.")
 
     st.subheader("💶 Preise & Sichtbarkeit")
+    st.caption("Preise, Aktiv-Status und Download-Links direkt in der Tabelle bearbeiten. Download-Links gelten für Einzel-Games und werden Kunden erst nach erfolgreicher Zahlung angezeigt.")
     if not items:
         st.info("Noch kein Katalog. Er wird beim ersten Shop-Aufruf angelegt oder unten über „Standard-Katalog“.")
     else:
-        df = pd.DataFrame([{"ID": k, "Name": v["name"], "Typ": v.get("kind", "game"), "Preis €": float(v["price"]), "Aktiv": bool(v.get("active", True))} for k, v in items.items()])
-        ed = st.data_editor(df, hide_index=True, use_container_width=True, key="price_editor", disabled=["ID", "Name", "Typ"],
-                            column_config={"Preis €": st.column_config.NumberColumn(min_value=0.5, max_value=500.0, step=0.5, format="%.2f")})
-        if st.button("💾 Preise speichern", type="primary"):
-            n = 0
+        df = pd.DataFrame([
+            {
+                "ID": k,
+                "Name": v["name"],
+                "Typ": v.get("kind", "game"),
+                "Preis €": float(v["price"]),
+                "Aktiv": bool(v.get("active", True)),
+                "Download-Link (HTTPS)": str(v.get("download_url") or ""),
+            }
+            for k, v in items.items()
+        ])
+        ed = st.data_editor(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            key="price_editor",
+            disabled=["ID", "Name", "Typ"],
+            column_config={
+                "Preis €": st.column_config.NumberColumn(min_value=0.5, max_value=500.0, step=0.5, format="%.2f"),
+                "Aktiv": st.column_config.CheckboxColumn(help="Nur aktive Artikel erscheinen im öffentlichen Shop."),
+                "Download-Link (HTTPS)": st.column_config.TextColumn(
+                    help="Direkter Link zur ZIP-/EXE-Datei des Einzel-Games. Leer lassen, wenn noch kein Download bereitsteht.",
+                    width="large",
+                ),
+            },
+        )
+        if st.button("💾 Änderungen speichern", type="primary"):
+            updates = []
+            validation_error = ""
             for _, r in ed.iterrows():
-                o = items[r["ID"]]
-                if float(r["Preis €"]) != float(o["price"]) or bool(r["Aktiv"]) != bool(o.get("active", True)):
-                    db.reference(f"shop/items/{r['ID']}").update({"price": float(r["Preis €"]), "active": bool(r["Aktiv"])})
-                    n += 1
-            st.success(f"{n} Artikel aktualisiert.")
-            st.rerun()
+                item_id = str(r["ID"])
+                original = items[item_id]
+                try:
+                    new_price = float(r["Preis €"])
+                except (TypeError, ValueError):
+                    validation_error = f"Ungültiger Preis für {original.get('name', item_id)}."
+                    break
+                if not 0.5 <= new_price <= 500:
+                    validation_error = f"Der Preis für {original.get('name', item_id)} muss zwischen 0,50 € und 500 € liegen."
+                    break
+                new_active = bool(r["Aktiv"])
+                raw_link = r.get("Download-Link (HTTPS)", "")
+                new_link = "" if pd.isna(raw_link) else str(raw_link).strip()
+                if original.get("kind", "game") == "pack" and new_link:
+                    validation_error = f"„{original.get('name', item_id)}“ ist ein Pack. Download-Links bitte bei den einzelnen Games eintragen."
+                    break
+                if new_link and not _safe_download_url(new_link):
+                    validation_error = f"Der Download-Link für „{original.get('name', item_id)}“ muss eine gültige HTTPS-Adresse sein."
+                    break
+                old_link = _safe_download_url(original.get("download_url"))
+                if (new_price != float(original["price"])
+                        or new_active != bool(original.get("active", True))
+                        or new_link != old_link):
+                    patch = {"price": new_price, "active": new_active}
+                    if original.get("kind", "game") == "game":
+                        patch["download_url"] = new_link
+                    updates.append((item_id, patch))
+            if validation_error:
+                st.error(validation_error)
+            else:
+                for item_id, patch in updates:
+                    db.reference(f"shop/items/{item_id}").update(patch)
+                st.success(f"{len(updates)} Artikel aktualisiert.")
+                st.rerun()
     with st.expander("🧰 Artikel bearbeiten / neu anlegen / Standard-Katalog"):
         pick = st.selectbox("Artikel", ["➕ Neu"] + list(items), key="shop_pick")
         cur = items.get(pick, {})
