@@ -1,9 +1,11 @@
 """Streamdex-Shop: Einzel-Games, 4 Packs, Warenkorb. Bezahlung per StreamElements-Tip mit Bestellcode.
 Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nach ~60 s). Preise/Einstellungen: Admin-Tab 🛒 Shop."""
 import html
+import re
 import secrets
 from datetime import date
 from decimal import Decimal
+from urllib.parse import urlparse
 
 import pandas as pd
 import requests
@@ -32,7 +34,7 @@ PACKS = {
 
 
 def default_items(games):
-    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n}
+    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n, "download_url": ""}
           for n, (k, p) in enumerate(PRICES.items()) if k in games}
     for n, (k, (nm, ds, gm, p)) in enumerate(PACKS.items()):
         it[k] = {"kind": "pack", "name": nm, "desc": ds, "price": p, "games": [g for g in gm if g in games], "active": True, "sort": 100 + n}
@@ -41,6 +43,79 @@ def default_items(games):
 
 def _price(x):
     return str(Decimal(str(x)).quantize(Decimal("0.01")))
+
+
+def _safe_download_url(value):
+    """Accept only ordinary HTTPS download links; reject schemes like javascript: or file:."""
+    url = str(value or "").strip()
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return ""
+    return url
+
+
+def _order_downloads(code, tid, items):
+    """Return downloadable game modules only for a paid order belonging to the current Twitch account."""
+    code = str(code or "").strip().upper()
+    if not re.fullmatch(r"SDX-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}", code):
+        return None, []
+    order = db.reference(f"shop/orders/{code}").get()
+    if not isinstance(order, dict) or order.get("status") != "paid" or str(order.get("tid") or "") != str(tid):
+        return None, []
+
+    ordered_games = set(order.get("games", [])) if isinstance(order.get("games"), list) else set()
+    links = []
+    for game in sorted(ordered_games):
+        product = next(
+            (item for item in items.values()
+             if item.get("kind", "game") == "game" and game in item.get("games", [])),
+            None,
+        )
+        url = _safe_download_url(product.get("download_url")) if isinstance(product, dict) else ""
+        if url:
+            links.append({
+                "game": game,
+                "name": str(product.get("name") or game),
+                "url": url,
+            })
+    return order, links
+
+
+def _render_order_downloads(tid, items):
+    """Order-code lookup for repeat downloads, scoped to the currently selected Twitch account."""
+    expanded = bool(st.session_state.get("download_order_code"))
+    with st.expander("📥 Gekaufte Game-Module herunterladen", expanded=expanded):
+        st.caption("Du brauchst den Bestellcode und musst das zugehörige Twitch-Konto im Shop ausgewählt haben.")
+        with st.form("shop_download_lookup"):
+            candidate = st.text_input("Bestellcode", placeholder="z. B. SDX-ABC234", max_chars=10)
+            submitted = st.form_submit_button("Downloads anzeigen")
+        if submitted:
+            order, _ = _order_downloads(candidate, tid, items)
+            if order is None:
+                st.error("Bestellung nicht gefunden, noch nicht bezahlt oder sie gehört zu einem anderen Twitch-Konto.")
+            else:
+                st.session_state["download_order_code"] = candidate.strip().upper()
+                st.rerun()
+
+        code = st.session_state.get("download_order_code")
+        if code:
+            order, links = _order_downloads(code, tid, items)
+            if order is None:
+                st.session_state.pop("download_order_code", None)
+                st.warning("Der gespeicherte Download-Aufruf passt nicht zu diesem Konto. Gib deinen Bestellcode erneut ein.")
+            elif not links:
+                st.info("Die Bestellung ist bezahlt, aber für diese Games sind noch keine gültigen HTTPS-Download-Links hinterlegt. Bitte im Shop-Admin die Download-Links der einzelnen Games eintragen.")
+            else:
+                st.caption(f"Downloads für Bestellung **{code}** · {len(links)} Modul(e)")
+                for link in links:
+                    st.link_button(
+                        f"⬇️ {link['name']} herunterladen",
+                        link["url"],
+                        use_container_width=True,
+                    )
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -288,6 +363,8 @@ def _order_box():
         if st.button("🔍 Zahlung prüfen", type="primary", use_container_width=True):
             ok, msg = fulfill(code)
             if ok:
+                if key == "order":
+                    st.session_state["download_order_code"] = code
                 st.session_state.pop(key)
                 st.balloons()
                 st.success(msg)
@@ -342,6 +419,7 @@ def _cart_box(tid, name, items, have):
                 st.session_state["cart"] = []
                 if Decimal(op) == 0:
                     st.session_state["flash"] = fulfill(oc, manual=True)[1]
+                    st.session_state["download_order_code"] = oc
                 else:
                     st.session_state["order"] = (oc, op)
                 st.rerun()
@@ -374,6 +452,7 @@ def render_shop(games):
     if st.session_state.get("cart_tid") != tid:
         st.session_state.update(cart=[], cart_tid=tid)
         st.session_state.pop("order", None)
+        st.session_state.pop("download_order_code", None)
     have, items = owned_games(tid), load_items()
     if not items:
         st.info("Aktuell gibt es keine Angebote.")
@@ -403,6 +482,7 @@ def render_shop(games):
             _order_box()
         else:
             _cart_box(tid, p.get("twitch_username"), items, have)
+    _render_order_downloads(tid, items)
     with st.expander("Rechtliches"):
         s = st.secrets.get("shop", {})
         st.markdown(f"[Impressum]({s.get('impressum_url', '#')}) · [AGB]({s.get('agb_url', '#')}) · [Widerruf]({s.get('widerruf_url', '#')})")
@@ -486,13 +566,19 @@ def admin_shop_panel(games):
             pr = st.number_input("Preis (€)", 0.5, 500.0, float(cur.get("price", 4.99)), 0.5)
             gm = st.multiselect("Schaltet frei", list(games), default=[g for g in cur.get("games", []) if g in games], format_func=lambda k: games[k])
             act = st.checkbox("Aktiv", value=cur.get("active", True))
+            dl_url = st.text_input("Direkter Download-Link (HTTPS; nur Einzel-Games)", value=cur.get("download_url", ""), disabled=kd == "pack", help="Link zur ZIP- oder EXE-Datei dieses Games. Wird erst nach bezahlter Bestellung angezeigt.")
             if st.form_submit_button("💾 Speichern"):
                 key = (iid if pick == "➕ Neu" else pick).strip().lower()
                 if not key.replace("_", "").isalnum() or not nm.strip() or not gm:
                     st.error("ID, Name und mindestens ein Game sind Pflicht.")
+                elif kd == "game" and len(gm) != 1:
+                    st.error("Ein Einzel-Game-Artikel muss genau ein Game freischalten. Nutze für mehrere Games den Typ „pack“.")
+                elif dl_url.strip() and kd == "game" and not _safe_download_url(dl_url):
+                    st.error("Der Download-Link muss eine gültige HTTPS-Adresse ohne Zugangsdaten enthalten.")
                 else:
                     db.reference(f"shop/items/{key}").set({"kind": kd, "name": nm.strip(), "desc": ds.strip(), "price": pr, "games": gm,
-                                                          "active": act, "sort": cur.get("sort", 50 if kd == "game" else 150)})
+                                                          "active": act, "sort": cur.get("sort", 50 if kd == "game" else 150),
+                                                          "download_url": _safe_download_url(dl_url) if kd == "game" else ""})
                     st.rerun()
         if pick != "➕ Neu" and st.button("🗑️ Artikel löschen"):
             db.reference(f"shop/items/{pick}").delete()
