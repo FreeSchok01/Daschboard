@@ -55,6 +55,65 @@ def _fmt_ts(ms):
         return ""
 
 
+def _record_web_login(tid, profile, auth_session):
+    """Records one verified Twitch OAuth login per Streamlit session."""
+    marker = f"_sd_web_login_recorded_{tid}"
+    session_stamp = str(auth_session or "")
+    if not session_stamp or st.session_state.get(marker) == session_stamp:
+        return
+    st.session_state[marker] = session_stamp
+    now_ms = int(time.time() * 1000)
+    login = str((profile or {}).get("login") or "")[:100]
+    display_name = str((profile or {}).get("display_name") or login or tid)[:100]
+
+    def _bump(current):
+        current = dict(current) if isinstance(current, dict) else {}
+        try:
+            count = max(0, int(current.get("login_count") or 0))
+        except (TypeError, ValueError):
+            count = 0
+        return {
+            "login": login, "display_name": display_name,
+            "first_login_ms": int(current.get("first_login_ms") or now_ms),
+            "last_login_ms": now_ms, "login_count": count + 1,
+        }
+
+    try:
+        db.reference(f"streamdex_web_auth/{tid}").transaction(_bump)
+    except Exception:
+        # Analytics must never prevent sign-in if Firebase is temporarily unavailable.
+        pass
+
+
+def _record_tool_use(tid, tool):
+    """Records direct page opens only; Streamlit renders inactive tabs too."""
+    if st.session_state.get("auth_method") != "twitch":
+        return
+    auth_session = str(st.session_state.get("authenticated_at") or "")
+    marker = f"_sd_tool_visit_recorded_{tid}_{tool}_{auth_session}"
+    if st.session_state.get(marker):
+        return
+    st.session_state[marker] = True
+    now_ms = int(time.time() * 1000)
+
+    def _bump(current):
+        current = dict(current) if isinstance(current, dict) else {}
+        try:
+            visits = max(0, int(current.get("visit_count") or 0))
+        except (TypeError, ValueError):
+            visits = 0
+        return {
+            "tool": str(tool)[:80],
+            "first_used_ms": int(current.get("first_used_ms") or now_ms),
+            "last_used_ms": now_ms, "visit_count": visits + 1,
+        }
+
+    try:
+        db.reference(f"streamdex_tool_usage/{tid}/{tool}").transaction(_bump)
+    except Exception:
+        pass
+
+
 def _fmt_ago(ms):
     if not ms:
         return "nie"
@@ -645,6 +704,7 @@ _DELETE_PATHS = [
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
     "support_read/{t}", "giveaway_log/{t}",
     "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
+    "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
     "presence/{t}", "creator_profiles/{t}",
 ]
 # Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
@@ -653,7 +713,7 @@ _KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
 ACCOUNT_DATA_TABLE = """
 | Was | Wozu |
 |---|---|
-| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität, technische Anmelde-Kennung | Login, Status-Anzeige, Zuordnung deiner Daten |
+| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität, Website-Login-Zeitpunkt und -Zähler, direkte Tool-Seitenaufrufe | Login, Status-Anzeige, Zuordnung deiner Daten und Nutzungsstatistik |
 | Hardware-Kennungen (nur als Hash) | Sperrliste gegen Missbrauch |
 | Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
 | Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
@@ -1542,6 +1602,8 @@ def render_streamer_dashboard(games):
         presence["twitch_username"] = oidc_username
 
     twitch_username = presence.get("twitch_username") or oidc_username or authed_tid
+    if oidc_logged_in:
+        _record_web_login(authed_tid, twitch_profile, st.session_state.get("authenticated_at"))
     app_version = presence.get("app_version", "?")
     last_seen = presence.get("last_seen")
     is_online = presence.get("status") == "online" and last_seen and (time.time() * 1000 - last_seen) < 150000
@@ -1600,6 +1662,7 @@ def render_streamer_dashboard(games):
 
     # Direkter Feedback-Link: nur für angemeldete Streamer öffnen.
     if str(st.query_params.get("feedback", "")) == "1":
+        _record_tool_use(authed_tid, "feedback")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="feedback_back_to_dashboard"):
             st.query_params.clear()
@@ -1612,6 +1675,7 @@ def render_streamer_dashboard(games):
     _suite_routes = ("ideas", "bracket", "wheel", "wishlist", "quiz", "clips", "goals", "modlog", "modteam")
     _active_suite_tool = next((name for name in _suite_routes if str(st.query_params.get(name, "")) == "1"), None)
     if _active_suite_tool:
+        _record_tool_use(authed_tid, _active_suite_tool)
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key=f"suite_back_{_active_suite_tool}"):
             st.query_params.clear()
@@ -1622,6 +1686,7 @@ def render_streamer_dashboard(games):
 
     # Direkter Radar-Link: nur für angemeldete Streamer öffnen.
     if str(st.query_params.get("radar", "")) == "1" or str(st.query_params.get("insight", "")) == "1":
+        _record_tool_use(authed_tid, "radar")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="radar_back_to_dashboard"):
             st.query_params.clear()
@@ -1632,6 +1697,7 @@ def render_streamer_dashboard(games):
 
     # Direkter Profileditor: nur nach erfolgreichem Streamer-Login öffnen.
     if str(st.query_params.get("profile", "")) == "1":
+        _record_tool_use(authed_tid, "profile")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="profile_back_to_dashboard"):
             st.query_params.clear()
@@ -1642,6 +1708,7 @@ def render_streamer_dashboard(games):
 
     # Direkter Planner-Link: nur nach erfolgreichem Streamer-Login öffnen.
     if str(st.query_params.get("planner", "")) == "1":
+        _record_tool_use(authed_tid, "planner")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="planner_back_to_dashboard"):
             st.query_params.clear()
@@ -1652,6 +1719,7 @@ def render_streamer_dashboard(games):
 
     # Zusätzliche Creator-Bereiche können auch direkt über die URL geöffnet werden.
     if str(st.query_params.get("legacy", "")) == "1":
+        _record_tool_use(authed_tid, "legacy")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="legacy_back_to_dashboard"):
             st.query_params.clear()
@@ -1660,6 +1728,7 @@ def render_streamer_dashboard(games):
         render_legacy(authed_tid, twitch_username)
         return
     if str(st.query_params.get("clips", "")) == "1":
+        _record_tool_use(authed_tid, "clips")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="clips_back_to_dashboard"):
             st.query_params.clear()
@@ -1668,6 +1737,7 @@ def render_streamer_dashboard(games):
         render_clips_manager(authed_tid, twitch_username)
         return
     if str(st.query_params.get("community", "")) == "1":
+        _record_tool_use(authed_tid, "events")
         back_col, _ = st.columns([1, 5])
         if back_col.button("← Zur Dashboard-Übersicht", key="community_back_to_dashboard"):
             st.query_params.clear()
