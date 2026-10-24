@@ -440,17 +440,24 @@ def _clear_authenticated_session():
 
 
 def _render_twitch_login():
-    """Rendert einen echten Twitch-Link im selben Browser-Tab."""
+    """Startet Twitch OAuth im aktuellen Browser-Tab und kehrt danach zu StreamDex zurück."""
     url, error = _twitch_authorization_url()
     if error:
         st.error(error)
         st.info("In Streamlit Secrets müssen die Twitch-Zugangsdaten unter [twitch] mit client_id und client_secret stehen.")
         return
 
-    # Der native Streamlit-Link öffnet Twitch als normale Browser-Seite/neuen Tab.
-    # Ein HTML-Link mit target="_self" kann in eingebetteten Ansichten dazu führen,
-    # dass Twitch wegen seiner Frame-Schutzrichtlinien die Verbindung ablehnt.
-    st.link_button("🟣 Mit Twitch anmelden", url, type="primary", use_container_width=True)
+    # st.link_button öffnet externe Ziele in einem neuen Tab. Ein direkter Top-Level-Link
+    # navigiert stattdessen im selben Tab – auch dann, wenn StreamDex eingebettet angezeigt wird.
+    safe_url = html.escape(str(url), quote=True)
+    st.markdown(
+        f'<a href="{safe_url}" target="_top" rel="noopener noreferrer" '
+        'style="display:flex;align-items:center;justify-content:center;width:100%;box-sizing:border-box;'
+        'min-height:44px;padding:11px 16px;border:1px solid rgba(167,139,250,.75);border-radius:10px;'
+        'background:linear-gradient(105deg,#8b5cf6,#635bdf 58%,#087f9c);color:#fff;text-decoration:none;'
+        'font-weight:800;text-align:center;">🟣 Mit Twitch anmelden</a>',
+        unsafe_allow_html=True,
+    )
 
 
 
