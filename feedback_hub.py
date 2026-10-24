@@ -164,15 +164,32 @@ def render_feedback_hub(tid, username):
         unsafe_allow_html=True,
     )
 
+    # Load each section independently so a permission/index problem in one
+    # Firebase collection does not hide the entire feedback hub.
+    load_errors = []
     try:
         suggestions = _load_suggestions()
+    except Exception as exc:
+        suggestions = []
+        load_errors.append(("Community-Vorschläge", exc))
+    try:
         polls = _load_polls()
+    except Exception as exc:
+        polls = []
+        load_errors.append(("Umfragen", exc))
+    try:
         my_items = _load_my_feedback(tid)
-    except Exception:
-        st.error("Feedback-Daten konnten gerade nicht geladen werden. Bitte versuche es erneut.")
-        if st.button("🔄 Erneut laden", key="sd_feedback_reload_error"):
-            st.rerun()
-        return
+    except Exception as exc:
+        my_items = []
+        load_errors.append(("Meine Beiträge", exc))
+
+    for section, exc in load_errors:
+        st.warning(f"{section} konnten nicht geladen werden. Andere Feedback-Bereiche bleiben verfügbar.")
+        # Keep the real cause in Streamlit server logs for diagnosis without
+        # exposing database/rules details to ordinary dashboard users.
+        st.error(f"Technischer Hinweis ({section}): {type(exc).__name__}")
+    if load_errors and st.button("🔄 Erneut laden", key="sd_feedback_reload_error"):
+        st.rerun()
 
     open_polls = [poll for poll in polls if not poll.get("closed")]
     active_suggestions = [item for item in suggestions if item.get("status", "neu") not in ("abgelehnt",)]
