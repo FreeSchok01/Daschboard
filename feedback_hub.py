@@ -8,6 +8,8 @@ import time
 import streamlit as st
 from firebase_admin import db
 
+from privacy_security import is_valid_twitch_id
+
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
 MAX_TITLE = 100
@@ -94,6 +96,14 @@ def _load_polls():
 
 
 def _submit_feedback(tid, username, kind, title, description, public=False, category="Allgemein"):
+    tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
+    allowed_kinds = {"Feature-Wunsch", "Feedback", "Bug"}
+    if kind not in allowed_kinds:
+        raise ValueError("Diese Art von Feedback ist nicht zulässig.")
+    if public and kind != "Feature-Wunsch":
+        raise ValueError("Nur Feature-Vorschläge können öffentlich veröffentlicht werden.")
     title = str(title or "").strip()[:MAX_TITLE]
     description = str(description or "").strip()[:MAX_TEXT]
     if not title or not description:
@@ -116,6 +126,9 @@ def _submit_feedback(tid, username, kind, title, description, public=False, cate
 
 
 def _create_poll(tid, username, question, option_texts):
+    tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
     question = str(question or "").strip()[:MAX_TITLE]
     options = []
     for value in option_texts:
@@ -143,36 +156,91 @@ def _create_poll(tid, username, question, option_texts):
     })
 
 
-def _cast_poll_vote(poll_id, tid, chosen_option):
-    """Validate a poll against the current database state before saving a user's vote."""
-    poll_id = str(poll_id or "")
-    tid = str(tid or "")
-    if not POLL_ID_RE.fullmatch(poll_id):
-        raise ValueError("Diese Umfrage hat eine ungültige Kennung. Bitte lade die Seite neu.")
-    if not TID_RE.fullmatch(tid):
-        raise ValueError("Deine StreamDex-Sitzung ist ungültig. Bitte melde dich erneut an.")
-
-    poll_ref = db.reference(f"community_polls/{poll_id}")
-    poll = poll_ref.get()
-    if not isinstance(poll, dict):
-        raise ValueError("Diese Umfrage wurde nicht gefunden. Bitte aktualisiere die Seite.")
-    if poll.get("closed"):
-        raise ValueError("Diese Umfrage ist inzwischen geschlossen.")
-
-    options = poll.get("options") or []
+def _normalize_poll_options(raw):
+    options = raw or []
     if isinstance(options, dict):
         options = [
             options[key] for key in sorted(
                 options, key=lambda value: (0, int(value)) if str(value).isdigit() else (1, str(value))
             )
         ]
-    options = [str(option).strip() for option in options if str(option).strip()]
-    chosen_option = str(chosen_option or "").strip()
-    if len(options) < 2 or chosen_option not in options:
-        raise ValueError("Bitte wähle eine der aktuell verfügbaren Antworten aus.")
+    if not isinstance(options, list):
+        return []
+    return [str(option).strip() for option in options if str(option).strip()]
 
-    poll_ref.child(f"votes/{tid}").set(options.index(chosen_option))
-    return options.index(chosen_option)
+
+def _cast_poll_vote(poll_id, tid, chosen_option):
+    """Atomically verify poll state/options before saving a signed-in user's vote."""
+    poll_id, tid = str(poll_id or ""), str(tid or "")
+    if not POLL_ID_RE.fullmatch(poll_id):
+        raise ValueError("Diese Umfrage hat eine ungültige Kennung. Bitte lade die Seite neu.")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Deine StreamDex-Sitzung ist ungültig. Bitte melde dich erneut an.")
+
+    poll_ref = db.reference(f"community_polls/{poll_id}")
+    chosen_option = str(chosen_option or "").strip()
+    outcome = {"error": "unavailable", "index": None}
+
+    def cast(current):
+        outcome["error"], outcome["index"] = "unavailable", None
+        if not isinstance(current, dict):
+            outcome["error"] = "missing"
+            return current
+        if current.get("closed"):
+            outcome["error"] = "closed"
+            return current
+        options = _normalize_poll_options(current.get("options"))
+        if len(options) < 2 or chosen_option not in options:
+            outcome["error"] = "option"
+            return current
+        votes = current.get("votes")
+        votes = dict(votes) if isinstance(votes, dict) else {}
+        index = options.index(chosen_option)
+        votes[tid] = index
+        updated = dict(current)
+        updated["votes"] = votes
+        outcome["index"], outcome["error"] = index, ""
+        return updated
+
+    try:
+        poll_ref.transaction(cast)
+    except Exception:
+        raise RuntimeError("Die Stimme konnte nicht sicher gespeichert werden.") from None
+    if outcome["error"]:
+        messages = {
+            "missing": "Diese Umfrage wurde nicht gefunden. Bitte aktualisiere die Seite.",
+            "closed": "Diese Umfrage ist inzwischen geschlossen.",
+            "option": "Bitte wähle eine der aktuell verfügbaren Antworten aus.",
+            "unavailable": "Die Umfrage ist gerade nicht verfügbar.",
+        }
+        raise ValueError(messages.get(outcome["error"], messages["unavailable"]))
+    return outcome["index"]
+
+
+def _close_owned_poll(poll_id, tid):
+    """Close a poll only if the current account still owns it."""
+    poll_id, tid = str(poll_id or ""), str(tid or "")
+    if not POLL_ID_RE.fullmatch(poll_id) or not is_valid_twitch_id(tid):
+        return False
+    ref = db.reference(f"community_polls/{poll_id}")
+    outcome = {"ok": False}
+    now_ms = int(time.time() * 1000)
+
+    def close(current):
+        outcome["ok"] = False
+        if not isinstance(current, dict) or str(current.get("created_by") or "") != tid:
+            return current
+        updated = dict(current)
+        updated["closed"] = True
+        updated.setdefault("closed_at", now_ms)
+        outcome["ok"] = True
+        return updated
+
+    try:
+        ref.transaction(close)
+    except Exception:
+        return False
+    return bool(outcome["ok"])
 
 
 def render_feedback_hub(tid, username):
@@ -318,6 +386,8 @@ def render_feedback_hub(tid, username):
                             use_container_width=True,
                         ):
                             try:
+                                if not is_valid_twitch_id(tid):
+                                    raise ValueError("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
                                 vote_ref = db.reference(f"feedback_inbox/{item['id']}/votes/{tid}")
                                 if has_voted:
                                     vote_ref.delete()
@@ -406,7 +476,8 @@ def render_feedback_hub(tid, username):
                 if str(poll.get("created_by") or "") == str(tid) and not closed:
                     if st.button("Umfrage schließen", key=f"sd_feedback_poll_close_{poll['id']}"):
                         try:
-                            db.reference(f"community_polls/{poll['id']}").update({"closed": True, "closed_at": SERVER_TS})
+                            if not _close_owned_poll(poll["id"], tid):
+                                st.error("Du kannst diese Umfrage nicht schließen oder sie existiert nicht mehr.")
                             st.rerun()
                         except Exception:
                             st.error("Die Umfrage konnte nicht geschlossen werden.")
