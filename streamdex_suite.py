@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session, is_valid_twitch_id
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -28,7 +29,9 @@ TOOLS = [
 
 
 def _uid(value):
-    return "".join(ch for ch in str(value or "") if ch.isalnum() or ch in "_-")
+    if not is_valid_twitch_id(value):
+        raise ValueError("Ungültige Twitch-ID.")
+    return str(value)
 
 
 def _int(value, default=0):
@@ -474,5 +477,8 @@ def _modteam(tid, username):
 
 def render_streamdex_suite(tid, username, tool="ideas"):
     """Rendert ein StreamDex-Werkzeug nach erfolgreichem Twitch-Login."""
+    if not has_active_user_session(st.session_state, tid):
+        st.error("Für dieses Werkzeug ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     handlers = {"ideas": _ideas, "bracket": _bracket, "wheel": _wheel, "wishlist": _wishlist, "quiz": _quiz, "clips": _clips, "goals": _goals, "modlog": _modlog, "modteam": _modteam}
     handlers.get(str(tool or "ideas"), _ideas)(str(tid), str(username))
