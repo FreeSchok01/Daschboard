@@ -423,7 +423,7 @@ def _verify_and_consume_token(token: str):
     try:
         ref.transaction(_take)
     except Exception as e:
-        return _fail(f"Transaktion fehlgeschlagen: {type(e).__name__}: {e}")
+        return _fail(f"Firebase-Transaktion fehlgeschlagen: {type(e).__name__}")
     try:
         ref.delete()   # Markierung entfernen (Token ist ohnehin schon unbrauchbar)
     except Exception:
@@ -431,20 +431,19 @@ def _verify_and_consume_token(token: str):
 
     data = consumed.get("data")
     if not isinstance(data, dict):
-        return _fail(f"Kein Eintrag gefunden (data={data!r}). Token schon eingelöst, "
-                     "oder das Dashboard liest in einer anderen Datenbank.")
+        return _fail("Token-Eintrag fehlt oder wurde bereits eingelöst.")
 
     try:
         created_at = int(data.get("ts") or 0)
     except (TypeError, ValueError):
-        return _fail(f"ts ungültig: {data!r}")
+        return _fail("Token-Zeitstempel ungültig.")
     age_ms = int(time.time() * 1000) - created_at
-    if not created_at or age_ms > TOKEN_MAX_AGE_MS:
-        return _fail(f"Abgelaufen: Alter {age_ms / 1000:.0f} s (erlaubt {TOKEN_MAX_AGE_MS // 1000} s), ts={created_at}")
+    if not created_at or age_ms < -60_000 or age_ms > TOKEN_MAX_AGE_MS:
+        return _fail("Token abgelaufen oder Zeitstempel ungültig.")
 
     tid = str(data.get("tid") or "")
-    if not TID_RE.match(tid):
-        return _fail(f"tid ungültig: {tid!r}")
+    if not TID_RE.fullmatch(tid):
+        return _fail("Token enthält keine gültige Twitch-ID.")
     return tid
 
 
@@ -1680,10 +1679,14 @@ def render_streamer_dashboard(games):
     if token_arg:
         valid_tid = _verify_and_consume_token(token_arg)
         if valid_tid:
+            for key in (
+                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+                "twitch_oauth_expires_at", "twitch_oauth_scopes", "twitch_profile", "acct_data",
+            ):
+                st.session_state.pop(key, None)
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
             st.session_state["auth_method"] = "desktop"
-            st.session_state.pop("twitch_profile", None)
             st.session_state.pop("dashboard_reauth_required", None)
             # Token aus URL entfernen für saubere Adresse
             st.query_params.clear()
@@ -1697,7 +1700,11 @@ def render_streamer_dashboard(games):
     if authed_tid:
         started = st.session_state.setdefault("authenticated_at", time.time())
         if time.time() - started > SESSION_MAX_AGE_S:
-            for k in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
+            for k in (
+                "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data",
+                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+                "twitch_oauth_expires_at", "twitch_oauth_scopes",
+            ):
                 st.session_state.pop(k, None)
             st.session_state["session_expired"] = True
             st.session_state["dashboard_reauth_required"] = True
