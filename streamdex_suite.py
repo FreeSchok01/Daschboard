@@ -2,6 +2,7 @@
 import csv
 import html
 import io
+import re
 import secrets
 from datetime import date, datetime
 from urllib.parse import urlparse
