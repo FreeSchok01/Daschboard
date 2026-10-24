@@ -14,6 +14,7 @@ import pytest
 import feedback_hub
 import onboarding
 import streamer_dashboard
+import shop
 
 
 class MemoryDatabase:
@@ -395,6 +396,43 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert steps[2]["route"] == "planner"
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
 
+
+def test_shop_module_downloads_require_paid_order_and_matching_twitch_account(monkeypatch, memory_db):
+    items = {
+        "slot": {"kind": "game", "name": "Slot Machine", "games": ["slot"], "download_url": "https://downloads.example/slot.zip"},
+        "arena": {"kind": "game", "name": "Arena", "games": ["arena"], "download_url": "javascript:alert(1)"},
+        "pack_casino": {"kind": "pack", "name": "Casino-Pack", "games": ["slot", "hilo"], "download_url": ""},
+        "hilo": {"kind": "game", "name": "Hi-Lo", "games": ["hilo"], "download_url": ""},
+    }
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345", "status": "paid", "games": ["slot", "arena", "hilo"],
+    })
+    memory_db.reference("shop/orders/SDX-DEF234").set({
+        "tid": "12345", "status": "pending", "games": ["slot"],
+    })
+
+    order, links = shop._order_downloads(
+        "SDX-ABC234", "12345", items
+    )
+    assert order["status"] == "paid"
+    assert links == [{
+        "game": "slot",
+        "name": "Slot Machine",
+        "url": "https://downloads.example/slot.zip",
+    }]
+    assert streamer_dashboard._order_downloads("SDX-ABC234", "99999", items) == (None, [])
+    assert streamer_dashboard._order_downloads("SDX-DEF234", "12345", items) == (None, [])
+    assert streamer_dashboard._order_downloads("../../", "12345", items) == (None, [])
+
+
+def test_shop_rejects_non_https_download_urls_and_default_catalog_has_download_fields():
+    assert shop._safe_download_url("https://example.test/game.zip") == "https://example.test/game.zip"
+    assert shop._safe_download_url("javascript:alert(1)") == ""
+    assert shop._safe_download_url("http://example.test/game.zip") == ""
+    assert shop._safe_download_url("https://user:secret@example.test/game.zip") == ""
+    defaults = shop.default_items({"slot": "Slot Machine", "fishing": "Fishing"})
+    assert defaults["slot"]["download_url"] == ""
+    assert defaults["fishing"]["download_url"] == ""
 
 def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
     rendered = []
