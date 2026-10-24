@@ -540,74 +540,145 @@ def admin_shop_panel(games):
     st.caption("Welche Games standardmäßig für ALLE frei sind, stellst du im Tab „🎮 Game-Freigaben“ unter „Global“ ein.")
 
     st.subheader("💶 Preise & Sichtbarkeit")
-    st.caption("Preise, Aktiv-Status und Download-Links direkt in der Tabelle bearbeiten. Download-Links gelten für Einzel-Games und werden Kunden erst nach erfolgreicher Zahlung angezeigt.")
+    game_items = [(k, v) for k, v in items.items() if v.get("kind", "game") == "game"]
+    pack_items = [(k, v) for k, v in items.items() if v.get("kind") == "pack"]
+    active_count = sum(1 for _, item in items.items() if item.get("active", True))
+    links_count = sum(1 for _, item in game_items if _safe_download_url(item.get("download_url")))
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Artikel gesamt", len(items))
+    m2.metric("Im Shop aktiv", active_count)
+    m3.metric("Download-Links", f"{links_count}/{len(game_items)}")
+    st.caption("Jedes Game hat eine eigene Karte. Preis, Sichtbarkeit und Download-Link bearbeitest du direkt dort und speicherst nur diesen Artikel.")
+    st.markdown("""
+    <style>
+    .st-key-shop_admin_card_slot [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_megaslot [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_steal [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_raffel [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_gambel [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_hilo [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_raffle [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_fishing [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_mining [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_farming [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_race [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_arena [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_pack_casino [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_pack_abenteuer [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_pack_action [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-shop_admin_card_pack_komplett [data-testid="stVerticalBlockBorderWrapper"] {
+      border: 1px solid rgba(139,92,246,.28) !important;
+      border-radius: 16px !important;
+      box-shadow: 0 8px 24px rgba(3,7,18,.18), inset 0 1px 0 rgba(255,255,255,.025);
+    }
+    .shop-admin-pill { display:inline-block; border-radius:999px; padding:3px 9px; font-size:.72rem;
+      font-weight:800; letter-spacing:.02em; background:rgba(139,92,246,.14); border:1px solid rgba(167,139,250,.25); color:#c4b5fd; }
+    .shop-admin-ready { color:#86efac; background:rgba(34,197,94,.10); border-color:rgba(34,197,94,.24); }
+    .shop-admin-missing { color:#fbbf24; background:rgba(245,158,11,.10); border-color:rgba(245,158,11,.24); }
+    </style>
+    """, unsafe_allow_html=True)
     if not items:
         st.info("Noch kein Katalog. Er wird beim ersten Shop-Aufruf angelegt oder unten über „Standard-Katalog“.")
     else:
-        df = pd.DataFrame([
-            {
-                "ID": k,
-                "Name": v["name"],
-                "Typ": v.get("kind", "game"),
-                "Preis €": float(v["price"]),
-                "Aktiv": bool(v.get("active", True)),
-                "Download-Link (HTTPS)": str(v.get("download_url") or ""),
-            }
-            for k, v in items.items()
-        ])
-        ed = st.data_editor(
-            df,
-            hide_index=True,
-            use_container_width=True,
-            key="price_editor",
-            disabled=["ID", "Name", "Typ"],
-            column_config={
-                "Preis €": st.column_config.NumberColumn(min_value=0.5, max_value=500.0, step=0.5, format="%.2f"),
-                "Aktiv": st.column_config.CheckboxColumn(help="Nur aktive Artikel erscheinen im öffentlichen Shop."),
-                "Download-Link (HTTPS)": st.column_config.TextColumn(
-                    help="Direkter Link zur ZIP-/EXE-Datei des Einzel-Games. Leer lassen, wenn noch kein Download bereitsteht.",
-                    width="large",
-                ),
-            },
+        filter_col, search_col = st.columns([1, 2], vertical_alignment="bottom")
+        item_filter = filter_col.selectbox(
+            "Produkttyp",
+            ["Alle Artikel", "🎮 Einzel-Games", "🎁 Packs"],
+            key="shop_admin_item_filter",
         )
-        if st.button("💾 Änderungen speichern", type="primary"):
-            updates = []
-            validation_error = ""
-            for _, r in ed.iterrows():
-                item_id = str(r["ID"])
-                original = items[item_id]
-                try:
-                    new_price = float(r["Preis €"])
-                except (TypeError, ValueError):
-                    validation_error = f"Ungültiger Preis für {original.get('name', item_id)}."
-                    break
-                if not 0.5 <= new_price <= 500:
-                    validation_error = f"Der Preis für {original.get('name', item_id)} muss zwischen 0,50 € und 500 € liegen."
-                    break
-                new_active = bool(r["Aktiv"])
-                raw_link = r.get("Download-Link (HTTPS)", "")
-                new_link = "" if pd.isna(raw_link) else str(raw_link).strip()
-                if original.get("kind", "game") == "pack" and new_link:
-                    validation_error = f"„{original.get('name', item_id)}“ ist ein Pack. Download-Links bitte bei den einzelnen Games eintragen."
-                    break
-                if new_link and not _safe_download_url(new_link):
-                    validation_error = f"Der Download-Link für „{original.get('name', item_id)}“ muss eine gültige HTTPS-Adresse sein."
-                    break
-                old_link = _safe_download_url(original.get("download_url"))
-                if (new_price != float(original["price"])
-                        or new_active != bool(original.get("active", True))
-                        or new_link != old_link):
-                    patch = {"price": new_price, "active": new_active}
-                    if original.get("kind", "game") == "game":
-                        patch["download_url"] = new_link
-                    updates.append((item_id, patch))
-            if validation_error:
-                st.error(validation_error)
-            else:
-                for item_id, patch in updates:
-                    db.reference(f"shop/items/{item_id}").update(patch)
-                st.success(f"{len(updates)} Artikel aktualisiert.")
-                st.rerun()
+        search = search_col.text_input(
+            "Artikel suchen",
+            placeholder="Name oder Artikel-ID eingeben …",
+            key="shop_admin_item_search",
+        ).strip().lower()
+        if item_filter == "🎮 Einzel-Games":
+            visible_items = game_items
+        elif item_filter == "🎁 Packs":
+            visible_items = pack_items
+        else:
+            visible_items = list(items.items())
+        if search:
+            visible_items = [
+                (item_id, item) for item_id, item in visible_items
+                if search in item_id.lower()
+                or search in str(item.get("name", "")).lower()
+                or search in str(item.get("desc", "")).lower()
+            ]
+        if not visible_items:
+            st.info("Keine Artikel passen zu deiner Suche.")
+        else:
+            for row_start in range(0, len(visible_items), 2):
+                cols = st.columns(2, gap="medium")
+                for col, (item_id, item) in zip(cols, visible_items[row_start:row_start + 2]):
+                    with col:
+                        with st.container(border=True, key=f"shop_admin_card_{item_id}"):
+                            label = str(item.get("name", item_id))
+                            kind = item.get("kind", "game")
+                            kind_label = "🎁 PACK" if kind == "pack" else "🎮 EINZEL-GAME"
+                            link_ready = bool(_safe_download_url(item.get("download_url")))
+                            state_label = (
+                                "Link hinterlegt" if link_ready else "Download-Link fehlt"
+                            ) if kind == "game" else "Downloads der enthaltenen Games"
+                            state_class = "shop-admin-ready" if link_ready else "shop-admin-missing"
+                            if kind == "pack":
+                                state_class = "shop-admin-pill"
+                            st.markdown(
+                                f"<div style='display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap'>"
+                                f"<span class='shop-admin-pill'>{html.escape(kind_label)}</span>"
+                                f"<span class='shop-admin-pill {state_class}'>{html.escape(state_label)}</span></div>"
+                                f"<h3 style='margin:.65rem 0 .15rem;font-size:1.05rem'>{html.escape(label)}</h3>",
+                                unsafe_allow_html=True,
+                            )
+                            description = str(item.get("desc") or "").strip()
+                            if description:
+                                st.caption(description)
+                            with st.form(f"shop_admin_edit_{item_id}"):
+                                price_col, active_col = st.columns([1, 1])
+                                price = price_col.number_input(
+                                    "Preis (€)",
+                                    min_value=0.5,
+                                    max_value=500.0,
+                                    step=0.5,
+                                    value=float(item.get("price", 4.99)),
+                                    format="%.2f",
+                                    key=f"shop_admin_price_{item_id}",
+                                )
+                                active = active_col.toggle(
+                                    "Im Shop sichtbar",
+                                    value=bool(item.get("active", True)),
+                                    key=f"shop_admin_active_{item_id}",
+                                )
+                                if kind == "game":
+                                    download_url = st.text_input(
+                                        "Download-Link (HTTPS)",
+                                        value=str(item.get("download_url") or ""),
+                                        placeholder="https://…/game.zip",
+                                        help="Direkter Link zur ZIP- oder EXE-Datei. Käufer sehen ihn nach erfolgreicher Zahlung.",
+                                        key=f"shop_admin_download_{item_id}",
+                                    ).strip()
+                                else:
+                                    download_url = ""
+                                    st.caption("Ein Pack verwendet die Download-Links seiner einzelnen Games.")
+                                saved = st.form_submit_button(
+                                    "Änderungen speichern",
+                                    type="primary",
+                                    use_container_width=True,
+                                )
+                            if saved:
+                                if not 0.5 <= float(price) <= 500:
+                                    st.error("Der Preis muss zwischen 0,50 € und 500 € liegen.")
+                                elif kind == "game" and download_url and not _safe_download_url(download_url):
+                                    st.error("Bitte einen gültigen HTTPS-Link ohne Zugangsdaten eintragen.")
+                                else:
+                                    patch = {
+                                        "price": float(price),
+                                        "active": bool(active),
+                                    }
+                                    if kind == "game":
+                                        patch["download_url"] = _safe_download_url(download_url)
+                                    db.reference(f"shop/items/{item_id}").update(patch)
+                                    st.toast(f"{label} gespeichert.", icon="✅")
+                                    st.rerun()
     with st.expander("🧰 Artikel bearbeiten / neu anlegen / Standard-Katalog"):
         pick = st.selectbox("Artikel", ["➕ Neu"] + list(items), key="shop_pick")
         cur = items.get(pick, {})
