@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import creator_profile
 import events
 import feedback_hub
 import onboarding
@@ -160,6 +161,7 @@ def memory_db(monkeypatch):
     database = MemoryDatabase()
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
+    monkeypatch.setattr(creator_profile, "db", database)
     monkeypatch.setattr(events, "db", database)
     monkeypatch.setattr(streamdex_suite, "db", database)
     return database
@@ -395,6 +397,17 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
 
 
+
+
+
+def test_public_creator_slug_is_reserved_for_one_account(memory_db):
+    assert creator_profile._claim_slug_reservation("creator-name", "12345")
+    assert not creator_profile._claim_slug_reservation("creator-name", "99999")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() == "12345"
+    assert not creator_profile._release_slug_reservation("creator-name", "99999")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() == "12345"
+    assert creator_profile._release_slug_reservation("creator-name", "12345")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() is None
 
 
 def test_quiz_room_code_reservation_never_overwrites_existing_rooms(monkeypatch, memory_db):
