@@ -359,7 +359,7 @@ def render_feedback_hub(tid, username):
                     st.caption(f"{'🐞 Bug' if kind == 'Bug' else ('💡 Idee' if kind == 'Feature-Wunsch' else '💬 Feedback')} · {visibility} · Eingereicht: {_fmt_ts(item.get('ts'))}")
                     st.markdown(f"**Aktueller Status: {status_label}**")
                     st.caption(status_help)
-                    if status in progress:
+                    if status in progress and status != "abgelehnt":
                         st.progress(progress[status], text="Bearbeitungsstand")
                     if item.get("status_changed_at"):
                         st.caption(f"Status zuletzt aktualisiert: {_fmt_ts(item.get('status_changed_at'))}")
