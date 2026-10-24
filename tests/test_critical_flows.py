@@ -130,6 +130,13 @@ class MemoryReference:
     def delete(self):
         self.database._delete(self.path)
 
+    def transaction(self, update_fn):
+        """Emulate Firebase RTDB transactions for deterministic unit tests."""
+        current = self.database._get(self.path)
+        updated = update_fn(current)
+        self.database._set(self.path, updated)
+        return updated
+
     def push(self, value):
         self.database._counter += 1
         key = f"test_push_{self.database._counter}"
@@ -170,6 +177,7 @@ def test_twitch_oauth_state_is_signed_and_rejects_tampering():
 
 
 def test_twitch_authorization_url_requests_expected_scopes(monkeypatch):
+    monkeypatch.setattr(streamer_dashboard, "db", MemoryDatabase())
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "test-secret"))
     url, error = streamer_dashboard._twitch_authorization_url()
 
@@ -186,6 +194,12 @@ def test_twitch_authorization_url_requests_expected_scopes(monkeypatch):
 def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypatch, memory_db):
     fake_st = _fake_streamlit({"code": "temporary-code", "state": "valid-state"})
     monkeypatch.setattr(streamer_dashboard, "st", fake_st)
+    pending_now = int(time.time() * 1000)
+    memory_db.reference(f"streamdex_oauth_states/{streamer_dashboard.oauth_state_key('valid-state')}").set({
+        "issued_at_ms": pending_now,
+        "expires_at_ms": pending_now + 600_000,
+        "consumed": False,
+    })
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
     monkeypatch.setattr(streamer_dashboard, "_valid_twitch_state", lambda state, secret: state == "valid-state")
 
