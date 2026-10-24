@@ -55,10 +55,10 @@ def _participant_list(event):
 
 
 def render_event_manager(owner_tid, twitch_username):
-    st.subheader("🎉 StreamDex Events")
     if not has_active_user_session(st.session_state, owner_tid):
         st.error("Für die Eventverwaltung ist eine gültige Sitzung des Kontoinhabers erforderlich.")
         return
+    st.subheader("🎉 StreamDex Events")
     st.caption("Erstelle Community-Events und teile den öffentlichen Anmeldelink. Die Anmeldung wird in Firebase gespeichert.")
     with st.expander("➕ Neues Event erstellen", expanded=not bool(_load_events(owner_tid))):
         with st.form("sdx_event_create", clear_on_submit=True):
