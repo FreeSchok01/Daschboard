@@ -129,6 +129,12 @@ def _register_event_participant(event_id, name, platform, registrant_tid=""):
             return current
         participants = current.get("participants")
         participants = dict(participants) if isinstance(participants, dict) else {}
+        if registrant_tid and any(
+            isinstance(value, dict) and str(value.get("registrant_tid") or "") == registrant_tid
+            for value in participants.values()
+        ):
+            outcome["error"] = "already_registered"
+            return current
         capacity = max(0, min(10000, int(current.get("capacity") or 0)))
         if any(
             isinstance(value, dict)
@@ -158,6 +164,7 @@ def _register_event_participant(event_id, name, platform, registrant_tid=""):
             "not_found": "Dieses Event wurde nicht gefunden.",
             "closed": "Die Anmeldung ist geschlossen.",
             "duplicate": "Dieser Anzeigename ist für dieses Event bereits angemeldet.",
+            "already_registered": "Mit deinem angemeldeten StreamDex-Konto bist du für dieses Event bereits eingetragen.",
             "full": "Dieses Event ist bereits voll.",
             "write_failed": "Die Anmeldung konnte nicht gespeichert werden.",
         }
