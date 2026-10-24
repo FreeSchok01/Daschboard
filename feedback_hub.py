@@ -339,15 +339,30 @@ def render_feedback_hub(tid, username):
         if not my_items and not my_polls:
             st.info("Du hast bisher noch kein Feedback und keine Umfrage eingereicht.")
         if my_items:
-            st.markdown("**Feedback und Vorschläge**")
+            st.markdown("**Deine Bugs, Rückmeldungen und Ideen**")
+            st.caption("Hier siehst du den aktuellen Bearbeitungsstand. Wenn das Team den Status ändert, wird er beim nächsten Laden aktualisiert.")
+            status_labels = {
+                "neu": ("🆕 Eingegangen", "Dein Beitrag ist angekommen und wartet auf Prüfung."),
+                "in Arbeit": ("🛠️ In Bearbeitung", "Das Team prüft den Eintrag oder arbeitet an einer Lösung."),
+                "erledigt": ("✅ Erledigt", "Der Eintrag wurde bearbeitet oder umgesetzt."),
+                "abgelehnt": ("🚫 Nicht geplant", "Der Eintrag wird aktuell nicht weiterverfolgt."),
+            }
+            progress = {"neu": 15, "in Arbeit": 55, "erledigt": 100, "abgelehnt": 100}
             for item in my_items[:25]:
                 title_text = str(item.get("title") or str(item.get("text") or "Feedback").splitlines()[0])[:MAX_TITLE]
                 status = str(item.get("status") or "neu")
-                status_label = {"neu": "🆕 Neu", "in Arbeit": "🛠️ In Arbeit", "erledigt": "✅ Erledigt", "abgelehnt": "🚫 Abgelehnt"}.get(status, status)
-                visibility = "Öffentlich" if item.get("community_visible") else "Nur Team"
+                status_label, status_help = status_labels.get(status, (status, "Der aktuelle Status dieses Eintrags."))
+                visibility = "Community-Vorschlag" if item.get("community_visible") else "Privat · nur Team"
+                kind = str(item.get("kind") or "Feedback")
                 with st.container(border=True):
-                    st.markdown(f"**{html.escape(title_text)}**")
-                    st.caption(f"{visibility} · {status_label} · {_fmt_ts(item.get('ts'))}")
+                    st.markdown(f"#### {html.escape(title_text)}")
+                    st.caption(f"{'🐞 Bug' if kind == 'Bug' else ('💡 Idee' if kind == 'Feature-Wunsch' else '💬 Feedback')} · {visibility} · Eingereicht: {_fmt_ts(item.get('ts'))}")
+                    st.markdown(f"**Aktueller Status: {status_label}**")
+                    st.caption(status_help)
+                    if status in progress:
+                        st.progress(progress[status], text="Bearbeitungsstand")
+                    if item.get("status_changed_at"):
+                        st.caption(f"Status zuletzt aktualisiert: {_fmt_ts(item.get('status_changed_at'))}")
         if my_polls:
             st.markdown("**Deine Umfragen**")
             for poll in [p for p in polls if str(p.get("created_by") or "") == str(tid)]:
