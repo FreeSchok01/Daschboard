@@ -1748,14 +1748,16 @@ def render_streamer_dashboard(games):
 
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
-    if authed_tid:
-        started = st.session_state.setdefault("authenticated_at", time.time())
-        if time.time() - started > SESSION_MAX_AGE_S:
-            for k in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
-                st.session_state.pop(k, None)
-            st.session_state["session_expired"] = True
-            st.session_state["dashboard_reauth_required"] = True
-            authed_tid = None
+    if authed_tid and not has_active_user_session(st.session_state, authed_tid):
+        for key in (
+            "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data",
+            "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+            "twitch_oauth_expires_at", "twitch_oauth_scopes",
+        ):
+            st.session_state.pop(key, None)
+        st.session_state["session_expired"] = True
+        st.session_state["dashboard_reauth_required"] = True
+        authed_tid = None
 
     if authed_tid:
         hero.markdown(
