@@ -411,6 +411,61 @@ def render_user_admin():
                 st.dataframe(pd.DataFrame(visit_rows), hide_index=True, use_container_width=True)
             else:
                 st.info("Direkte Tool-Aufrufe werden ab jetzt erfasst. Für frühere Besuche gibt es keine verlässliche Verlaufshistorie.")
+
+            # Build a compact timeline from per-user records only; do not scan community roots.
+            activity_rows = []
+            for key, label in TOOLS:
+                entry = _dict(detail["tool_usage"].get(key))
+                ts = _number(entry.get("last_used_ms"))
+                if ts:
+                    activity_rows.append({
+                        "_ts": ts, "Zeit": _fmt_ts(ts), "Ereignis": f"{label} geöffnet",
+                        "Quelle": "Tool-Nutzung",
+                    })
+            for source_name, source_data in (
+                ("Stats-Verlauf", detail.get("stats_history", {})),
+                ("Giveaway-Verlauf", detail.get("giveaway_log", {})),
+            ):
+                values = list(source_data.values()) if isinstance(source_data, dict) else (
+                    source_data if isinstance(source_data, list) else []
+                )
+                for item in values:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_ts = next((item.get(k) for k in (
+                        "ts", "timestamp", "created_at", "createdAt", "time", "updated_at", "at"
+                    ) if item.get(k)), 0)
+                    ts = _number(raw_ts)
+                    if not ts:
+                        continue
+                    event = next((item.get(k) for k in (
+                        "action", "event", "type", "name", "title", "status"
+                    ) if item.get(k)), source_name)
+                    activity_rows.append({
+                        "_ts": ts, "Zeit": _fmt_ts(ts),
+                        "Ereignis": str(event)[:140], "Quelle": source_name,
+                    })
+            last_seen = _number(detail["presence"].get("last_seen"))
+            if last_seen:
+                activity_rows.append({
+                    "_ts": last_seen, "Zeit": _fmt_ts(last_seen),
+                    "Ereignis": "Letzte bekannte Aktivität", "Quelle": "Presence",
+                })
+            last_login = _number(detail["web_auth"].get("last_login_ms"))
+            if last_login:
+                activity_rows.append({
+                    "_ts": last_login, "Zeit": _fmt_ts(last_login),
+                    "Ereignis": "Website-Login", "Quelle": "Web-Auth",
+                })
+            activity_rows.sort(key=lambda row: row["_ts"], reverse=True)
+            st.markdown("### 🧭 Aktivitätsverlauf")
+            if activity_rows:
+                timeline = pd.DataFrame(activity_rows[:30]).drop(columns=["_ts"])
+                st.dataframe(timeline, hide_index=True, use_container_width=True)
+                st.caption(f"Die letzten {min(30, len(activity_rows))} Ereignisse aus vorhandenen, nutzerspezifischen Daten. Es werden keine fehlenden historischen Ereignisse erfunden.")
+            else:
+                st.info("Noch keine zeitgestempelten Aktivitätsereignisse für dieses Konto vorhanden.")
+
             report = {
                 "twitch_id": selected_tid, "name": selected.get("name"), "status": selected.get("status"),
                 "website_login": bool(selected.get("web_login")), "login_count": _number(detail["web_auth"].get("login_count")),
