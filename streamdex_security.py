@@ -5,6 +5,7 @@ must therefore validate the server-side Streamlit session before touching user d
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import re
 import time
@@ -108,3 +109,51 @@ def has_active_admin_session(
     current = time.time() if now is None else float(now)
     age = current - started
     return started > 0 and 0 <= age <= ADMIN_SESSION_MAX_AGE_SECONDS
+
+
+
+def create_signed_oauth_state(client_secret: str, nonce: str, now: float | None = None) -> str:
+    """Create a timestamped HMAC state value for the Twitch OAuth redirect."""
+    if not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
+        raise ValueError("Ungültiger OAuth-Nonce.")
+    timestamp = str(int(time.time() if now is None else now))
+    payload = f"{timestamp}.{nonce}"
+    signature = hmac.new(
+        str(client_secret).encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def validate_signed_oauth_state(
+    state: object,
+    client_secret: str,
+    max_age_seconds: int = 600,
+    now: float | None = None,
+) -> bool:
+    """Constant-time HMAC check plus strict nonce, age, and future-skew validation."""
+    if not isinstance(state, str) or not 1 <= int(max_age_seconds) <= 3600:
+        return False
+    pieces = state.split(".")
+    if len(pieces) != 3:
+        return False
+    timestamp_text, nonce, supplied_signature = pieces
+    if not re.fullmatch(r"[0-9]{1,12}", timestamp_text):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied_signature):
+        return False
+    timestamp = int(timestamp_text)
+    current = time.time() if now is None else float(now)
+    age = current - timestamp
+    if age < -60 or age > int(max_age_seconds):
+        return False
+    payload = f"{timestamp_text}.{nonce}"
+    expected = hmac.new(
+        str(client_secret).encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, supplied_signature)
