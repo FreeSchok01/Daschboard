@@ -921,9 +921,10 @@ def _delete_account_data(tid):
     try:
         profile = _safe_get(account_path("creator_profiles/{t}", tid)) or {}
         old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
-        if old_slug and str(_safe_get(f"creator_profile_slugs/{old_slug}") or "") == tid:
-            db.reference(f"creator_profile_slugs/{old_slug}").delete()
-            removed += 1
+        if old_slug and re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+            if str(_safe_get(f"creator_profile_slugs/{old_slug}") or "") == tid:
+                db.reference(f"creator_profile_slugs/{old_slug}").delete()
+                removed += 1
     except Exception as exc:
         errors.append(f"creator_profile_slugs: {type(exc).__name__}")
 
