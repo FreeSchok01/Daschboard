@@ -482,7 +482,7 @@ def render_shop(games):
             _order_box()
         else:
             _cart_box(tid, p.get("twitch_username"), items, have)
-    _render_order_downloads(tid, items)
+    _render_order_downloads(tid, load_items(active_only=False))
     with st.expander("Rechtliches"):
         s = st.secrets.get("shop", {})
         st.markdown(f"[Impressum]({s.get('impressum_url', '#')}) · [AGB]({s.get('agb_url', '#')}) · [Widerruf]({s.get('widerruf_url', '#')})")
