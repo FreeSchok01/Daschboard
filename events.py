@@ -335,6 +335,7 @@ def render_public_event(event_id):
     if not isinstance(event, dict):
         st.error("Dieses Event wurde nicht gefunden.")
         return
+    st.caption("Anzeigenamen und Plattform sind für Besucher dieser Event-Seite sichtbar. Bitte verwende keine privaten Kontaktdaten.")
     st.title(f"🎉 {event.get('title', 'StreamDex Event')}")
     st.caption(f"{event.get('event_type', 'Event')} · {event.get('game') or 'Community'} · {event.get('event_date') or 'Termin offen'}")
     st.write(event.get("description") or "Keine Beschreibung hinterlegt.")
