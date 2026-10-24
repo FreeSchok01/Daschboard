@@ -1099,7 +1099,7 @@ def render_shop(games):
         '<div class="sd-shop-hero">'
         '<div class="sd-shop-eyebrow"><span class="sd-shop-dot"></span> STREAMDEX OS · MODUL-STORE</div>'
         '<h1>Mach deinen Stream <span>interaktiver.</span></h1>'
-        '<p>Stelle dir deinen StreamDex zusammen: einzelne Chat-Games für deinen Kanal oder günstige Packs für das komplette Community-Erlebnis. Einmal auswählen, bequem per Tip bezahlen und direkt in der App nutzen.</p>'
+        '<p>Stelle dir deinen StreamDex zusammen: einzelne Chat-Games für deinen Kanal oder günstige Packs für das komplette Community-Erlebnis. Einmal auswählen, bequem und sicher bezahlen und direkt in der App nutzen.</p>'
         '<div class="sd-shop-hero-foot"><span>🎮 Einzelmodule</span><span>🎁 Bundle-Angebote</span><span>⚡ Freischaltung in ca. 1 Minute</span><span>🔐 Sichere Bestellprüfung</span></div>'
         '</div>',
         unsafe_allow_html=True,
