@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 
 TZ = ZoneInfo("Europe/Berlin")
 LABELS = {
@@ -185,6 +186,9 @@ def _timeline(tid):
 
 def render_legacy(tid, username=""):
     """Render the account-scoped history assembled from StreamDex's existing records."""
+    if not has_active_user_session(st.session_state, tid):
+        st.error("Für Legacy ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     st.markdown(
         "<div style='padding:24px;margin:0 0 18px;border:1px solid rgba(139,92,246,.3);border-radius:20px;"
         "background:linear-gradient(120deg,rgba(30,27,75,.96),rgba(8,47,73,.88));'>"
