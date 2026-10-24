@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_USERS_URL = "https://api.twitch.tv/helix/users"
@@ -689,6 +690,9 @@ def _render_creator_analytics(tid, username, reauth_url=None):
 
 def render_radar(tid, username, reauth_url=None):
     """Rendert den authentifizierten, kontobezogenen StreamDex Radar."""
+    if not has_active_user_session(st.session_state, tid):
+        st.error("Für StreamDex Radar ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
     st.markdown(
         """
         <div class="sd-radar-hero">
