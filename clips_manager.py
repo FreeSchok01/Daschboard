@@ -5,6 +5,7 @@ import urllib.parse
 
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import has_active_user_session
 
 from radar import _app_token, _credentials, _http_json
 
@@ -83,6 +84,9 @@ def _clip_card(clip, tid, imported_ids, key_prefix):
 
 def render_clips_manager(tid, username=""):
     st.markdown(
+    if not has_active_user_session(st.session_state, tid):
+        st.error("Für Clips ist eine gültige Sitzung des Kontoinhabers erforderlich.")
+        return
         "<div style='padding:24px;margin:0 0 18px;border:1px solid rgba(139,92,246,.3);border-radius:20px;"
         "background:linear-gradient(120deg,rgba(30,27,75,.96),rgba(8,47,73,.88));'>"
         "<div style='color:#c4b5fd;font-weight:800;font-size:.72rem;letter-spacing:.13em'>STREAMDEX OS / CLIP LIBRARY</div>"
