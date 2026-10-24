@@ -138,16 +138,9 @@ TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 SESSION_MAX_AGE_S = 2 * 60 * 60   # nach 2 Stunden ist ein neuer Login über die App nötig
 
 def has_active_streamer_login():
-    """True, wenn eine bestätigte Streamer-Sitzung existiert und das Zwei-Stunden-Limit nicht abgelaufen ist."""
+    """True only for a valid, owner-bound, non-expired Twitch or desktop session."""
     tid = str(st.session_state.get("authenticated_tid") or "")
-    if not TID_RE.fullmatch(tid):
-        return False
-    try:
-        started = float(st.session_state.get("authenticated_at") or 0)
-    except (TypeError, ValueError):
-        return False
-    age = time.time() - started
-    return started > 0 and 0 <= age <= SESSION_MAX_AGE_S
+    return has_active_user_session(st.session_state, tid)
 
 
 # Twitch OAuth wird direkt abgewickelt, weil Streamlit's st.login() bei dieser
@@ -348,11 +341,11 @@ def handle_twitch_oauth_callback():
         return _return_to_dashboard()
 
     except Exception as exc:
-        # Keine Secrets, Access-Tokens oder Response-Bodies ins UI schreiben.
-        detail = str(exc)
-        if not detail or any(k in detail.lower() for k in ("client_secret", "access_token", "refresh_token")):
-            detail = "Twitch konnte den Autorisierungscode nicht verifizieren."
-        return _return_to_dashboard(f"Twitch-Anmeldung fehlgeschlagen: {detail[:220]}")
+        # Never echo raw OAuth exceptions; they may contain provider response details.
+        print(f"[oauth] Twitch callback failed: {type(exc).__name__}")
+        return _return_to_dashboard(
+            "Twitch-Anmeldung fehlgeschlagen. Bitte starte die Anmeldung erneut und prüfe bei wiederholten Fehlern die Twitch-Konfiguration."
+        )
 
 
 def _render_twitch_login():
