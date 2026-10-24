@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
 
+from admin_users import render_user_admin
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
@@ -560,8 +561,8 @@ def main():
         )
         return
 
-    tab_support, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(
-        ["💬 Support", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"]
+    tab_support, tab_users, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(
+        ["💬 Support", "👤 User", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"]
     )
     with tab_support:
         try:
@@ -580,6 +581,11 @@ def main():
             except Exception:
                 rows_by_tid = {}
             chat_panel(rows_by_tid)
+    with tab_users:
+        try:
+            render_user_admin()
+        except Exception as e:
+            st.error(f"User-Übersicht konnte nicht geladen werden: {type(e).__name__}")
     with tab_stats:
         try:
             stats_panel(load_streamers(), GAMES)
