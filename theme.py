@@ -333,6 +333,7 @@ def render_os_navigation(current="dashboard"):
         ("community", "♧ Community", "/?community=1"),
         ("profile", "♙ Profil", "/?profile=1"),
         ("ideas", "🧩 Tools", "/?ideas=1"),
+        ("tour", "✦ Rundgang", "/?tour=1"),
     )
     links = []
     for key, label, url in items:
