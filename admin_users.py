@@ -126,10 +126,41 @@ def _tool_row(label, key, records, usage, note=""):
     visit = _dict(usage.get(key))
     return {
         "Werkzeug": label, "Gespeicherte Einträge": int(records or 0),
-        "Direkte Seitenaufrufe": _number(visit.get("visit_count")),
-        "Zuletzt direkt geöffnet": _fmt_ts(visit.get("last_used_ms")),
+        "Sitzungsöffnungen": _number(visit.get("visit_count")),
+        "Zuletzt genutzt": _fmt_ts(visit.get("last_used_ms")),
         "Datenspur": note or ("Daten vorhanden" if records else "Keine gespeicherten Einträge gefunden"),
     }
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_usage_overview():
+    """Aggregate anonymous-by-tool usage counts; never expose individual IDs in the overview."""
+    try:
+        root = _dict(db.reference("streamdex_tool_usage").get())
+    except Exception:
+        return None
+    totals = {key: {"users": 0, "sessions": 0, "last_used_ms": 0} for key, _ in TOOLS}
+    for per_user in root.values():
+        per_user = _dict(per_user)
+        for key, entry in per_user.items():
+            if key not in totals or not isinstance(entry, dict):
+                continue
+            visits = _number(entry.get("visit_count"))
+            last_used = _number(entry.get("last_used_ms"))
+            if visits or last_used:
+                totals[key]["users"] += 1
+                totals[key]["sessions"] += visits
+                totals[key]["last_used_ms"] = max(totals[key]["last_used_ms"], last_used)
+    rows = []
+    for key, label in TOOLS:
+        item = totals[key]
+        rows.append({
+            "Werkzeug": label,
+            "Nutzer mit Nutzung": item["users"],
+            "Sitzungsöffnungen": item["sessions"],
+            "Zuletzt genutzt": _fmt_ts(item["last_used_ms"]),
+        })
+    return sorted(rows, key=lambda row: (row["Nutzer mit Nutzung"], row["Sitzungsöffnungen"]), reverse=True)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -243,6 +274,7 @@ def render_user_admin():
     if st.button("🔄 User-Daten aktualisieren", key="admin_users_refresh"):
         _read_user_index.clear()
         _load_user_detail.clear()
+        _load_usage_overview.clear()
         st.rerun()
     try:
         users = _read_user_index()
@@ -260,6 +292,17 @@ def render_user_admin():
     c.metric("Aktuell online", len(online_users))
     d.metric("Website-Logins (30 Tage)", len(recent_logins))
     st.caption("Website-Login-Zähler werden ab Aktivierung dieser Funktion erfasst. Ältere Konten können bereits existieren, ohne dass frühere Web-Anmeldungen gezählt wurden.")
+
+    st.markdown("### 📈 Welche Werkzeuge werden genutzt?")
+    usage_overview = _load_usage_overview()
+    if usage_overview is None:
+        st.warning("Die aggregierten Nutzungsstatistiken konnten gerade nicht geladen werden.")
+    else:
+        usage_df = pd.DataFrame(usage_overview)
+        st.caption("Datensparsame Aggregation pro Werkzeug: Anzahl unterschiedlicher Konten mit erfasster Nutzung und Sitzungsöffnungen. Pro Werkzeug wird höchstens eine Öffnung je Login-Sitzung gezählt – das ist ausdrücklich keine vollständige Seitenaufruf- oder Besuchshistorie. Historische Daten vor Aktivierung der Erfassung fehlen; Konten ohne Twitch-Web-Login können unterrepräsentiert sein.")
+        st.dataframe(usage_df, hide_index=True, use_container_width=True)
+        if not usage_df.empty and usage_df["Nutzer mit Nutzung"].max() > 0:
+            st.bar_chart(usage_df.set_index("Werkzeug")[["Nutzer mit Nutzung"]])
 
     f1, f2, f3 = st.columns([2, 1.4, 1.2])
     query = f1.text_input("User suchen", placeholder="Twitch-Name oder Twitch-ID", key="admin_users_search").strip().casefold()
@@ -373,7 +416,7 @@ def render_user_admin():
                       "auf passende .indexOn-Einträge für author_tid, tid, created_by und owner_tid."
                 )
             st.markdown("### 🧰 Tool-Nutzung & gespeicherte Daten")
-            st.caption("Gespeicherte Einträge zeigen, ob ein Werkzeug genutzt wurde. Direkte Seitenaufrufe werden ab jetzt gezählt; normale Streamlit-Tabs melden keine zuverlässige Auswahl und werden daher nicht als Aufruf gewertet.")
+            st.caption("Gespeicherte Einträge zeigen vorhandene Daten. Sitzungsöffnungen zählen pro Werkzeug höchstens einmal je Login-Sitzung; sie sind keine vollständige Besuchshistorie. Normale Streamlit-Tabs melden keine zuverlässige Auswahl.")
             tools_df = pd.DataFrame(detail["tool_rows"])
             st.dataframe(tools_df, hide_index=True, use_container_width=True)
             st.download_button("⬇️ Tool-Übersicht als CSV", data=tools_df.to_csv(index=False).encode("utf-8-sig"),
@@ -406,11 +449,11 @@ def render_user_admin():
             for key, label in TOOLS:
                 entry = _dict(detail["tool_usage"].get(key))
                 if _number(entry.get("visit_count")) or entry.get("last_used_ms"):
-                    visit_rows.append({"Werkzeug": label, "Aufrufe": _number(entry.get("visit_count")), "Zuletzt geöffnet": _fmt_ts(entry.get("last_used_ms"))})
+                    visit_rows.append({"Werkzeug": label, "Sitzungsöffnungen": _number(entry.get("visit_count")), "Zuletzt genutzt": _fmt_ts(entry.get("last_used_ms"))})
             if visit_rows:
                 st.dataframe(pd.DataFrame(visit_rows), hide_index=True, use_container_width=True)
             else:
-                st.info("Direkte Tool-Aufrufe werden ab jetzt erfasst. Für frühere Besuche gibt es keine verlässliche Verlaufshistorie.")
+                st.info("Sitzungsöffnungen werden je Werkzeug höchstens einmal pro Login-Sitzung gezählt. Frühere Besuche sind nicht vollständig historisiert.")
 
             # Build a compact timeline from per-user records only; do not scan community roots.
             activity_rows = []
