@@ -252,7 +252,8 @@ def streamer_list(search, only_online, ns=""):
     try:
         rows = load_streamers(ns)
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
         return
     online_count = sum(1 for r in rows if r["online"])
     st.caption(f"🟢 {online_count} online · {len(rows)} registriert")
@@ -275,7 +276,8 @@ def chat_messages(tid, ns=""):
     try:
         msgs = load_messages(tid, ns)
     except Exception as e:
-        st.error(f"Chat konnte nicht geladen werden: {e}")
+        print(f"[streamdex] Support-Chat load failed: {type(e).__name__}")
+        st.error("Der Support-Chat konnte nicht geladen werden. Bitte versuche es später erneut.")
         return
     box = st.container(height=520, border=True)
     with box:
@@ -310,7 +312,8 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
         try:
             send_admin_message(tid, prompt, sender_name, ns)
         except Exception as e:
-            st.error(f"Senden fehlgeschlagen: {e}")
+            print(f"[streamdex] Support message send failed: {type(e).__name__}")
+            st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es später erneut.")
     with messages_area:
         chat_messages(tid, ns)
 
@@ -477,7 +480,8 @@ def support_main():
         try:
             partner_codes_view()
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+            st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_beta:
         try:
             t_apps, t_testers = st.tabs(["📝 Bewerbungen", "🧪 Beta-Tester"])
@@ -605,7 +609,8 @@ def main():
         try:
             vacation_panel(ADMIN_NAME)
         except Exception as e:
-            st.error(f"Urlaubsmodus nicht verfügbar: {e}")
+            print(f"[streamdex] Vacation mode unavailable: {type(e).__name__}")
+            st.error("Der Urlaubsmodus ist gerade nicht verfügbar.")
         left, right = st.columns([1, 2], gap="large")
         with left:
             st.subheader("Streamer")
