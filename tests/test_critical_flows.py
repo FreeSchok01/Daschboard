@@ -169,7 +169,7 @@ def test_twitch_oauth_state_is_signed_and_rejects_tampering():
     assert not streamer_dashboard._valid_twitch_state("bad-state", "test-secret")
 
 
-def test_twitch_authorization_url_requests_expected_scopes(monkeypatch):
+def test_twitch_authorization_url_requests_expected_scopes(monkeypatch, memory_db):
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "test-secret"))
     url, error = streamer_dashboard._twitch_authorization_url()
 
@@ -188,6 +188,14 @@ def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypat
     monkeypatch.setattr(streamer_dashboard, "st", fake_st)
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
     monkeypatch.setattr(streamer_dashboard, "_valid_twitch_state", lambda state, secret: state == "valid-state")
+    now_ms = int(time.time() * 1000)
+    memory_db.reference(
+        f"streamdex_oauth_states/{streamer_dashboard.oauth_state_key('valid-state')}"
+    ).set({
+        "issued_at_ms": now_ms,
+        "expires_at_ms": now_ms + 600_000,
+        "consumed": False,
+    })
 
     def fake_http(url, method="GET", form=None, headers=None):
         if url == streamer_dashboard.TWITCH_TOKEN_URL:
@@ -219,7 +227,11 @@ def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypat
     assert fake_st.session_state["twitch_oauth_access_token"] == "unit-test-access-token"
     assert fake_st.session_state["twitch_oauth_refresh_token"] == "unit-test-refresh-token"
     assert "channel:manage:schedule" in fake_st.session_state["twitch_oauth_scopes"]
-    assert memory_db.root == {}  # OAuth credentials must never be written to Firebase.
+    serialized_db = json.dumps(memory_db.root)
+    assert "unit-test-access-token" not in serialized_db
+    assert "unit-test-refresh-token" not in serialized_db
+    assert "temporary-code" not in serialized_db
+    assert "valid-state" not in serialized_db  # Only a digest is allowed while a state is pending.
 
 
 def test_twitch_oauth_callback_rejects_invalid_state_with_clear_notice(monkeypatch):
@@ -248,8 +260,11 @@ def test_data_access_is_account_scoped_and_reports_unavailable_areas(memory_db):
     data = streamer_dashboard._collect_account_data("12345", errors=errors)
     assert errors == []
     assert data["stats/12345"] == {"checkins": 7}
-    assert set(data["feedback_inbox (nur deine Einträge)"]) == {"fb-own"}
-    assert set(data["streamdex_events (eigene Events)"]) == {"event-own"}
+    shared = data["community_activity"]
+    assert set(shared["feedback"]["submitted"]) == {"fb-own"}
+    assert set(shared["events"]["created"]) == {"event-own"}
+    assert "fb-other" not in shared["feedback"]["submitted"]
+    assert "event-other" not in shared["events"]["created"]
 
     memory_db.fail_get.add("stats/12345")
     errors = []
