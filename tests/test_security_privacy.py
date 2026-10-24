@@ -97,7 +97,8 @@ def test_shared_export_includes_only_current_users_contributions():
     assert set(data["quizzes"]["created"]) == {"ABC123"}
     assert "answers" not in data["quizzes"]["created"]["ABC123"]
     assert set(data["quizzes"]["your_answers"]) == {"DEF456"}
-    assert "456" not in str(data["quizzes"]["your_answers"])
+    assert data["quizzes"]["your_answers"]["DEF456"]["answers"]["0"]["choice"] == 1
+    assert len(data["quizzes"]["your_answers"]["DEF456"]["answers"]) == 1
     assert set(data["events"]["created"]) == {"eventMine"}
     assert "Other" not in str(data["events"]["created"]["eventMine"])
     assert set(data["events"]["your_registrations"]) == {"eventPeer"}
