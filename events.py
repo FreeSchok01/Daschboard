@@ -126,6 +126,12 @@ def _register_event_participant(event_id, name, platform, registrant_tid=""):
             return current
         participants = current.get("participants")
         participants = dict(participants) if isinstance(participants, dict) else {}
+        if registrant_tid and any(
+            isinstance(value, dict) and str(value.get("registrant_tid") or "") == registrant_tid
+            for value in participants.values()
+        ):
+            outcome["error"] = "already_registered"
+            return current
         capacity = max(0, min(10000, int(current.get("capacity") or 0)))
         if any(
             isinstance(value, dict)
@@ -155,6 +161,7 @@ def _register_event_participant(event_id, name, platform, registrant_tid=""):
             "not_found": "Dieses Event wurde nicht gefunden.",
             "closed": "Die Anmeldung ist geschlossen.",
             "duplicate": "Dieser Anzeigename ist für dieses Event bereits angemeldet.",
+            "already_registered": "Mit deinem angemeldeten StreamDex-Konto bist du für dieses Event bereits eingetragen.",
             "full": "Dieses Event ist bereits voll.",
             "write_failed": "Die Anmeldung konnte nicht gespeichert werden.",
         }
@@ -292,6 +299,7 @@ def render_event_manager(owner_tid, twitch_username):
 
 def render_public_events():
     st.title("🎉 StreamDex Events")
+    st.caption("Anzeigenamen und Plattform sind für Besucher der Event-Seite sichtbar. Bitte verwende keine privaten Kontaktdaten.")
     st.caption("Community-Events entdecken und anmelden.")
     st.caption("Anmeldungen und Anzeigenamen sind für Besucher dieser Event-Seite sichtbar. Bitte nutze keine privaten Kontaktdaten als Anzeigenamen.")
     events = _load_events(include_closed=False)
@@ -332,6 +340,7 @@ def render_public_event(event_id):
     if not isinstance(event, dict):
         st.error("Dieses Event wurde nicht gefunden.")
         return
+    st.caption("Anzeigename und Plattform sind für Besucher dieser Event-Seite sichtbar. Bitte verwende keine privaten Kontaktdaten.")
     st.title(f"🎉 {event.get('title', 'StreamDex Event')}")
     st.caption(f"{event.get('event_type', 'Event')} · {event.get('game') or 'Community'} · {event.get('event_date') or 'Termin offen'}")
     st.write(event.get("description") or "Keine Beschreibung hinterlegt.")

@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import creator_profile
+import events
 import feedback_hub
 import onboarding
 import streamdex_suite
@@ -161,6 +162,7 @@ def memory_db(monkeypatch):
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
     monkeypatch.setattr(streamdex_suite, "db", database)
+    monkeypatch.setattr(events, "db", database)
     monkeypatch.setattr(shop, "db", database)
     monkeypatch.setattr(creator_profile, "db", database)
     return database
@@ -530,3 +532,28 @@ def test_quiz_answers_and_room_management_are_account_scoped(memory_db):
     assert memory_db.reference("streamdex_quiz_rooms/ABC123/status").get() == "closed"
     with pytest.raises(ValueError, match="geschlossen"):
         streamdex_suite._save_quiz_answer("ABC123", "88888", 0, "A")
+
+
+
+def test_event_registration_prevents_duplicate_authenticated_account(memory_db):
+    memory_db.reference("streamdex_events/event_123").set({
+        "owner_tid": "12345", "title": "Community", "status": "open", "capacity": 3, "participants": {},
+    })
+    events._register_event_participant("event_123", "FirstName", "Twitch", "11111")
+    with pytest.raises(ValueError, match="StreamDex-Konto"):
+        events._register_event_participant("event_123", "ChangedName", "Discord", "11111")
+    participants = memory_db.reference("streamdex_events/event_123/participants").get()
+    assert len(participants) == 1
+    assert next(iter(participants.values()))["registrant_tid"] == "11111"
+
+    events._register_event_participant("event_123", "SecondName", "Web", "22222")
+    assert len(memory_db.reference("streamdex_events/event_123/participants").get()) == 2
+
+
+def test_event_registration_still_supports_anonymous_visitors(memory_db):
+    memory_db.reference("streamdex_events/event_123").set({
+        "owner_tid": "12345", "title": "Community", "status": "open", "capacity": 0, "participants": {},
+    })
+    events._register_event_participant("event_123", "Guest A", "Web", "")
+    events._register_event_participant("event_123", "Guest B", "Web", "")
+    assert len(memory_db.reference("streamdex_events/event_123/participants").get()) == 2
