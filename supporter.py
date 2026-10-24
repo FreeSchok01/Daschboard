@@ -196,7 +196,7 @@ def _team_messages(me, only_important):
     try:
         msgs = _load_team()
     except Exception as e:
-        st.error(f"Team-Chat konnte nicht geladen werden: {e}")
+        st.error("Der Team-Chat konnte nicht geladen werden. Bitte versuche es erneut.")
         return
     important = [m for m in msgs if m.get("important")]
     if important:
@@ -219,7 +219,7 @@ def _team_messages(me, only_important):
                     try:
                         _toggle_important(m, me)
                     except Exception as e:
-                        st.error(f"Fehlgeschlagen: {e}")
+                        st.error("Die Aktion konnte nicht abgeschlossen werden. Bitte versuche es erneut.")
                     st.rerun(scope="fragment")
 
 
@@ -234,6 +234,6 @@ def team_chat_panel(me):
             try:
                 _send_team(me, text, imp)
             except Exception as e:
-                st.error(f"Senden fehlgeschlagen: {e}")
+                st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es erneut.")
     with area:
         _team_messages(me, only)
