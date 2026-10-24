@@ -10,7 +10,39 @@ from streamdex_security import (
     has_active_admin_session,
     has_active_user_session,
     is_valid_twitch_id,
+    create_signed_oauth_state,
+    validate_signed_oauth_state,
 )
+
+
+
+class OAuthStateTests(unittest.TestCase):
+    SECRET = "test-client-secret"
+    NONCE = "0123456789abcdef-xyz"
+
+    def test_signed_state_validates(self):
+        state = create_signed_oauth_state(self.SECRET, self.NONCE, now=1000)
+        self.assertTrue(validate_signed_oauth_state(state, self.SECRET, max_age_seconds=600, now=1001))
+
+    def test_tampered_state_and_wrong_secret_are_rejected(self):
+        state = create_signed_oauth_state(self.SECRET, self.NONCE, now=1000)
+        self.assertFalse(validate_signed_oauth_state(state + "0", self.SECRET, now=1001))
+        self.assertFalse(validate_signed_oauth_state(state, "different-secret", now=1001))
+
+    def test_expired_and_far_future_states_are_rejected(self):
+        expired = create_signed_oauth_state(self.SECRET, self.NONCE, now=1000)
+        future = create_signed_oauth_state(self.SECRET, self.NONCE, now=2000)
+        self.assertFalse(validate_signed_oauth_state(expired, self.SECRET, max_age_seconds=600, now=1601))
+        self.assertFalse(validate_signed_oauth_state(future, self.SECRET, max_age_seconds=600, now=1000))
+
+    def test_malformed_state_is_rejected(self):
+        for state in ("", None, "1.shortnonce.signature", "x.y.z", "1." + self.NONCE + ".ABC"):
+            with self.subTest(state=state):
+                self.assertFalse(validate_signed_oauth_state(state, self.SECRET, now=1001))
+
+    def test_generator_rejects_invalid_nonce(self):
+        with self.assertRaises(ValueError):
+            create_signed_oauth_state(self.SECRET, "short", now=1000)
 
 
 class TwitchIdTests(unittest.TestCase):
