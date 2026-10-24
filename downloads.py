@@ -113,11 +113,14 @@ def render_owned_game_downloads(tid):
         st.error("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
         return
 
-    # Re-read the authoritative Firebase ownership flags server-side on every rerun.
-    from shop import owned_games
-
+    # Strictly require a per-account unlock/ownership flag. Global free-game flags
+    # do not grant access to private R2 files.
     try:
-        unlocked = owned_games(str(tid))
+        own_flags = db.reference(f"game_flags/streamers/{tid}").get() or {}
+        unlocked = {
+            game_id for game_id, enabled in own_flags.items()
+            if isinstance(own_flags, dict) and enabled is True
+        } if isinstance(own_flags, dict) else set()
         items = db.reference("shop/items").get() or {}
     except Exception:
         st.warning("Deine Game-Freigaben sind gerade nicht erreichbar.")
