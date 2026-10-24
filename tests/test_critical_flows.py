@@ -373,3 +373,27 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert steps[1]["action"] == "Erste Idee anlegen"
     assert steps[2]["route"] == "planner"
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
+
+
+def test_twitch_login_uses_current_tab_instead_of_opening_a_new_tab(monkeypatch):
+    rendered = []
+    fake_st = SimpleNamespace(
+        markdown=lambda content, **kwargs: rendered.append((content, kwargs)),
+        error=lambda message: pytest.fail(f"Unexpected login error: {message}"),
+        info=lambda message: pytest.fail(f"Unexpected login hint: {message}"),
+    )
+    monkeypatch.setattr(streamer_dashboard, "st", fake_st)
+    monkeypatch.setattr(
+        streamer_dashboard,
+        "_twitch_authorization_url",
+        lambda: ("https://id.twitch.tv/oauth2/authorize?client_id=test&state=abc", None),
+    )
+
+    streamer_dashboard._render_twitch_login()
+
+    assert len(rendered) == 1
+    markup, options = rendered[0]
+    assert 'target="_top"' in markup
+    assert 'target="_blank"' not in markup
+    assert 'href="https://id.twitch.tv/oauth2/authorize?client_id=test&amp;state=abc"' in markup
+    assert options.get("unsafe_allow_html") is True
