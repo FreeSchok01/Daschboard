@@ -1009,7 +1009,7 @@ def _render_account_tab(tid, username, is_online):
             st.error("Die Kontolöschung war unvollständig. Diese Bereiche sind betroffen: "
                      + " ".join(errors) + " Bitte behebe die Firebase-Berechtigungen und starte den Löschvorgang erneut.")
         else:
-            st.session_state.pop("authenticated_tid", None)
+            _clear_authenticated_session()
             st.session_state.pop("acct_data", None)
             st.session_state["acct_deleted"] = removed
             st.rerun()
@@ -1679,6 +1679,7 @@ def render_streamer_dashboard(games):
     if token_arg:
         valid_tid = _verify_and_consume_token(token_arg)
         if valid_tid:
+            _clear_oauth_tokens()
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
             st.session_state["auth_method"] = "desktop"
@@ -1695,9 +1696,9 @@ def render_streamer_dashboard(games):
     authed_tid = st.session_state.get("authenticated_tid")
     if authed_tid:
         started = st.session_state.setdefault("authenticated_at", time.time())
-        if time.time() - started > SESSION_MAX_AGE_S:
-            for k in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
-                st.session_state.pop(k, None)
+        age = time.time() - float(started or 0)
+        if age < 0 or age > SESSION_MAX_AGE_S:
+            _clear_authenticated_session()
             st.session_state["session_expired"] = True
             st.session_state["dashboard_reauth_required"] = True
             authed_tid = None
@@ -1817,13 +1818,8 @@ def render_streamer_dashboard(games):
         details_col.caption("Mit Twitch angemeldet" if oidc_logged_in else "Mit StreamDex Desktop-App angemeldet")
 
         if logout_col.button("🚪 Abmelden", key="dash_logout", use_container_width=True):
-            for key in (
-                "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile",
-                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
-                "twitch_oauth_expires_at", "twitch_oauth_scopes",
-                "acct_data", "dashboard_reauth_required",
-            ):
-                st.session_state.pop(key, None)
+            _clear_authenticated_session()
+            st.session_state.pop("twitch_login_notice", None)
             st.query_params.clear()
             st.query_params["dashboard"] = "1"
             st.rerun()
