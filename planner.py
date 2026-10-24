@@ -462,7 +462,7 @@ def _render_twitch_schedule_integration(ref, owner_tid, streams, twitch_username
                     st.success("Dein Plan wurde bei Twitch eingetragen.")
                     st.rerun()
                 except Exception as exc:
-                    st.error(str(exc))
+                    st.error("Die Veröffentlichung bei Twitch ist fehlgeschlagen. Prüfe die Berechtigung und versuche es erneut.")
     granted_scopes = st.session_state.get("twitch_oauth_scopes", [])
     if reauth_url and "channel:manage:schedule" not in granted_scopes:
         st.caption("Für die Veröffentlichung braucht StreamDex die separate Twitch-Berechtigung „channel:manage:schedule“.")
