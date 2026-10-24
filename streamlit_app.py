@@ -15,6 +15,7 @@ import firebase_admin
 import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
+from streamdex_security import has_active_admin_session
 
 from admin_users import render_user_admin
 from beta_apply import admin_beta_applications, render_beta_apply
@@ -72,12 +73,7 @@ def require_login():
     """Password gate with a fixed maximum lifetime and per-session failed-login cooldown."""
     now = time.time()
     if st.session_state.get("auth_ok"):
-        try:
-            issued = float(st.session_state.get("admin_authenticated_at") or 0)
-        except (TypeError, ValueError, OverflowError):
-            issued = 0
-        age = now - issued
-        if issued > 0 and 0 <= age <= ADMIN_SESSION_MAX_AGE_SECONDS:
+        if has_active_admin_session(st.session_state, now=now):
             return
         st.session_state.pop("auth_ok", None)
         st.session_state.pop("admin_authenticated_at", None)
