@@ -258,16 +258,57 @@ def render_user_admin():
         "App-Version": u["version"], "Giveaways": u["giveaways"],
         "Teilnahmen": u["participants"], "Beta": "Ja" if u["beta"] else "Nein",
     } for u in visible])
-    st.markdown(f"### Konten ({len(visible)})")
+    st.markdown(f"### Konten als Karten ({len(visible)})")
     if view.empty:
         st.info("Keine Konten entsprechen den aktuellen Filtern.")
     else:
-        st.dataframe(view, hide_index=True, use_container_width=True)
         st.download_button("⬇️ Diese User-Liste als CSV", data=view.to_csv(index=False).encode("utf-8-sig"),
                            file_name="streamdex-user-liste.csv", mime="text/csv", key="admin_users_csv")
-        options = {f"{u['name']} · {u['tid']}": u["tid"] for u in visible}
-        selected_label = st.selectbox("User-Details öffnen", list(options), key="admin_user_detail_pick")
-        selected_tid = options[selected_label]
+        st.caption("Klicke bei einem Konto auf „Details anzeigen“, um die zugehörigen Nutzungsdaten, Statistiken und Tool-Einträge zu öffnen.")
+        st.markdown("""
+        <style>
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: rgba(139,92,246,.34);
+            border-radius: 15px;
+            background: linear-gradient(145deg, rgba(30,41,59,.45), rgba(49,29,87,.22));
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        card_columns = st.columns(3)
+        for index, user in enumerate(visible):
+            with card_columns[index % len(card_columns)]:
+                with st.container(border=True):
+                    st.markdown(f"#### 👤 {user['name']}")
+                    st.caption(f"Twitch-ID: {user['tid']}")
+                    status_col, login_col = st.columns(2)
+                    status_col.metric("Status", user["status"])
+                    login_col.metric("Web-Logins", user["login_count"] if user["web_login"] else "—")
+                    st.caption(f"Letzte Aktivität: {_fmt_age(user['last_seen_ms'])}")
+                    st.caption(f"Letzter Website-Login: {_fmt_ts(user['last_web_login_ms'])}")
+                    badges = []
+                    if user["beta"]:
+                        badges.append("🧪 Beta-Tester")
+                    if user["web_login"]:
+                        badges.append("🌐 Website-Login")
+                    if user["version"] != "—":
+                        badges.append(f"📦 Version {user['version']}")
+                    if badges:
+                        st.caption(" · ".join(badges))
+                    if st.button("📂 Details anzeigen", key=f"admin_user_card_{user['tid']}",
+                                 use_container_width=True,
+                                 type="primary" if st.session_state.get("admin_user_selected_tid") == user["tid"] else "secondary"):
+                        st.session_state["admin_user_selected_tid"] = user["tid"]
+                        st.rerun()
+
+        selected_tid = st.session_state.get("admin_user_selected_tid")
+        visible_ids = {u["tid"] for u in visible}
+        if selected_tid not in visible_ids:
+            selected_tid = None
+            st.session_state.pop("admin_user_selected_tid", None)
+        if selected_tid and st.button("✕ Detailansicht schließen", key="admin_user_close_detail"):
+            st.session_state.pop("admin_user_selected_tid", None)
+            st.rerun()
+        if selected_tid:
         with st.spinner("Tool-Daten werden zusammengeführt …"):
             detail = _load_user_detail(selected_tid)
         selected = next((u for u in visible if u["tid"] == selected_tid), {})
