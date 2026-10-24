@@ -15,6 +15,7 @@ import firebase_admin
 import pandas as pd
 import streamlit as st
 from firebase_admin import credentials, db
+from streamdex_security import has_active_admin_session
 
 from admin_users import render_user_admin
 from beta_apply import admin_beta_applications, render_beta_apply
@@ -63,24 +64,60 @@ OPT_OFF = "⛔ gesperrt"
 # ----------------------------------------------------------------------------
 # Zugang: Passwort-Schutz (Streamlit-Community-Cloud-Apps sind sonst per URL erreichbar)
 # ----------------------------------------------------------------------------
+ADMIN_SESSION_MAX_AGE_SECONDS = 4 * 60 * 60
+ADMIN_LOGIN_MAX_FAILURES = 5
+ADMIN_LOGIN_LOCK_SECONDS = 120
+
+
 def require_login():
+    """Password gate with a fixed maximum lifetime and per-session failed-login cooldown."""
+    now = time.time()
     if st.session_state.get("auth_ok"):
-        return
+        if has_active_admin_session(st.session_state, now=now):
+            return
+        st.session_state.pop("auth_ok", None)
+        st.session_state.pop("admin_authenticated_at", None)
+        st.session_state["admin_session_expired"] = True
+
     try:
-        expected = st.secrets["admin"]["password"]
+        expected = str(st.secrets["admin"]["password"])
     except Exception:
         st.error("`[admin] password` fehlt in den Secrets.")
         st.stop()
+
+    locked_until = 0
+    try:
+        locked_until = float(st.session_state.get("admin_locked_until") or 0)
+    except (TypeError, ValueError, OverflowError):
+        locked_until = 0
+
     apply_theme()
     st.markdown(header_html("ADMIN LOGIN", "LOCKED"), unsafe_allow_html=True)
+    if st.session_state.pop("admin_session_expired", False):
+        st.warning("Deine Admin-Sitzung ist aus Sicherheitsgründen abgelaufen. Bitte melde dich erneut an.")
+    if locked_until > now:
+        remaining = max(1, int(locked_until - now))
+        st.error(f"Zu viele fehlgeschlagene Anmeldeversuche. Bitte warte noch {remaining} Sekunden.")
+        st.stop()
+
     with st.form("login"):
         pw = st.text_input("Passwort", type="password")
         if st.form_submit_button("Anmelden"):
-            if hmac.compare_digest(pw.encode(), str(expected).encode()):
+            if hmac.compare_digest(pw.encode("utf-8"), expected.encode("utf-8")):
                 st.session_state["auth_ok"] = True
+                st.session_state["admin_authenticated_at"] = time.time()
+                st.session_state.pop("admin_login_failures", None)
+                st.session_state.pop("admin_locked_until", None)
                 st.rerun()
-            time.sleep(1.0)
-            st.error("Falsches Passwort.")
+
+            failures = int(st.session_state.get("admin_login_failures") or 0) + 1
+            if failures >= ADMIN_LOGIN_MAX_FAILURES:
+                st.session_state["admin_login_failures"] = 0
+                st.session_state["admin_locked_until"] = time.time() + ADMIN_LOGIN_LOCK_SECONDS
+                st.error("Zu viele fehlgeschlagene Anmeldeversuche. Der Login ist für zwei Minuten gesperrt.")
+            else:
+                st.session_state["admin_login_failures"] = failures
+                st.error("Falsches Passwort.")
     st.stop()
 
 
@@ -215,7 +252,8 @@ def streamer_list(search, only_online, ns=""):
     try:
         rows = load_streamers(ns)
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
         return
     online_count = sum(1 for r in rows if r["online"])
     st.caption(f"🟢 {online_count} online · {len(rows)} registriert")
@@ -238,7 +276,8 @@ def chat_messages(tid, ns=""):
     try:
         msgs = load_messages(tid, ns)
     except Exception as e:
-        st.error(f"Chat konnte nicht geladen werden: {e}")
+        print(f"[streamdex] Support-Chat load failed: {type(e).__name__}")
+        st.error("Der Support-Chat konnte nicht geladen werden. Bitte versuche es später erneut.")
         return
     box = st.container(height=520, border=True)
     with box:
@@ -273,7 +312,8 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
         try:
             send_admin_message(tid, prompt, sender_name, ns)
         except Exception as e:
-            st.error(f"Senden fehlgeschlagen: {e}")
+            print(f"[streamdex] Support message send failed: {type(e).__name__}")
+            st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es später erneut.")
     with messages_area:
         chat_messages(tid, ns)
 
@@ -293,7 +333,8 @@ def games_panel():
         g_streamers = db.reference("game_flags/streamers").get() or {}
         rows = load_streamers()
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
         return
 
     st.subheader("🌍 Global")
@@ -369,7 +410,8 @@ def bans_panel(ns=""):
         bans_tw = db.reference("bans/twitch").get() or {}
         bans_hw = db.reference("bans/hwid").get() or {}
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
         return
 
     st.subheader("🚫 Streamer ausschließen")
@@ -440,7 +482,8 @@ def support_main():
         try:
             partner_codes_view()
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+            st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_beta:
         try:
             t_apps, t_testers = st.tabs(["📝 Bewerbungen", "🧪 Beta-Tester"])
@@ -449,7 +492,8 @@ def support_main():
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_fb:
         feedback_panel(me["name"], is_admin=False, tool="streamdex")
     with tab_team:
@@ -568,7 +612,8 @@ def main():
         try:
             vacation_panel(ADMIN_NAME)
         except Exception as e:
-            st.error(f"Urlaubsmodus nicht verfügbar: {e}")
+            print(f"[streamdex] Vacation mode unavailable: {type(e).__name__}")
+            st.error("Der Urlaubsmodus ist gerade nicht verfügbar.")
         left, right = st.columns([1, 2], gap="large")
         with left:
             st.subheader("Streamer")
@@ -590,7 +635,8 @@ def main():
         try:
             stats_panel(load_streamers(), GAMES)
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_games:
         games_panel()
     with tab_shop:
@@ -605,7 +651,8 @@ def main():
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_fb:
         feedback_panel(ADMIN_NAME, is_admin=True, tool="streamdex")
     with tab_bans:
@@ -614,7 +661,8 @@ def main():
         try:
             admin_supporter_panel()
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_team:
         team_chat_panel(ADMIN_NAME)
 
