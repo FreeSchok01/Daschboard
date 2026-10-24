@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import feedback_hub
+import onboarding
 import streamer_dashboard
 
 
@@ -363,3 +364,12 @@ def test_poll_vote_is_saved_once_per_account_and_closed_polls_cannot_be_changed(
     memory_db.reference("community_polls/poll_1").update({"closed": True})
     with pytest.raises(ValueError, match="geschlossen"):
         feedback_hub._cast_poll_vote("poll_1", "12345", "Option A")
+
+
+def test_guided_onboarding_has_a_clear_first_success_path():
+    steps = onboarding.GUIDED_TOUR_STEPS
+    assert [step["id"] for step in steps] == ["overview", "first_idea", "planner", "profile"]
+    assert steps[1]["route"] == "ideas"
+    assert steps[1]["action"] == "Erste Idee anlegen"
+    assert steps[2]["route"] == "planner"
+    assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
