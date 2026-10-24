@@ -906,43 +906,96 @@ def _collect_account_data(tid, errors=None):
     return out
 
 def _delete_account_data(tid):
-    """Delete account-owned data and return (number of removals, readable error messages)."""
+    """Delete the authenticated account's own data and report each incomplete area."""
+    tid = _require_account_owner(tid)
     removed, errors = 0, []
 
-    try:
-        for key in list(_load_feedback(tid)):
-            db.reference(f"feedback_inbox/{key}").delete()
-            removed += 1
-    except Exception:
-        errors.append("Deine Feedback-Einträge konnten nicht gelöscht werden.")
+    def read_root(path, label):
+        try:
+            value = _safe_get(path, errors=None)
+            if isinstance(value, dict):
+                return value
+            return {}
+        except Exception:
+            errors.append(f"{label} konnten nicht gelesen werden.")
+            return None
 
+    # Remove this user's votes from shared community items; delete only their own posts.
+    for root_path, owner_field, label in (
+        ("feedback_inbox", "tid", "Feedback-Einträge"),
+        ("streamdex_community_wishlist", "author_tid", "Community-Wunschliste"),
+        ("community_polls", "created_by", "Community-Umfragen"),
+    ):
+        root = read_root(root_path, label)
+        if root is None:
+            continue
+        for key, value in root.items():
+            if not isinstance(value, dict):
+                continue
+            own_item = str(value.get(owner_field) or "") == tid
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            try:
+                if tid in votes:
+                    db.reference(f"{root_path}/{key}/votes/{tid}").delete()
+                    removed += 1
+                if own_item:
+                    db.reference(f"{root_path}/{key}").delete()
+                    removed += 1
+            except Exception:
+                errors.append(f"{label} konnten nicht vollständig gelöscht werden.")
+
+    # Quiz rooms are shared: remove this account's answer from others' rooms, and remove own rooms.
+    quiz_root = read_root("streamdex_quiz_rooms", "Quizräume und Antworten")
+    if quiz_root is not None:
+        for code, room in quiz_root.items():
+            if not isinstance(room, dict):
+                continue
+            answers = room.get("answers") if isinstance(room.get("answers"), dict) else {}
+            try:
+                if str(room.get("created_by") or "") == tid:
+                    db.reference(f"streamdex_quiz_rooms/{code}").delete()
+                    removed += 1
+                elif tid in answers:
+                    db.reference(f"streamdex_quiz_rooms/{code}/answers/{tid}").delete()
+                    removed += 1
+            except Exception:
+                errors.append("Quizräume und Antworten konnten nicht vollständig gelöscht werden.")
+
+    # Only delete events owned by this account; other creators' event/participant data stays intact.
+    events_root = read_root("streamdex_events", "Community-Events")
+    if events_root is not None:
+        for event_id, event in events_root.items():
+            if isinstance(event, dict) and str(event.get("owner_tid") or "") == tid:
+                try:
+                    db.reference(f"streamdex_events/{event_id}").delete()
+                    removed += 1
+                except Exception:
+                    errors.append("Deine Community-Events konnten nicht vollständig gelöscht werden.")
+
+    # Remove the public slug mapping only if it is valid and still points to this account.
     try:
-        profile = db.reference(f"creator_profiles/{tid}").get() or {}
+        profile = _safe_get(account_path("creator_profiles/{t}", tid), errors=None) or {}
         old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
-        if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
-            db.reference(f"creator_profile_slugs/{old_slug}").delete()
+        if old_slug and re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+            mapped_tid = _safe_get(f"creator_profile_slugs/{old_slug}", errors=None)
+            if str(mapped_tid or "") == tid:
+                db.reference(f"creator_profile_slugs/{old_slug}").delete()
+                removed += 1
     except Exception:
         errors.append("Dein öffentlicher Profil-Link konnte nicht freigegeben werden.")
 
-    try:
-        global_events = db.reference("streamdex_events").get() or {}
-        if isinstance(global_events, dict):
-            for event_id, event in global_events.items():
-                if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
-                    db.reference(f"streamdex_events/{event_id}").delete()
-                    removed += 1
-    except Exception:
-        errors.append("Deine Community-Events konnten nicht gelöscht werden.")
-
-    for path in _DELETE_PATHS:
-        p = path.format(t=tid)
+    # Presence is deleted last, and only after every other area has been cleaned successfully.
+    for template in _DELETE_PATHS:
+        if template == "presence/{t}" and errors:
+            break
+        path = account_path(template, tid)
         try:
-            ref = db.reference(p)
+            ref = db.reference(path)
             if ref.get() is not None:
                 ref.delete()
                 removed += 1
         except Exception:
-            errors.append(f"{_account_area_label(p)} konnten nicht gelöscht werden.")
+            errors.append(f"{_account_area_label(path)} konnten nicht gelöscht werden.")
 
     return removed, list(dict.fromkeys(errors))
 
