@@ -30,6 +30,7 @@ from legacy import render_legacy
 from clips_manager import render_clips_manager
 from community_events import render_community_integrations
 from theme import render_empty_state, render_os_navigation
+from onboarding import render_first_steps, render_guided_tour
 
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
@@ -1231,6 +1232,19 @@ def _render_landing():
     .sd-public-login-note{color:#8e9aba;font-size:.62rem;line-height:1.6;text-align:center;margin:9px 0}
     .sd-public-separator{display:flex;align-items:center;gap:10px;color:#8792b2;font-size:.62rem;margin:12px 0}
     .sd-public-separator:before,.sd-public-separator:after{content:"";height:1px;background:#273152;flex:1}
+    .sd-public-start{padding:20px 0 22px;margin:3px 0 0;border-bottom:1px solid rgba(148,163,184,.17)}
+    .sd-public-start-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:13px}
+    .sd-public-start h2{font-size:1.22rem!important;color:#f1f5ff;margin:0 0 5px!important;letter-spacing:-.035em!important}
+    .sd-public-start-intro{color:#a7b4d5;font-size:.7rem;line-height:1.7;margin:0}
+    .sd-public-start-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .sd-public-start-card{display:flex;align-items:flex-start;gap:11px;padding:14px;border:1px solid rgba(48,61,103,.8);border-radius:12px;background:linear-gradient(145deg,rgba(13,19,40,.88),rgba(9,14,29,.94));min-width:0}
+    .sd-public-start-num{display:grid;place-items:center;flex:0 0 32px;width:32px;height:32px;border-radius:10px;background:rgba(139,92,246,.17);border:1px solid rgba(139,92,246,.4);color:#d8b4fe;font-weight:800}
+    .sd-public-start-card b{display:block;font-size:.73rem;color:#f1f5ff;margin:1px 0 5px}
+    .sd-public-start-card p{font-size:.64rem;color:#a5b2d2;line-height:1.6;margin:0}
+    .sd-public-start-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:13px}
+    .sd-public-start-actions a{display:inline-flex;padding:9px 12px;border:1px solid rgba(139,92,246,.45);border-radius:9px;background:rgba(76,29,149,.18);color:#d8b4fe;text-decoration:none;font-size:.68rem;font-weight:750}
+    .sd-public-start-actions a:hover{border-color:#a78bfa;color:#fff}
+    @media(max-width:760px){.sd-public-start-grid{grid-template-columns:1fr}.sd-public-start-card{padding:12px}.sd-public-start-head{align-items:flex-start;flex-direction:column}}
     .sd-public-benefits{border-top:1px solid rgba(148,163,184,.17);border-bottom:1px solid rgba(148,163,184,.17);padding:19px 0 21px;display:grid;grid-template-columns:minmax(230px,1.12fr) repeat(4,minmax(0,1fr));gap:12px;align-items:stretch;width:100%}
     .sd-public-benefit-intro{padding:8px 10px 8px 0}
     .sd-public-benefit-intro h2{font-size:1.32rem!important;letter-spacing:-.04em!important;margin:0 0 7px!important;color:#eff2ff}
@@ -1347,6 +1361,20 @@ def _render_landing():
                 '<div class="sd-public-login-note" id="faq">Du hast Fragen? Schau in die Anleitungen oder besuche unseren Support.</div>',
                 unsafe_allow_html=True,
             )
+
+    st.markdown(
+        '<section class="sd-public-start" aria-label="StreamDex Schnellstart">'
+        '<div class="sd-public-start-head"><div><h2>Dein erster Erfolg in drei Schritten</h2>'
+        '<p class="sd-public-start-intro">Starte klein: anmelden, eine Idee festhalten und den nächsten Stream planen.</p></div></div>'
+        '<div class="sd-public-start-grid">'
+        '<div class="sd-public-start-card"><span class="sd-public-start-num">1</span><div><b>Mit Twitch anmelden</b><p>Ein Login verbindet dein Creator-Dashboard mit deinem Konto.</p></div></div>'
+        '<div class="sd-public-start-card"><span class="sd-public-start-num">2</span><div><b>Eine Idee speichern</b><p>Halte den ersten Content-Einfall oder Community-Wunsch fest.</p></div></div>'
+        '<div class="sd-public-start-card"><span class="sd-public-start-num">3</span><div><b>Deinen Stream planen</b><p>Lege einen Termin an und behalte deinen nächsten Stream im Blick.</p></div></div>'
+        '</div><div class="sd-public-start-actions">'
+        '<a href="#sd-login-anchor">Jetzt mit Twitch starten →</a><a href="/?tour=1">Geführten Rundgang ansehen →</a>'
+        '</div></section>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         '<section class="sd-public-benefits" id="features">'
@@ -1618,6 +1646,9 @@ def render_streamer_dashboard(games):
             if str(st.query_params.get(_suite_key, "")) == "1":
                 st.info(f"Melde dich mit Twitch an, um {_suite_label} zu öffnen.")
                 break
+        if str(st.query_params.get("tour", "")) == "1":
+            render_guided_tour(authenticated=False)
+            return
         _render_landing()
         return
 
@@ -1704,7 +1735,7 @@ def render_streamer_dashboard(games):
     # Einheitliche Schnellnavigation bleibt auch in den Einzelansichten aller Werkzeuge sichtbar.
     suite_routes = ("ideas", "bracket", "wheel", "wishlist", "quiz", "goals", "modlog", "modteam")
     nav_route = next(
-        (route for route in ("radar", "insight", "planner", "clips", "feedback", "community", "profile", *suite_routes)
+        (route for route in ("radar", "insight", "planner", "clips", "feedback", "community", "profile", "tour", *suite_routes)
          if str(st.query_params.get(route, "")) == "1"),
         "dashboard",
     )
@@ -1727,6 +1758,11 @@ def render_streamer_dashboard(games):
         if b_btn.button("✔ Gelesen", key="support_mark_read", use_container_width=True):
             _mark_support_read(authed_tid, msgs)
             st.rerun()
+
+    # Der geführte Rundgang ist sowohl aus der Schnellnavigation als auch direkt erreichbar.
+    if str(st.query_params.get("tour", "")) == "1":
+        render_guided_tour(authenticated=True, username=twitch_username)
+        return
 
     # Direkter Feedback-Link: nur für angemeldete Streamer öffnen.
     if str(st.query_params.get("feedback", "")) == "1":
@@ -1874,6 +1910,7 @@ def render_streamer_dashboard(games):
                     st.link_button("⬇️ Zur neuen Lurk-Version", _lupd[1])
         except Exception:
             pass
+        render_first_steps(authed_tid)
         st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
                     unsafe_allow_html=True)
         if beta_info:
