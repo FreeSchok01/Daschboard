@@ -386,7 +386,7 @@ def handle_twitch_oauth_callback():
             raise RuntimeError("Twitch profile ID mismatch")
 
         # Start a fresh authenticated session, never reuse an earlier account's tokens.
-        _clear_oauth_tokens()
+        _clear_authenticated_session()
         st.session_state["authenticated_tid"] = twitch_id
         st.session_state["authenticated_at"] = time.time()
         st.session_state["auth_method"] = "twitch"
@@ -1700,7 +1700,7 @@ def render_streamer_dashboard(games):
     if token_arg:
         valid_tid = _verify_and_consume_token(token_arg)
         if valid_tid:
-            _clear_oauth_tokens()
+            _clear_authenticated_session()
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
             st.session_state["auth_method"] = "desktop"
