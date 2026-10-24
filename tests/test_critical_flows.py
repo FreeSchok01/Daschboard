@@ -410,6 +410,74 @@ def test_public_creator_slug_is_reserved_for_one_account(memory_db):
     assert memory_db.reference("creator_profile_slugs/creator-name").get() is None
 
 
+
+def test_account_deletion_removes_only_its_shared_contributions(memory_db):
+    memory_db.reference("presence/12345").set({"status": "offline"})
+    memory_db.reference("stats/12345").set({"checkins": 4})
+    memory_db.reference("feedback_inbox/own").set({"tid": "12345", "title": "Own post", "votes": {}})
+    memory_db.reference("feedback_inbox/peer").set({
+        "tid": "99999", "title": "Peer post", "votes": {"12345": True, "99999": True},
+    })
+    memory_db.reference("streamdex_community_wishlist/own").set({
+        "author_tid": "12345", "title": "Own wish", "votes": {},
+    })
+    memory_db.reference("streamdex_community_wishlist/peer").set({
+        "author_tid": "99999", "title": "Peer wish", "votes": {"12345": True},
+    })
+    memory_db.reference("community_polls/own").set({
+        "created_by": "12345", "question": "Own poll", "options": ["A", "B"], "votes": {"99999": 0},
+    })
+    memory_db.reference("community_polls/peer").set({
+        "created_by": "99999", "question": "Peer poll", "options": ["A", "B"],
+        "votes": {"12345": 1, "99999": 0},
+    })
+    memory_db.reference("streamdex_quiz_rooms/OWN123").set({
+        "created_by": "12345", "title": "Own quiz", "questions": [], "answers": {"99999": {}},
+    })
+    memory_db.reference("streamdex_quiz_rooms/PEER12").set({
+        "created_by": "99999", "title": "Peer quiz",
+        "answers": {"12345": {"0": {"choice": 1}}, "99999": {"0": {"choice": 0}}},
+    })
+    memory_db.reference("streamdex_events/own_event").set({
+        "owner_tid": "12345", "title": "Own event", "participants": {"guest": {"display_name": "Guest"}},
+    })
+    memory_db.reference("streamdex_events/peer_event").set({
+        "owner_tid": "99999", "title": "Peer event",
+        "participants": {
+            "p12345": {"display_name": "Mine", "registrant_tid": "12345"},
+            "p99999": {"display_name": "Theirs", "registrant_tid": "99999"},
+        },
+    })
+
+    _removed, errors = streamer_dashboard._delete_account_data("12345")
+
+    assert errors == []
+    assert memory_db.reference("presence/12345").get() is None
+    assert memory_db.reference("stats/12345").get() is None
+    assert memory_db.reference("feedback_inbox/own").get() is None
+    assert memory_db.reference("feedback_inbox/peer/votes").get() == {"99999": True}
+    assert memory_db.reference("streamdex_community_wishlist/own").get() is None
+    assert memory_db.reference("streamdex_community_wishlist/peer/votes").get() == {}
+    assert memory_db.reference("community_polls/own").get() is None
+    assert memory_db.reference("community_polls/peer/votes").get() == {"99999": 0}
+    assert memory_db.reference("streamdex_quiz_rooms/OWN123").get() is None
+    assert memory_db.reference("streamdex_quiz_rooms/PEER12/answers").get() == {"99999": {"0": {"choice": 0}}}
+    assert memory_db.reference("streamdex_events/own_event").get() is None
+    assert memory_db.reference("streamdex_events/peer_event/participants").get() == {
+        "p99999": {"display_name": "Theirs", "registrant_tid": "99999"},
+    }
+
+
+def test_poll_can_only_be_closed_by_its_creator(memory_db):
+    memory_db.reference("community_polls/poll_1").set({
+        "created_by": "12345", "question": "Question?", "options": ["A", "B"], "closed": False,
+    })
+    assert not feedback_hub._close_owned_poll("poll_1", "99999")
+    assert memory_db.reference("community_polls/poll_1/closed").get() is False
+    assert feedback_hub._close_owned_poll("poll_1", "12345")
+    assert memory_db.reference("community_polls/poll_1/closed").get() is True
+
+
 def test_quiz_room_code_reservation_never_overwrites_existing_rooms(monkeypatch, memory_db):
     memory_db.reference("streamdex_quiz_rooms/ABC123").set({
         "code": "ABC123", "created_by": "99999", "title": "Existing room",
