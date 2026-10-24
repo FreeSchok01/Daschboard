@@ -11,10 +11,12 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import creator_profile
 import feedback_hub
 import onboarding
 import streamdex_suite
 import streamer_dashboard
+import shop
 
 
 class MemoryDatabase:
@@ -159,6 +161,8 @@ def memory_db(monkeypatch):
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
     monkeypatch.setattr(streamdex_suite, "db", database)
+    monkeypatch.setattr(shop, "db", database)
+    monkeypatch.setattr(creator_profile, "db", database)
     return database
 
 
@@ -398,6 +402,43 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
 
 
+def test_shop_module_downloads_require_paid_order_and_matching_twitch_account(monkeypatch, memory_db):
+    items = {
+        "slot": {"kind": "game", "name": "Slot Machine", "games": ["slot"], "download_url": "https://downloads.example/slot.zip"},
+        "arena": {"kind": "game", "name": "Arena", "games": ["arena"], "download_url": "javascript:alert(1)"},
+        "pack_casino": {"kind": "pack", "name": "Casino-Pack", "games": ["slot", "hilo"], "download_url": ""},
+        "hilo": {"kind": "game", "name": "Hi-Lo", "games": ["hilo"], "download_url": ""},
+    }
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "12345", "status": "paid", "games": ["slot", "arena", "hilo"],
+    })
+    memory_db.reference("shop/orders/SDX-DEF234").set({
+        "tid": "12345", "status": "pending", "games": ["slot"],
+    })
+
+    order, links = shop._order_downloads(
+        "SDX-ABC234", "12345", items
+    )
+    assert order["status"] == "paid"
+    assert links == [{
+        "game": "slot",
+        "name": "Slot Machine",
+        "url": "https://downloads.example/slot.zip",
+    }]
+    assert shop._order_downloads("SDX-ABC234", "99999", items) == (None, [])
+    assert shop._order_downloads("SDX-DEF234", "12345", items) == (None, [])
+    assert shop._order_downloads("../../", "12345", items) == (None, [])
+
+
+def test_shop_rejects_non_https_download_urls_and_default_catalog_has_download_fields():
+    assert shop._safe_download_url("https://example.test/game.zip") == "https://example.test/game.zip"
+    assert shop._safe_download_url("javascript:alert(1)") == ""
+    assert shop._safe_download_url("http://example.test/game.zip") == ""
+    assert shop._safe_download_url("https://user:secret@example.test/game.zip") == ""
+    defaults = shop.default_items({"slot": "Slot Machine", "fishing": "Fishing"})
+    assert defaults["slot"]["download_url"] == ""
+    assert defaults["fishing"]["download_url"] == ""
+
 def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
     rendered = []
     fake_st = SimpleNamespace(
@@ -420,6 +461,18 @@ def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
     assert url == "https://id.twitch.tv/oauth2/authorize?client_id=test&state=abc"
     assert options["type"] == "primary"
     assert options["use_container_width"] is True
+
+
+
+def test_profile_slug_reservation_cannot_be_claimed_by_another_account(memory_db):
+    assert creator_profile._claim_slug_reservation("creator-name", "12345")
+    assert not creator_profile._claim_slug_reservation("creator-name", "99999")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() == "12345"
+    assert not creator_profile._release_slug_reservation("creator-name", "99999")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() == "12345"
+    assert creator_profile._release_slug_reservation("creator-name", "12345")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() is None
+
 
 
 def test_poll_vote_and_close_are_atomic_and_owner_scoped(memory_db):
@@ -477,4 +530,3 @@ def test_quiz_answers_and_room_management_are_account_scoped(memory_db):
     assert memory_db.reference("streamdex_quiz_rooms/ABC123/status").get() == "closed"
     with pytest.raises(ValueError, match="geschlossen"):
         streamdex_suite._save_quiz_answer("ABC123", "88888", 0, "A")
-
