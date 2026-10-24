@@ -761,22 +761,32 @@ _DELETE_PATHS = [
     "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
     "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
     "support_read/{t}", "giveaway_log/{t}",
-    "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
-    "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
+    "radar_watchlists/{t}", "radar_analytics/{t}", "streamdex_planner/{t}",
+    "streamdex_ideas/{t}", "streamdex_brackets/{t}", "streamdex_wheel/{t}",
+    "streamdex_goals/{t}", "streamdex_modlog/{t}", "streamdex_modteam/{t}",
+    "streamdex_clips/{t}", "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
     "creator_profiles/{t}", "presence/{t}",
 ]
-# Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
+# Kauf-/Freischaltungsdaten bleiben bewusst erhalten.
 _KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
+_SHARED_ACCOUNT_ROOTS = (
+    "feedback_inbox",
+    "streamdex_community_wishlist",
+    "community_polls",
+    "streamdex_quiz_rooms",
+    "streamdex_events",
+)
 
 ACCOUNT_DATA_TABLE = """
 | Was | Wozu |
 |---|---|
-| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität, Website-Login-Zeitpunkt und -Zähler, direkte Tool-Seitenaufrufe | Login, Status-Anzeige, Zuordnung deiner Daten und Nutzungsstatistik |
-| Hardware-Kennungen (nur als Hash) | Sperrliste gegen Missbrauch |
-| Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
-| Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
+| Twitch-ID, Benutzername, App-Version, Online-Status, letzte Aktivität und Website-Login-Zeitpunkte | Login, Status-Anzeige und Zuordnung deiner Daten |
+| Direkte Tool-Aufrufe und gespeicherte Einträge der StreamDex-Werkzeuge | Nutzungsübersicht und persönliche Werkzeuge |
+| Zähler (Giveaways, Check-ins, Spins, …), Tagesstände und Giveaway-Verlauf | Statistiken im Dashboard |
+| Eigene Feedback-Beiträge, Community-Wünsche, Umfragen, Quiz-Antworten und Event-Anmeldungen | Community-Funktionen |
 | Support-Nachrichten und Feedback | Support |
-| Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
+| Kauf- und Freischaltungsdaten | Games und Features, die du freigeschaltet hast; bleiben bei Datenlöschung erhalten |
+| Lokal gespeicherte Einstellungen und Logs deiner Desktop-App | Werden nicht auf dem StreamDex-Webserver gespeichert |
 """
 
 
@@ -792,8 +802,15 @@ def _account_area_label(path):
         "lurk": "Lurk-Daten",
         "support_read": "Support-Lesestatus",
         "giveaway_log": "Giveaway-Verlauf",
+        "radar_watchlists": "Radar-Watchlist",
         "radar_analytics": "Insight-Verläufe",
         "streamdex_planner": "Planner-Termine",
+        "streamdex_ideas": "StreamDex-Ideen",
+        "streamdex_brackets": "Turnierdaten",
+        "streamdex_wheel": "Glücksrad-Daten",
+        "streamdex_goals": "Ziele",
+        "streamdex_modlog": "Moderationsprotokoll",
+        "streamdex_modteam": "Moderationsteam",
         "streamdex_clips": "Clip-Sammlung",
         "streamdex_web_auth": "Web-Anmeldedaten",
         "streamdex_tool_usage": "Nutzungsstatistiken",
@@ -802,7 +819,9 @@ def _account_area_label(path):
         "creator_profile_slugs": "öffentlicher Profil-Link",
         "streamdex_events": "Community-Events",
         "feedback_inbox": "Feedback-Einträge",
+        "streamdex_community_wishlist": "Community-Wünsche",
         "community_polls": "Community-Umfragen",
+        "streamdex_quiz_rooms": "Quizräume und Antworten",
     }
     return labels.get(root, "Datenbereich")
 
@@ -821,6 +840,8 @@ def _safe_get(path, errors=None):
 
 def _build_account_export_json(tid, data, exported_at=None):
     """Build the account JSON export in one testable, deterministic place."""
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Ungültige Twitch-ID für den Datenexport.")
     payload = {
         "exportiert_am": exported_at or datetime.now(TZ).isoformat(timespec="seconds"),
         "twitch_id": str(tid),
@@ -831,17 +852,37 @@ def _build_account_export_json(tid, data, exported_at=None):
 
 
 def _load_feedback(tid):
-    """Feedback-Einträge dieser Twitch-ID. Mit Index auf 'tid' direkt, sonst Fallback über 'ts' (letzte 1000)."""
-    ref = db.reference("feedback_inbox")
-    try:
-        data = ref.order_by_child("tid").equal_to(str(tid)).get() or {}
-    except Exception:
-        data = ref.order_by_child("ts").limit_to_last(1000).get() or {}
-    return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
+    """Load all feedback entries belonging to this account, not only the latest page."""
+    data = db.reference("feedback_inbox").get() or {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: value for key, value in data.items()
+        if isinstance(value, dict) and str(value.get("tid") or "") == str(tid)
+    }
+
+
+def _read_shared_account_roots(errors=None):
+    """Load the shared collections needed to export/delete this account's own contributions."""
+    roots = {}
+    errors = errors if errors is not None else []
+    for path in _SHARED_ACCOUNT_ROOTS:
+        try:
+            value = db.reference(path).get() or {}
+            roots[path] = value if isinstance(value, dict) else {}
+        except Exception:
+            roots[path] = {}
+            message = f"{_account_area_label(path)} konnten nicht vollständig geprüft werden."
+            if message not in errors:
+                errors.append(message)
+    return roots
 
 
 def _collect_account_data(tid, errors=None):
-    """Collect the current account's data and optionally return readable per-area errors."""
+    """Collect private records and only the current user's contribution to shared collections."""
+    tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Ungültige Twitch-ID für den Datenexport.")
     errors = errors if errors is not None else []
     out = {}
     for path in _KEEP_PATHS + _DELETE_PATHS:
@@ -849,55 +890,56 @@ def _collect_account_data(tid, errors=None):
         val = _safe_get(p, errors=errors)
         if val not in (None, {}, []):
             out[p] = val
-    try:
-        fb = _load_feedback(tid)
-        if fb:
-            out["feedback_inbox (nur deine Einträge)"] = fb
-    except Exception:
-        message = "Feedback-Einträge konnten nicht gelesen werden."
-        if message not in errors:
-            errors.append(message)
-    events = _safe_get("streamdex_events", errors=errors)
-    if isinstance(events, dict):
-        own_events = {
-            key: value for key, value in events.items()
-            if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)
-        }
-        if own_events:
-            out["streamdex_events (eigene Events)"] = own_events
+
+    profile = out.get(f"creator_profiles/{tid}")
+    old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+        slug_owner = _safe_get(f"creator_profile_slugs/{old_slug}", errors=errors)
+        if str(slug_owner or "") == tid:
+            out[f"creator_profile_slugs/{old_slug}"] = tid
+
+    shared_roots = _read_shared_account_roots(errors)
+    shared_data = collect_user_shared_data(tid, shared_roots)
+    if shared_data:
+        out["community_activity (nur deine Beiträge, Stimmen, Antworten und Anmeldungen)"] = shared_data
     return out
 
+
 def _delete_account_data(tid):
-    """Delete account-owned data and return (number of removals, readable error messages)."""
+    """Delete only this account's private data and contributions to shared collections."""
+    tid = str(tid or "")
+    if not is_valid_twitch_id(tid):
+        raise ValueError("Ungültige Twitch-ID für die Kontolöschung.")
+
     removed, errors = 0, []
-
-    try:
-        for key in list(_load_feedback(tid)):
-            db.reference(f"feedback_inbox/{key}").delete()
-            removed += 1
-    except Exception:
-        errors.append("Deine Feedback-Einträge konnten nicht gelöscht werden.")
-
+    # Remove the public slug while the private profile still exists.
     try:
         profile = db.reference(f"creator_profiles/{tid}").get() or {}
         old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
-        if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
-            db.reference(f"creator_profile_slugs/{old_slug}").delete()
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+            slug_ref = db.reference(f"creator_profile_slugs/{old_slug}")
+            if str(slug_ref.get() or "") == tid:
+                slug_ref.delete()
+                removed += 1
     except Exception:
         errors.append("Dein öffentlicher Profil-Link konnte nicht freigegeben werden.")
 
-    try:
-        global_events = db.reference("streamdex_events").get() or {}
-        if isinstance(global_events, dict):
-            for event_id, event in global_events.items():
-                if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
-                    db.reference(f"streamdex_events/{event_id}").delete()
-                    removed += 1
-    except Exception:
-        errors.append("Deine Community-Events konnten nicht gelöscht werden.")
+    shared_roots = _read_shared_account_roots(errors)
+    for target in plan_shared_account_deletions(tid, shared_roots):
+        try:
+            ref = db.reference(target)
+            if ref.get() is not None:
+                ref.delete()
+                removed += 1
+        except Exception:
+            errors.append("Community-Beiträge oder eigene Stimmen konnten nicht vollständig gelöscht werden.")
 
     for path in _DELETE_PATHS:
         p = path.format(t=tid)
+        # Presence is deliberately last: keep the account recognizable for a retry if
+        # any previous deletion failed. A partial deletion must never look successful.
+        if p == f"presence/{tid}" and errors:
+            continue
         try:
             ref = db.reference(p)
             if ref.get() is not None:
