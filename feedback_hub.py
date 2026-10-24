@@ -2,6 +2,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import html
+import re
 import time
 
 import streamlit as st
@@ -14,6 +15,8 @@ MAX_TEXT = 1500
 MAX_OPTIONS = 5
 MAX_POLLS = 100
 MAX_SUGGESTIONS = 200
+POLL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+TID_RE = re.compile(r"^[0-9]{1,15}$")
 
 
 def _fmt_ts(value):
@@ -115,6 +118,38 @@ def _create_poll(tid, username, question, option_texts):
         "closed": False,
         "votes": {},
     })
+
+
+def _cast_poll_vote(poll_id, tid, chosen_option):
+    """Validate a poll against the current database state before saving a user's vote."""
+    poll_id = str(poll_id or "")
+    tid = str(tid or "")
+    if not POLL_ID_RE.fullmatch(poll_id):
+        raise ValueError("Diese Umfrage hat eine ungültige Kennung. Bitte lade die Seite neu.")
+    if not TID_RE.fullmatch(tid):
+        raise ValueError("Deine StreamDex-Sitzung ist ungültig. Bitte melde dich erneut an.")
+
+    poll_ref = db.reference(f"community_polls/{poll_id}")
+    poll = poll_ref.get()
+    if not isinstance(poll, dict):
+        raise ValueError("Diese Umfrage wurde nicht gefunden. Bitte aktualisiere die Seite.")
+    if poll.get("closed"):
+        raise ValueError("Diese Umfrage ist inzwischen geschlossen.")
+
+    options = poll.get("options") or []
+    if isinstance(options, dict):
+        options = [
+            options[key] for key in sorted(
+                options, key=lambda value: (0, int(value)) if str(value).isdigit() else (1, str(value))
+            )
+        ]
+    options = [str(option).strip() for option in options if str(option).strip()]
+    chosen_option = str(chosen_option or "").strip()
+    if len(options) < 2 or chosen_option not in options:
+        raise ValueError("Bitte wähle eine der aktuell verfügbaren Antworten aus.")
+
+    poll_ref.child(f"votes/{tid}").set(options.index(chosen_option))
+    return options.index(chosen_option)
 
 
 def render_feedback_hub(tid, username):
@@ -312,10 +347,12 @@ def render_feedback_hub(tid, username):
                             st.warning("Bitte wähle eine Antwort aus.")
                         else:
                             try:
-                                db.reference(f"community_polls/{poll['id']}/votes/{tid}").set(options.index(chosen))
+                                _cast_poll_vote(poll["id"], str(tid), chosen)
                                 st.rerun()
+                            except ValueError as exc:
+                                st.warning(str(exc))
                             except Exception:
-                                st.error("Deine Stimme konnte nicht gespeichert werden.")
+                                st.error("Deine Stimme konnte gerade nicht gespeichert werden. Prüfe die Verbindung und versuche es erneut.")
                 else:
                     st.caption("🔒 Diese Umfrage ist geschlossen.")
                 if total:
