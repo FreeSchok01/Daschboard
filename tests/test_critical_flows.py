@@ -421,9 +421,9 @@ def test_shop_module_downloads_require_paid_order_and_matching_twitch_account(mo
         "name": "Slot Machine",
         "url": "https://downloads.example/slot.zip",
     }]
-    assert streamer_dashboard._order_downloads("SDX-ABC234", "99999", items) == (None, [])
-    assert streamer_dashboard._order_downloads("SDX-DEF234", "12345", items) == (None, [])
-    assert streamer_dashboard._order_downloads("../../", "12345", items) == (None, [])
+    assert shop._order_downloads("SDX-ABC234", "99999", items) == (None, [])
+    assert shop._order_downloads("SDX-DEF234", "12345", items) == (None, [])
+    assert shop._order_downloads("../../", "12345", items) == (None, [])
 
 
 def test_shop_rejects_non_https_download_urls_and_default_catalog_has_download_fields():
