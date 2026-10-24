@@ -13,8 +13,8 @@ import pytest
 
 import feedback_hub
 import onboarding
+import streamdex_suite
 import streamer_dashboard
-import shop
 
 
 class MemoryDatabase:
@@ -158,7 +158,7 @@ def memory_db(monkeypatch):
     database = MemoryDatabase()
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
-    monkeypatch.setattr(shop, "db", database)
+    monkeypatch.setattr(streamdex_suite, "db", database)
     return database
 
 
@@ -398,43 +398,6 @@ def test_guided_onboarding_has_a_clear_first_success_path():
     assert all(step["title"] and step["benefit"] and step["description"] for step in steps)
 
 
-def test_shop_module_downloads_require_paid_order_and_matching_twitch_account(monkeypatch, memory_db):
-    items = {
-        "slot": {"kind": "game", "name": "Slot Machine", "games": ["slot"], "download_url": "https://downloads.example/slot.zip"},
-        "arena": {"kind": "game", "name": "Arena", "games": ["arena"], "download_url": "javascript:alert(1)"},
-        "pack_casino": {"kind": "pack", "name": "Casino-Pack", "games": ["slot", "hilo"], "download_url": ""},
-        "hilo": {"kind": "game", "name": "Hi-Lo", "games": ["hilo"], "download_url": ""},
-    }
-    memory_db.reference("shop/orders/SDX-ABC234").set({
-        "tid": "12345", "status": "paid", "games": ["slot", "arena", "hilo"],
-    })
-    memory_db.reference("shop/orders/SDX-DEF234").set({
-        "tid": "12345", "status": "pending", "games": ["slot"],
-    })
-
-    order, links = shop._order_downloads(
-        "SDX-ABC234", "12345", items
-    )
-    assert order["status"] == "paid"
-    assert links == [{
-        "game": "slot",
-        "name": "Slot Machine",
-        "url": "https://downloads.example/slot.zip",
-    }]
-    assert shop._order_downloads("SDX-ABC234", "99999", items) == (None, [])
-    assert shop._order_downloads("SDX-DEF234", "12345", items) == (None, [])
-    assert shop._order_downloads("../../", "12345", items) == (None, [])
-
-
-def test_shop_rejects_non_https_download_urls_and_default_catalog_has_download_fields():
-    assert shop._safe_download_url("https://example.test/game.zip") == "https://example.test/game.zip"
-    assert shop._safe_download_url("javascript:alert(1)") == ""
-    assert shop._safe_download_url("http://example.test/game.zip") == ""
-    assert shop._safe_download_url("https://user:secret@example.test/game.zip") == ""
-    defaults = shop.default_items({"slot": "Slot Machine", "fishing": "Fishing"})
-    assert defaults["slot"]["download_url"] == ""
-    assert defaults["fishing"]["download_url"] == ""
-
 def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
     rendered = []
     fake_st = SimpleNamespace(
@@ -457,3 +420,61 @@ def test_twitch_login_uses_native_streamlit_external_link(monkeypatch):
     assert url == "https://id.twitch.tv/oauth2/authorize?client_id=test&state=abc"
     assert options["type"] == "primary"
     assert options["use_container_width"] is True
+
+
+def test_poll_vote_and_close_are_atomic_and_owner_scoped(memory_db):
+    memory_db.reference("community_polls/poll_abc").set({
+        "created_by": "12345", "options": ["A", "B"], "closed": False, "votes": {},
+    })
+    assert feedback_hub._cast_poll_vote("poll_abc", "99999", "B") == 1
+    assert memory_db.reference("community_polls/poll_abc/votes/99999").get() == 1
+    assert not feedback_hub._close_owned_poll("poll_abc", "99999")
+    assert feedback_hub._close_owned_poll("poll_abc", "12345")
+    with pytest.raises(ValueError, match="geschlossen"):
+        feedback_hub._cast_poll_vote("poll_abc", "88888", "A")
+
+
+def test_wishlist_mutations_recheck_owner(memory_db):
+    memory_db.reference("streamdex_community_wishlist/wish123").set({
+        "author_tid": "12345", "title": "Owned", "status": "Neu",
+    })
+    assert not streamdex_suite._set_owned_wishlist_status("wish123", "99999", "Erledigt")
+    assert not streamdex_suite._delete_owned_wishlist_item("wish123", "99999")
+    assert memory_db.reference("streamdex_community_wishlist/wish123/status").get() == "Neu"
+    assert streamdex_suite._set_owned_wishlist_status("wish123", "12345", "Umgesetzt")
+    assert streamdex_suite._delete_owned_wishlist_item("wish123", "12345")
+    assert memory_db.reference("streamdex_community_wishlist/wish123").get() is None
+
+
+def test_quiz_room_code_collision_never_overwrites_existing_room(monkeypatch, memory_db):
+    memory_db.reference("streamdex_quiz_rooms/ABC123").set({
+        "code": "ABC123", "created_by": "99999", "title": "Existing",
+    })
+    candidates = iter(["ABC123", "DEF456"])
+    monkeypatch.setattr(streamdex_suite.secrets, "token_hex", lambda size: next(candidates))
+    code = streamdex_suite._create_quiz_room(
+        "12345", "TestCreator", "New room", [{"question": "Q", "options": ["A", "B"], "correct_index": 0}]
+    )
+    assert code == "DEF456"
+    assert memory_db.reference("streamdex_quiz_rooms/ABC123/title").get() == "Existing"
+    assert memory_db.reference("streamdex_quiz_rooms/DEF456/created_by").get() == "12345"
+
+
+def test_quiz_answers_and_room_management_are_account_scoped(memory_db):
+    memory_db.reference("streamdex_quiz_rooms/ABC123").set({
+        "code": "ABC123", "created_by": "12345", "status": "open",
+        "questions": [{"question": "Q", "options": ["A", "B"], "correct_index": 0}],
+        "answers": {},
+    })
+    assert not streamdex_suite._manage_owned_quiz("ABC123", "99999", "close")
+    with pytest.raises(ValueError, match="ungültig"):
+        streamdex_suite._save_quiz_answer("ABC123", "../99999", 0, "A")
+    assert streamdex_suite._save_quiz_answer("ABC123", "99999", 0, "B")
+    assert memory_db.reference("streamdex_quiz_rooms/ABC123/answers/99999/0/choice").get() == 1
+    with pytest.raises(ValueError, match="bereits beantwortet"):
+        streamdex_suite._save_quiz_answer("ABC123", "99999", 0, "A")
+    assert streamdex_suite._manage_owned_quiz("ABC123", "12345", "close")
+    assert memory_db.reference("streamdex_quiz_rooms/ABC123/status").get() == "closed"
+    with pytest.raises(ValueError, match="geschlossen"):
+        streamdex_suite._save_quiz_answer("ABC123", "88888", 0, "A")
+
