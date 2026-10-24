@@ -12,6 +12,7 @@ from typing import Mapping, Any
 
 TID_PATTERN = re.compile(r"^[0-9]{1,15}$")
 USER_SESSION_MAX_AGE_SECONDS = 2 * 60 * 60
+ADMIN_SESSION_MAX_AGE_SECONDS = 4 * 60 * 60
 
 # Delete account-owned data first; presence must be removed last so a failed deletion
 # does not make the account impossible to find and retry.
@@ -90,3 +91,20 @@ def has_active_user_session(
     current = time.time() if now is None else float(now)
     age = current - started
     return started > 0 and 0 <= age <= USER_SESSION_MAX_AGE_SECONDS
+
+
+
+def has_active_admin_session(
+    session_state: Mapping[str, Any],
+    now: float | None = None,
+) -> bool:
+    """Validate the fixed maximum lifetime of the shared-password admin session."""
+    if not session_state.get("auth_ok"):
+        return False
+    try:
+        started = float(session_state.get("admin_authenticated_at") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    current = time.time() if now is None else float(now)
+    age = current - started
+    return started > 0 and 0 <= age <= ADMIN_SESSION_MAX_AGE_SECONDS
