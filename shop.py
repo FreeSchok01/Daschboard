@@ -714,18 +714,22 @@ def _order_box():
                 '<div><b>Zu StreamDex zurückkehren</b><span>Nach der PayPal-Prüfung schalten wir deine gekauften Games frei.</span></div></div>',
                 unsafe_allow_html=True,
             )
-            approval_url = ""
-            if st.button("PayPal-Checkout starten", type="primary", use_container_width=True):
-                try:
-                    approval_url = create_paypal_checkout(code)
-                except (RuntimeError, ValueError) as exc:
-                    st.error(str(exc))
-                else:
-                    st.session_state[f"paypal_url_{code}"] = approval_url
-            approval_url = approval_url or str(st.session_state.get(f"paypal_url_{code}") or "")
+            error = st.session_state.pop(f"paypal_error_{code}", "")
+            if error:
+                st.warning(error)
+            saved_order = db.reference(f"shop/orders/{code}").get() or {}
+            approval_url = (
+                str(st.session_state.get(f"paypal_url_{code}") or "")
+                or str(saved_order.get("paypal_approval_url") or "")
+            )
             if not approval_url:
-                saved_order = db.reference(f"shop/orders/{code}").get() or {}
-                approval_url = str(saved_order.get("paypal_approval_url") or "")
+                if st.button("PayPal-Checkout vorbereiten", type="primary", use_container_width=True):
+                    try:
+                        approval_url = create_paypal_checkout(code)
+                    except (RuntimeError, ValueError) as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state[f"paypal_url_{code}"] = approval_url
             if approval_url:
                 st.link_button(
                     "🔒 Sicher mit PayPal bezahlen",
@@ -733,11 +737,10 @@ def _order_box():
                     type="primary",
                     use_container_width=True,
                 )
-                st.caption("Auf der PayPal-Seite wird StreamDex als Checkout-Markenname angefordert.")
-                st.info("Wenn du den PayPal-Dialog schließt, bleibt diese Bestellung offen. Bezahlt wird sie erst nach bestätigter Zahlung.")
-            elif not st.session_state.get(f"paypal_url_{code}"):
-                st.caption("Nach dem Start erscheint der sichere PayPal-Link hier.")
-            if not db.reference(f"shop/orders/{code}").get().get("paypal_order_id"):
+                st.caption("Auf PayPal wird StreamDex als Checkout-Markenname angefordert.")
+                st.info("Die Freischaltung erfolgt erst, wenn PayPal die Zahlung bestätigt.")
+            order_now = db.reference(f"shop/orders/{code}").get() or {}
+            if not order_now.get("paypal_order_id"):
                 if st.button("Bestellung abbrechen", use_container_width=True, key=f"cancel_order_{code}"):
                     cancel_order(code)
                     st.session_state.pop(key, None)
@@ -865,6 +868,11 @@ def _cart_box(tid, name, items, have):
                     st.session_state["download_order_code"] = order_code
                 else:
                     st.session_state["order"] = (order_code, order_price)
+                    if paypal_checkout_enabled():
+                        try:
+                            st.session_state[f"paypal_url_{order_code}"] = create_paypal_checkout(order_code)
+                        except (RuntimeError, ValueError) as exc:
+                            st.session_state[f"paypal_error_{order_code}"] = str(exc)
                 st.rerun()
 def render_shop(games):
     st.markdown(CSS, unsafe_allow_html=True)
