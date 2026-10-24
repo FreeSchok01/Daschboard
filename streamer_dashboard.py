@@ -15,6 +15,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from firebase_admin import db
+from streamdex_security import (ACCOUNT_DELETE_PATHS, ACCOUNT_KEEP_PATHS, account_path,
+                                 create_signed_oauth_state, has_active_user_session,
+                                 validate_signed_oauth_state)
 
 from beta_apply import _apply_form, render_logged_in_beta_status
 from downloads import (beta_link, lurk_repo, render_member_downloads, render_public_downloads,
@@ -181,46 +184,15 @@ def _twitch_credentials():
 
 
 def _make_twitch_state(client_secret):
-    """Erzeugt einen zeitlich begrenzten, signierten OAuth-state-Wert."""
-    timestamp = str(int(time.time()))
-    nonce = secrets.token_urlsafe(24)
-    payload = f"{timestamp}.{nonce}"
-    signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{payload}.{signature}"
+    """Create the signed, short-lived state value used in the Twitch OAuth redirect."""
+    return create_signed_oauth_state(client_secret, secrets.token_urlsafe(24))
 
 
 def _valid_twitch_state(state, client_secret):
-    """Prüft Signatur und Ablaufzeit des OAuth-state-Werts."""
-    if not isinstance(state, str):
-        return False
-    pieces = state.split(".")
-    if len(pieces) != 3:
-        return False
-
-    timestamp_text, nonce, supplied_signature = pieces
-    if not nonce or not re.fullmatch(r"[A-Za-z0-9_-]{16,100}", nonce):
-        return False
-    try:
-        timestamp = int(timestamp_text)
-    except (TypeError, ValueError):
-        return False
-
-    age = int(time.time()) - timestamp
-    if age < -60 or age > TWITCH_STATE_MAX_AGE_S:
-        return False
-
-    payload = f"{timestamp_text}.{nonce}"
-    expected_signature = hmac.new(
-        client_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected_signature, supplied_signature)
-
+    """Validate state signature and expiry before exchanging an OAuth code."""
+    return validate_signed_oauth_state(
+        state, client_secret, max_age_seconds=TWITCH_STATE_MAX_AGE_S
+    )
 
 def _twitch_authorization_url():
     """Liefert (Autorisierungs-URL, Fehlermeldung)."""
@@ -423,7 +395,7 @@ def _verify_and_consume_token(token: str):
     try:
         ref.transaction(_take)
     except Exception as e:
-        return _fail(f"Transaktion fehlgeschlagen: {type(e).__name__}: {e}")
+        return _fail(f"Firebase-Transaktion fehlgeschlagen: {type(e).__name__}")
     try:
         ref.delete()   # Markierung entfernen (Token ist ohnehin schon unbrauchbar)
     except Exception:
@@ -431,20 +403,19 @@ def _verify_and_consume_token(token: str):
 
     data = consumed.get("data")
     if not isinstance(data, dict):
-        return _fail(f"Kein Eintrag gefunden (data={data!r}). Token schon eingelöst, "
-                     "oder das Dashboard liest in einer anderen Datenbank.")
+        return _fail("Token-Eintrag fehlt oder wurde bereits eingelöst.")
 
     try:
         created_at = int(data.get("ts") or 0)
     except (TypeError, ValueError):
-        return _fail(f"ts ungültig: {data!r}")
+        return _fail("Token-Zeitstempel ungültig.")
     age_ms = int(time.time() * 1000) - created_at
-    if not created_at or age_ms > TOKEN_MAX_AGE_MS:
-        return _fail(f"Abgelaufen: Alter {age_ms / 1000:.0f} s (erlaubt {TOKEN_MAX_AGE_MS // 1000} s), ts={created_at}")
+    if not created_at or age_ms < -60_000 or age_ms > TOKEN_MAX_AGE_MS:
+        return _fail("Token abgelaufen oder Zeitstempel ungültig.")
 
     tid = str(data.get("tid") or "")
-    if not TID_RE.match(tid):
-        return _fail(f"tid ungültig: {tid!r}")
+    if not TID_RE.fullmatch(tid):
+        return _fail("Token enthält keine gültige Twitch-ID.")
     return tid
 
 
@@ -700,16 +671,10 @@ def _daily_series(history, key, days, today=None):
 # ----------------------------------------------------------------------------
 # Wird beim Löschen entfernt (alles, was unter der eigenen Twitch-ID liegt). presence ZULETZT,
 # damit der Login bei einem Fehler mittendrin noch funktioniert und man es erneut versuchen kann.
-_DELETE_PATHS = [
-    "stats/{t}", "stats_history/{t}", "chats/{t}", "chat_meta/{t}", "gifts/{t}",
-    "lurk/stats/{t}", "lurk/chats/{t}", "lurk/chat_meta/{t}", "lurk/presence/{t}",
-    "support_read/{t}", "giveaway_log/{t}",
-    "radar_analytics/{t}", "streamdex_planner/{t}", "streamdex_clips/{t}",
-    "streamdex_web_auth/{t}", "streamdex_tool_usage/{t}",
-    "creator_profiles/{t}", "presence/{t}",
-]
-# Wird angezeigt und exportiert, aber NICHT gelöscht (Kauf-/Freischaltungsdaten)
-_KEEP_PATHS = ["tour_skip/{t}", "shop/beta/{t}", "game_flags/streamers/{t}"]
+# All deletion/export roots are centralized in streamdex_security.py and tested.
+# Purchase/entitlement data is retained intentionally and disclosed in the UI.
+_DELETE_PATHS = list(ACCOUNT_DELETE_PATHS)
+_KEEP_PATHS = list(ACCOUNT_KEEP_PATHS)
 
 ACCOUNT_DATA_TABLE = """
 | Was | Wozu |
@@ -719,164 +684,295 @@ ACCOUNT_DATA_TABLE = """
 | Zähler (Giveaways, Check-ins, Spins, …) und Tagesstände | Statistiken und Verlauf im Dashboard |
 | Giveaway-Verlauf: Datum, Preis, Teilnehmerzahl (ohne Gewinner) | Giveaway-Verlauf im Dashboard |
 | Support-Nachrichten und Feedback | Support |
+| Ideen, Turniere, Glücksrad, Ziele, Moderationsprotokolle, Teamdaten, Quizbeiträge und Tool-Einstellungen | Deine privaten StreamDex-Werkzeuge |
+| Eigene Community-Beiträge, Stimmen, selbst erstellte Umfragen und Events | Community-Funktionen |
 | Freischaltungen und Kaufstatus | Games und Features, die du freigeschaltet hast |
 """
 
-
-def _account_area_label(path):
-    """Human-readable names for data-access and deletion error messages."""
-    root = str(path or "").strip("/").split("/", 1)[0]
-    labels = {
-        "stats": "StreamDex-Statistiken",
-        "stats_history": "Statistik-Verlauf",
-        "chats": "Chat-Nachrichten",
-        "chat_meta": "Chat-Metadaten",
-        "gifts": "Geschenke",
-        "lurk": "Lurk-Daten",
-        "support_read": "Support-Lesestatus",
-        "giveaway_log": "Giveaway-Verlauf",
-        "radar_analytics": "Insight-Verläufe",
-        "streamdex_planner": "Planner-Termine",
-        "streamdex_clips": "Clip-Sammlung",
-        "streamdex_web_auth": "Web-Anmeldedaten",
-        "streamdex_tool_usage": "Nutzungsstatistiken",
-        "presence": "Online-Status",
-        "creator_profiles": "Creator-Profil",
-        "creator_profile_slugs": "öffentlicher Profil-Link",
-        "streamdex_events": "Community-Events",
-        "feedback_inbox": "Feedback-Einträge",
-        "community_polls": "Community-Umfragen",
-    }
-    return labels.get(root, "Datenbereich")
+def _require_account_owner(tid):
+    if not has_active_user_session(st.session_state, tid):
+        raise PermissionError("Für diese Kontodaten ist eine gültige Sitzung des Eigentümers erforderlich.")
+    return str(tid)
 
 
-def _safe_get(path, errors=None):
-    try:
-        return db.reference(path).get()
-    except Exception:
-        if errors is not None:
-            message = f"{_account_area_label(path)} konnten nicht gelesen werden."
-            if message not in errors:
-                errors.append(message)
-            return None
-        return {"_fehler": "Datenbereich konnte nicht gelesen werden."}
-
-
-def _build_account_export_json(tid, data, exported_at=None):
-    """Build the account JSON export in one testable, deterministic place."""
-    payload = {
-        "exportiert_am": exported_at or datetime.now(TZ).isoformat(timespec="seconds"),
-        "twitch_id": str(tid),
-        "hinweis": "Zeitstempel (ts, last_seen, …) sind Millisekunden seit 1970 (UTC).",
-        "daten": data if isinstance(data, dict) else {},
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+def _safe_get(path):
+    """Fail closed: never turn a database read error into an apparently complete export."""
+    return db.reference(path).get()
 
 
 def _load_feedback(tid):
-    """Feedback-Einträge dieser Twitch-ID. Mit Index auf 'tid' direkt, sonst Fallback über 'ts' (letzte 1000)."""
-    ref = db.reference("feedback_inbox")
-    try:
-        data = ref.order_by_child("tid").equal_to(str(tid)).get() or {}
-    except Exception:
-        data = ref.order_by_child("ts").limit_to_last(1000).get() or {}
-    return {k: v for k, v in data.items() if isinstance(v, dict) and str(v.get("tid")) == str(tid)}
+    """Read the full inbox so export/deletion never silently ignores old records."""
+    data = _safe_get("feedback_inbox") or {}
+    if not isinstance(data, dict):
+        raise RuntimeError("Feedback-Daten haben ein ungültiges Format.")
+    return {
+        k: v for k, v in data.items()
+        if isinstance(v, dict) and str(v.get("tid") or "") == str(tid)
+    }
 
 
-def _collect_account_data(tid, errors=None):
-    """Collect the current account's data and optionally return readable per-area errors."""
-    errors = errors if errors is not None else []
+def _collect_account_data(tid):
+    """Collect account-owned data only; exclude secrets and other users' private fields."""
+    tid = _require_account_owner(tid)
     out = {}
-    for path in _KEEP_PATHS + _DELETE_PATHS:
-        p = path.format(t=tid)
-        val = _safe_get(p, errors=errors)
-        if val not in (None, {}, []):
-            out[p] = val
-    try:
-        fb = _load_feedback(tid)
-        if fb:
-            out["feedback_inbox (nur deine Einträge)"] = fb
-    except Exception:
-        message = "Feedback-Einträge konnten nicht gelesen werden."
-        if message not in errors:
-            errors.append(message)
-    events = _safe_get("streamdex_events", errors=errors)
-    if isinstance(events, dict):
-        own_events = {
-            key: value for key, value in events.items()
-            if isinstance(value, dict) and str(value.get("owner_tid") or "") == str(tid)
-        }
-        if own_events:
-            out["streamdex_events (eigene Events)"] = own_events
+    for template in _KEEP_PATHS + _DELETE_PATHS:
+        path = account_path(template, tid)
+        value = _safe_get(path)
+        if value not in (None, {}, []):
+            out[path] = value
+
+    community = {}
+
+    # User-authored feedback and the current user's votes, without exporting voter IDs.
+    feedback_root = _safe_get("feedback_inbox") or {}
+    own_feedback, feedback_votes = {}, {}
+    if isinstance(feedback_root, dict):
+        for key, value in feedback_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = bool(votes.get(tid))
+                own_feedback[str(key)] = row
+            elif tid in votes:
+                feedback_votes[str(key)] = votes[tid]
+    if own_feedback:
+        community["feedback_submissions"] = own_feedback
+    if feedback_votes:
+        community["feedback_votes"] = feedback_votes
+
+    # Community wishlist: include own posts and own vote records only.
+    wishlist_root = _safe_get("streamdex_community_wishlist") or {}
+    own_wishes, wishlist_votes = {}, {}
+    if isinstance(wishlist_root, dict):
+        for key, value in wishlist_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("author_tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = tid in votes
+                own_wishes[str(key)] = row
+            elif tid in votes:
+                wishlist_votes[str(key)] = votes[tid]
+    if own_wishes:
+        community["wishlist_posts"] = own_wishes
+    if wishlist_votes:
+        community["wishlist_votes"] = wishlist_votes
+
+    # Polls: never export other participants' vote identities or answers.
+    poll_root = _safe_get("community_polls") or {}
+    own_polls, poll_votes = {}, {}
+    if isinstance(poll_root, dict):
+        for key, value in poll_root.items():
+            if not isinstance(value, dict):
+                continue
+            votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+            if str(value.get("created_by") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "votes"}
+                row["vote_count"] = len(votes)
+                row["my_vote"] = votes.get(tid)
+                own_polls[str(key)] = row
+            elif tid in votes:
+                poll_votes[str(key)] = votes[tid]
+    if own_polls:
+        community["polls_created"] = own_polls
+    if poll_votes:
+        community["poll_votes"] = poll_votes
+
+    # Quiz rooms are shared. Include one's own rooms with only one's own answers,
+    # plus answers submitted by this account in other rooms.
+    quiz_root = _safe_get("streamdex_quiz_rooms") or {}
+    own_rooms, quiz_answers = {}, {}
+    if isinstance(quiz_root, dict):
+        for code, value in quiz_root.items():
+            if not isinstance(value, dict):
+                continue
+            answers = value.get("answers") if isinstance(value.get("answers"), dict) else {}
+            my_answers = answers.get(tid)
+            if my_answers not in (None, {}, []):
+                quiz_answers[str(code)] = my_answers
+            if str(value.get("created_by") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "answers"}
+                row["participant_count"] = len(answers)
+                if my_answers not in (None, {}, []):
+                    row["my_answers"] = my_answers
+                own_rooms[str(code)] = row
+    if own_rooms:
+        community["quiz_rooms_created"] = own_rooms
+    if quiz_answers:
+        community["quiz_answers"] = quiz_answers
+
+    # Own events only; participant records belong to other users and are not exported.
+    events_root = _safe_get("streamdex_events") or {}
+    own_events = {}
+    if isinstance(events_root, dict):
+        for event_id, value in events_root.items():
+            if isinstance(value, dict) and str(value.get("owner_tid") or "") == tid:
+                row = {k: v for k, v in value.items() if k != "participants"}
+                participants = value.get("participants") if isinstance(value.get("participants"), dict) else {}
+                row["participant_count"] = len(participants)
+                own_events[str(event_id)] = row
+    if own_events:
+        community["events_created"] = own_events
+
+    if community:
+        out["community (nur eigene Beiträge und Stimmen)"] = community
     return out
 
+
 def _delete_account_data(tid):
-    """Delete account-owned data and return (number of removals, readable error messages)."""
+    """Delete account-owned records. Failures are reported without exposing raw database errors."""
+    tid = _require_account_owner(tid)
     removed, errors = 0, []
 
-    try:
-        for key in list(_load_feedback(tid)):
-            db.reference(f"feedback_inbox/{key}").delete()
-            removed += 1
-    except Exception:
-        errors.append("Deine Feedback-Einträge konnten nicht gelöscht werden.")
+    def read_root(path, label):
+        try:
+            value = _safe_get(path)
+            return value if isinstance(value, dict) else {}
+        except Exception as exc:
+            errors.append(f"{label}: {type(exc).__name__}")
+            return None
 
-    try:
-        profile = db.reference(f"creator_profiles/{tid}").get() or {}
-        old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
-        if old_slug and str(db.reference(f"creator_profile_slugs/{old_slug}").get() or "") == str(tid):
-            db.reference(f"creator_profile_slugs/{old_slug}").delete()
-    except Exception:
-        errors.append("Dein öffentlicher Profil-Link konnte nicht freigegeben werden.")
+    # Remove the user's votes from community posts and polls, then remove their own posts.
+    for root_path, owner_field, label in (
+        ("feedback_inbox", "tid", "feedback_inbox"),
+        ("streamdex_community_wishlist", "author_tid", "streamdex_community_wishlist"),
+        ("community_polls", "created_by", "community_polls"),
+    ):
+        root = read_root(root_path, label)
+        if root is None:
+            continue
+        for key, value in root.items():
+            if not isinstance(value, dict):
+                continue
+            is_owner = str(value.get(owner_field) or "") == tid
+            try:
+                votes = value.get("votes") if isinstance(value.get("votes"), dict) else {}
+                if tid in votes:
+                    db.reference(f"{root_path}/{key}/votes/{tid}").delete()
+                    removed += 1
+                if is_owner:
+                    db.reference(f"{root_path}/{key}").delete()
+                    removed += 1
+            except Exception as exc:
+                errors.append(f"{label}: {type(exc).__name__}")
 
-    try:
-        global_events = db.reference("streamdex_events").get() or {}
-        if isinstance(global_events, dict):
-            for event_id, event in global_events.items():
-                if isinstance(event, dict) and str(event.get("owner_tid") or "") == str(tid):
+    # Quiz answers are keyed by Twitch ID inside shared rooms; delete only this user's
+    # answer records in other people's rooms. Delete rooms created by the departing user.
+    quiz_root = read_root("streamdex_quiz_rooms", "streamdex_quiz_rooms")
+    if quiz_root is not None:
+        for code, room in quiz_root.items():
+            if not isinstance(room, dict):
+                continue
+            try:
+                if str(room.get("created_by") or "") == tid:
+                    db.reference(f"streamdex_quiz_rooms/{code}").delete()
+                    removed += 1
+                elif tid in (room.get("answers") if isinstance(room.get("answers"), dict) else {}):
+                    db.reference(f"streamdex_quiz_rooms/{code}/answers/{tid}").delete()
+                    removed += 1
+            except Exception as exc:
+                errors.append(f"streamdex_quiz_rooms: {type(exc).__name__}")
+
+    # Remove public events owned by this account, including participant lists on those events.
+    events_root = read_root("streamdex_events", "streamdex_events")
+    if events_root is not None:
+        for event_id, event in events_root.items():
+            if isinstance(event, dict) and str(event.get("owner_tid") or "") == tid:
+                try:
                     db.reference(f"streamdex_events/{event_id}").delete()
                     removed += 1
-    except Exception:
-        errors.append("Deine Community-Events konnten nicht gelöscht werden.")
+                except Exception as exc:
+                    errors.append(f"streamdex_events: {type(exc).__name__}")
 
-    for path in _DELETE_PATHS:
-        p = path.format(t=tid)
+    # Clean the public profile slug mapping only when it still points to this account.
+    try:
+        profile = _safe_get(account_path("creator_profiles/{t}", tid)) or {}
+        old_slug = str(profile.get("slug") or "") if isinstance(profile, dict) else ""
+        if old_slug and re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", old_slug):
+            if str(_safe_get(f"creator_profile_slugs/{old_slug}") or "") == tid:
+                db.reference(f"creator_profile_slugs/{old_slug}").delete()
+                removed += 1
+    except Exception as exc:
+        errors.append(f"creator_profile_slugs: {type(exc).__name__}")
+
+    # Presence is intentionally the last path removed, and only if every prior
+    # deletion succeeded. Keeping it lets the signed-in owner retry a partial cleanup.
+    for template in _DELETE_PATHS:
+        if template == "presence/{t}" and errors:
+            break
+        path = account_path(template, tid)
         try:
-            ref = db.reference(p)
+            ref = db.reference(path)
             if ref.get() is not None:
                 ref.delete()
                 removed += 1
-        except Exception:
-            errors.append(f"{_account_area_label(p)} konnten nicht gelöscht werden.")
+        except Exception as exc:
+            errors.append(f"{path}: {type(exc).__name__}")
+    return removed, errors
 
-    return removed, list(dict.fromkeys(errors))
+
+def _has_active_desktop_client(tid):
+    """Fail closed if either desktop client reports a fresh/unknown online heartbeat."""
+    now_ms = int(time.time() * 1000)
+    for path in (f"presence/{tid}", f"lurk/presence/{tid}"):
+        try:
+            row = db.reference(path).get() or {}
+        except Exception:
+            return True
+        if not isinstance(row, dict) or row.get("status") != "online":
+            continue
+        try:
+            seen = int(row.get("last_seen") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return True
+        if not seen:
+            return True
+        if seen < 10_000_000_000:
+            seen *= 1000
+        if 0 <= now_ms - seen <= 150_000:
+            return True
+    return False
+
 
 def _render_account_tab(tid, username, is_online):
+    try:
+        _require_account_owner(tid)
+    except PermissionError:
+        st.error("Deine Sitzung ist abgelaufen oder passt nicht zu diesem Konto. Bitte melde dich erneut an.")
+        return
+
     st.subheader("🧾 Konto & Datenschutz")
-    st.caption("Hier siehst du, welche Daten Streamdex unter deiner Twitch-ID gespeichert hat, kannst sie exportieren "
-               "oder löschen.")
+    st.caption("Hier siehst du, welche Daten StreamDex unter deiner Twitch-ID gespeichert hat, kannst sie vollständig exportieren oder löschen.")
     with st.expander("Was wird gespeichert und wozu?"):
         st.markdown(ACCOUNT_DATA_TABLE)
 
-    # --- Daten ansehen & exportieren (wird erst auf Klick geladen) ---
     st.markdown("### 📥 Meine Daten")
     if st.button("Meine Daten laden", key="acct_load"):
-        export_errors = []
-        account_data = _collect_account_data(tid, errors=export_errors)
-        st.session_state["acct_data"] = {"tid": tid, "data": account_data, "errors": export_errors}
+        st.session_state.pop("acct_data", None)
+        try:
+            st.session_state["acct_data"] = {"tid": str(tid), "data": _collect_account_data(tid)}
+        except Exception:
+            st.error("Der Export konnte nicht vollständig erstellt werden. Es wurden keine unvollständigen Daten zum Download bereitgestellt.")
     cached = st.session_state.get("acct_data")
-    if cached and cached.get("tid") == tid:
-        data = cached.get("data") or {}
-        export_errors = cached.get("errors") or []
-        if export_errors:
-            st.warning("Einige Datenbereiche konnten nicht vollständig gelesen werden: " + " ".join(export_errors)
-                       + " Bitte prüfe die Firebase-Berechtigungen und lade die Daten erneut.")
-        if not data and not export_errors:
+    if cached and cached.get("tid") == str(tid):
+        data = cached["data"]
+        if not data:
             st.info("Unter deiner Twitch-ID sind keine Daten gespeichert.")
-        elif data:
+        else:
+            payload = {
+                "exportiert_am": datetime.now(TZ).isoformat(timespec="seconds"),
+                "twitch_id": str(tid),
+                "hinweis": "Zeitstempel können Millisekunden seit 1970 (UTC) sein. Öffentliche Community-Beiträge werden ohne fremde Abstimmungs- oder Teilnehmerdaten exportiert.",
+                "daten": data,
+            }
             st.download_button(
                 "⬇️ Alles als JSON herunterladen",
-                data=_build_account_export_json(tid, data),
+                data=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
                 file_name=f"streamdex_daten_{tid}.json",
                 mime="application/json",
                 key="acct_dl",
@@ -886,33 +982,39 @@ def _render_account_tab(tid, username, is_online):
                     st.json(val)
 
     st.divider()
-
-    # --- Löschen ---
     st.markdown("### 🗑️ Meine Daten löschen")
     st.warning(
-        "Gelöscht werden Status, Statistiken, Verlauf, Support-Chat und deine Feedback-Einträge auf dem Server. "
-        "Das lässt sich **nicht rückgängig machen**."
+        "Die Löschung entfernt private Daten und eigene Community-Beiträge, darunter Ideen, Planner, Clips, "
+        "Moderationslogs, Teamdaten, eigene Umfragen/Quizräume und selbst erstellte Events. "
+        "Das ist nicht rückgängig zu machen und kann geteilte Community-Inhalte entfernen."
     )
     st.markdown(
-        "**Bleibt bestehen:** Kauf- und Freischaltungsdaten (damit bezahlte Games erhalten bleiben), "
-        "die Sperrliste (Missbrauchsschutz) und alles, was nur auf deinem PC liegt (Einstellungen, Logs). "
-        "Dein Twitch-Konto ist nicht betroffen. Startest du die App danach wieder, legt sie neue Einträge an."
+        "**Bleibt bestehen:** Kauf-/Freischaltungsdaten, Beta-Zugang, Game-Freigaben und erforderliche Sperrlisteninformationen. "
+        "Öffentliche Event-Anmeldungen ohne Twitch-ID lassen sich nicht automatisch deinem Konto zuordnen. "
+        "Dein Twitch-Konto und lokal gespeicherte PC-Einstellungen/Logs werden nicht verändert."
     )
-    if is_online:
-        st.info("Deine Desktop-App läuft gerade und würde die Daten sofort neu anlegen. "
-                "Schließe die App zuerst, warte etwa 3 Minuten, bis dein Status „Offline“ ist, und lade diese Seite neu.")
+    clients_online = bool(is_online) or _has_active_desktop_client(tid)
+    if clients_online:
+        st.info("Mindestens eine StreamDex-Desktop-App meldet sich noch online oder ihr Status ist nicht zuverlässig prüfbar. "
+                "Schließe StreamDex und Lurk, warte bis beide offline sind und lade diese Seite erneut.")
     confirm = st.checkbox("Ich habe verstanden, dass meine Daten dauerhaft gelöscht werden.", key="acct_confirm")
     typed = st.text_input(f"Zur Bestätigung deinen Twitch-Namen eingeben: **{username}**", key="acct_typed")
-    ready = confirm and typed.strip().lower() == str(username).strip().lower() and not is_online
+    ready = confirm and typed.strip().casefold() == str(username).strip().casefold() and not clients_online
     if st.button("🗑️ Endgültig löschen", type="primary", disabled=not ready, key="acct_delete"):
-        removed, errors = _delete_account_data(tid)
+        try:
+            removed, errors = _delete_account_data(tid)
+        except PermissionError:
+            st.error("Die Sitzung ist abgelaufen. Bitte melde dich erneut an, bevor du Daten löschst.")
+            return
         if errors:
-            st.error("Die Kontolöschung war unvollständig. Diese Bereiche sind betroffen: "
-                     + " ".join(errors) + " Bitte behebe die Firebase-Berechtigungen und starte den Löschvorgang erneut.")
+            st.error("Nicht alle Daten konnten gelöscht werden. Die übrigen Bereiche werden angezeigt; lade die Seite neu und versuche es erneut. "
+                     f"(Betroffene Bereiche: {', '.join(errors)})")
         else:
-            st.session_state.pop("authenticated_tid", None)
-            st.session_state.pop("acct_data", None)
+            # Clear OAuth tokens and all stale account/widget state on successful deletion.
+            st.session_state.clear()
             st.session_state["acct_deleted"] = removed
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
             st.rerun()
 
 
@@ -1553,10 +1655,14 @@ def render_streamer_dashboard(games):
     if token_arg:
         valid_tid = _verify_and_consume_token(token_arg)
         if valid_tid:
+            for key in (
+                "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+                "twitch_oauth_expires_at", "twitch_oauth_scopes", "twitch_profile", "acct_data",
+            ):
+                st.session_state.pop(key, None)
             st.session_state["authenticated_tid"] = valid_tid
             st.session_state["authenticated_at"] = time.time()
             st.session_state["auth_method"] = "desktop"
-            st.session_state.pop("twitch_profile", None)
             st.session_state.pop("dashboard_reauth_required", None)
             # Token aus URL entfernen für saubere Adresse
             st.query_params.clear()
@@ -1567,14 +1673,16 @@ def render_streamer_dashboard(games):
 
     # 2. Prüfen ob Streamer eingeloggt ist
     authed_tid = st.session_state.get("authenticated_tid")
-    if authed_tid:
-        started = st.session_state.setdefault("authenticated_at", time.time())
-        if time.time() - started > SESSION_MAX_AGE_S:
-            for k in ("authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data"):
-                st.session_state.pop(k, None)
-            st.session_state["session_expired"] = True
-            st.session_state["dashboard_reauth_required"] = True
-            authed_tid = None
+    if authed_tid and not has_active_user_session(st.session_state, authed_tid):
+        for k in (
+            "authenticated_tid", "authenticated_at", "auth_method", "twitch_profile", "acct_data",
+            "twitch_oauth_tid", "twitch_oauth_access_token", "twitch_oauth_refresh_token",
+            "twitch_oauth_expires_at", "twitch_oauth_scopes",
+        ):
+            st.session_state.pop(k, None)
+        st.session_state["session_expired"] = True
+        st.session_state["dashboard_reauth_required"] = True
+        authed_tid = None
 
     if authed_tid:
         hero.markdown(
