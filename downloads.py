@@ -11,6 +11,9 @@ import urllib.request
 import streamlit as st
 from firebase_admin import db
 
+from privacy_security import is_valid_twitch_id
+from r2_storage import create_presigned_download_url, is_valid_r2_object_key, r2_is_configured
+
 SERVER_TS = {".sv": "timestamp"}
 
 GITHUB_REPO = "FreeSchok01/Givewaytool"      # öffentliche StreamDex-Version
@@ -102,6 +105,65 @@ def lurk_repo(cfg=None):
     cfg = cfg if cfg is not None else settings()
     repo = str(cfg.get("lurk_repo") or "").strip()
     return repo if REPO_RE.match(repo) else LURK_REPO
+
+
+def render_owned_game_downloads(tid):
+    """Render private R2 links only for games owned/unlocked by the authenticated Twitch account."""
+    if not is_valid_twitch_id(tid):
+        st.error("Deine Sitzung ist ungültig. Bitte melde dich erneut an.")
+        return
+
+    # Strictly require a per-account unlock/ownership flag. Global free-game flags
+    # do not grant access to private R2 files.
+    try:
+        own_flags = db.reference(f"game_flags/streamers/{tid}").get() or {}
+        unlocked = {
+            game_id for game_id, enabled in own_flags.items()
+            if isinstance(own_flags, dict) and enabled is True
+        } if isinstance(own_flags, dict) else set()
+        items = db.reference("shop/items").get() or {}
+    except Exception:
+        st.warning("Deine Game-Freigaben sind gerade nicht erreichbar.")
+        return
+
+    if not unlocked:
+        st.caption("Für dein Konto sind aktuell keine Games freigeschaltet.")
+        return
+
+    links = {}
+    if isinstance(items, dict):
+        for item_id, item in items.items():
+            if not isinstance(item, dict) or item.get("kind", "game") != "game":
+                continue
+            key = str(item.get("r2_object_key") or "").strip()
+            if not is_valid_r2_object_key(key):
+                continue
+            game_ids = item.get("games")
+            if not isinstance(game_ids, list):
+                continue
+            for game_id in game_ids:
+                if game_id in unlocked and game_id not in links:
+                    links[game_id] = {
+                        "name": str(item.get("name") or game_id)[:120],
+                        "key": key,
+                    }
+
+    st.markdown("#### 🎮 Deine freigeschalteten Game-Downloads")
+    if not links:
+        st.info("Für deine freigeschalteten Games sind noch keine privaten R2-Dateien hinterlegt.")
+        return
+    if not r2_is_configured():
+        st.warning("Private Game-Downloads sind noch nicht konfiguriert. Bitte die R2-Secrets in Streamlit hinterlegen.")
+        return
+
+    for game_id, entry in sorted(links.items(), key=lambda pair: pair[1]["name"].casefold()):
+        if st.button(f"🔐 Download: {entry['name']}", key=f"r2_download_{game_id}", use_container_width=True):
+            url = create_presigned_download_url(entry["key"])
+            if url:
+                st.link_button("⬇️ Datei jetzt herunterladen", url, key=f"r2_download_link_{game_id}", use_container_width=True)
+                st.caption("Der Link ist 5 Minuten gültig. Behandle ihn wie ein Passwort und teile ihn nicht.")
+            else:
+                st.error("Der Download-Link konnte gerade nicht erstellt werden. Bitte versuche es später erneut.")
 
 
 def _version_tuple(v):
