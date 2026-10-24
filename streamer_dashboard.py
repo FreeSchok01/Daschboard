@@ -941,27 +941,58 @@ def _delete_account_data(tid):
     return removed, errors
 
 
+def _has_active_desktop_client(tid):
+    """Fail closed if either desktop client reports a fresh/unknown online heartbeat."""
+    now_ms = int(time.time() * 1000)
+    for path in (f"presence/{tid}", f"lurk/presence/{tid}"):
+        try:
+            row = db.reference(path).get() or {}
+        except Exception:
+            return True
+        if not isinstance(row, dict) or row.get("status") != "online":
+            continue
+        try:
+            seen = int(row.get("last_seen") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return True
+        if not seen:
+            return True
+        if seen < 10_000_000_000:
+            seen *= 1000
+        if 0 <= now_ms - seen <= 150_000:
+            return True
+    return False
+
+
 def _render_account_tab(tid, username, is_online):
+    try:
+        _require_account_owner(tid)
+    except PermissionError:
+        st.error("Deine Sitzung ist abgelaufen oder passt nicht zu diesem Konto. Bitte melde dich erneut an.")
+        return
+
     st.subheader("🧾 Konto & Datenschutz")
-    st.caption("Hier siehst du, welche Daten Streamdex unter deiner Twitch-ID gespeichert hat, kannst sie exportieren "
-               "oder löschen.")
+    st.caption("Hier siehst du, welche Daten StreamDex unter deiner Twitch-ID gespeichert hat, kannst sie vollständig exportieren oder löschen.")
     with st.expander("Was wird gespeichert und wozu?"):
         st.markdown(ACCOUNT_DATA_TABLE)
 
-    # --- Daten ansehen & exportieren (wird erst auf Klick geladen) ---
     st.markdown("### 📥 Meine Daten")
     if st.button("Meine Daten laden", key="acct_load"):
-        st.session_state["acct_data"] = {"tid": tid, "data": _collect_account_data(tid)}
+        st.session_state.pop("acct_data", None)
+        try:
+            st.session_state["acct_data"] = {"tid": str(tid), "data": _collect_account_data(tid)}
+        except Exception:
+            st.error("Der Export konnte nicht vollständig erstellt werden. Es wurden keine unvollständigen Daten zum Download bereitgestellt.")
     cached = st.session_state.get("acct_data")
-    if cached and cached.get("tid") == tid:
+    if cached and cached.get("tid") == str(tid):
         data = cached["data"]
         if not data:
             st.info("Unter deiner Twitch-ID sind keine Daten gespeichert.")
         else:
             payload = {
                 "exportiert_am": datetime.now(TZ).isoformat(timespec="seconds"),
-                "twitch_id": tid,
-                "hinweis": "Zeitstempel (ts, last_seen, …) sind Millisekunden seit 1970 (UTC).",
+                "twitch_id": str(tid),
+                "hinweis": "Zeitstempel können Millisekunden seit 1970 (UTC) sein. Öffentliche Community-Beiträge werden ohne fremde Abstimmungs- oder Teilnehmerdaten exportiert.",
                 "daten": data,
             }
             st.download_button(
@@ -976,33 +1007,39 @@ def _render_account_tab(tid, username, is_online):
                     st.json(val)
 
     st.divider()
-
-    # --- Löschen ---
     st.markdown("### 🗑️ Meine Daten löschen")
     st.warning(
-        "Gelöscht werden Status, Statistiken, Verlauf, Support-Chat und deine Feedback-Einträge auf dem Server. "
-        "Das lässt sich **nicht rückgängig machen**."
+        "Die Löschung entfernt private Daten und eigene Community-Beiträge, darunter Ideen, Planner, Clips, "
+        "Moderationslogs, Teamdaten, eigene Umfragen/Quizräume und selbst erstellte Events. "
+        "Das ist nicht rückgängig zu machen und kann geteilte Community-Inhalte entfernen."
     )
     st.markdown(
-        "**Bleibt bestehen:** Kauf- und Freischaltungsdaten (damit bezahlte Games erhalten bleiben), "
-        "die Sperrliste (Missbrauchsschutz) und alles, was nur auf deinem PC liegt (Einstellungen, Logs). "
-        "Dein Twitch-Konto ist nicht betroffen. Startest du die App danach wieder, legt sie neue Einträge an."
+        "**Bleibt bestehen:** Kauf-/Freischaltungsdaten, Beta-Zugang, Game-Freigaben und erforderliche Sperrlisteninformationen. "
+        "Öffentliche Event-Anmeldungen ohne Twitch-ID lassen sich nicht automatisch deinem Konto zuordnen. "
+        "Dein Twitch-Konto und lokal gespeicherte PC-Einstellungen/Logs werden nicht verändert."
     )
-    if is_online:
-        st.info("Deine Desktop-App läuft gerade und würde die Daten sofort neu anlegen. "
-                "Schließe die App zuerst, warte etwa 3 Minuten, bis dein Status „Offline“ ist, und lade diese Seite neu.")
+    clients_online = bool(is_online) or _has_active_desktop_client(tid)
+    if clients_online:
+        st.info("Mindestens eine StreamDex-Desktop-App meldet sich noch online oder ihr Status ist nicht zuverlässig prüfbar. "
+                "Schließe StreamDex und Lurk, warte bis beide offline sind und lade diese Seite erneut.")
     confirm = st.checkbox("Ich habe verstanden, dass meine Daten dauerhaft gelöscht werden.", key="acct_confirm")
     typed = st.text_input(f"Zur Bestätigung deinen Twitch-Namen eingeben: **{username}**", key="acct_typed")
-    ready = confirm and typed.strip().lower() == str(username).strip().lower() and not is_online
+    ready = confirm and typed.strip().casefold() == str(username).strip().casefold() and not clients_online
     if st.button("🗑️ Endgültig löschen", type="primary", disabled=not ready, key="acct_delete"):
-        removed, errors = _delete_account_data(tid)
+        try:
+            removed, errors = _delete_account_data(tid)
+        except PermissionError:
+            st.error("Die Sitzung ist abgelaufen. Bitte melde dich erneut an, bevor du Daten löschst.")
+            return
         if errors:
-            st.error("Nicht alles konnte gelöscht werden. Bitte versuche es erneut oder melde dich beim Support. "
-                     f"(Betroffen: {', '.join(errors)})")
+            st.error("Nicht alle Daten konnten gelöscht werden. Die übrigen Bereiche werden angezeigt; lade die Seite neu und versuche es erneut. "
+                     f"(Betroffene Bereiche: {', '.join(errors)})")
         else:
-            st.session_state.pop("authenticated_tid", None)
-            st.session_state.pop("acct_data", None)
+            # Clear OAuth tokens and all stale account/widget state on successful deletion.
+            st.session_state.clear()
             st.session_state["acct_deleted"] = removed
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
             st.rerun()
 
 
