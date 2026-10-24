@@ -185,7 +185,8 @@ def test_twitch_oauth_state_is_signed_and_rejects_tampering():
 
 def test_twitch_authorization_url_requests_expected_scopes(monkeypatch, memory_db):
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "test-secret"))
-    url, error = streamer_dashboard._twitch_authorization_url()
+    monkeypatch.setattr(streamer_dashboard, "_oauth_browser_binding_status", lambda: (True, "browser_binding_12345678901234567890"))
+    url, error = streamer_dashboard._twitch_authorization_url("browser_binding_12345678901234567890")
 
     assert error is None
     query = parse_qs(urlparse(url).query)
@@ -200,12 +201,15 @@ def test_twitch_authorization_url_requests_expected_scopes(monkeypatch, memory_d
 def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypatch, memory_db):
     fake_st = _fake_streamlit({"code": "temporary-code", "state": "valid-state"})
     monkeypatch.setattr(streamer_dashboard, "st", fake_st)
+    browser_binding = "browser_binding_12345678901234567890"
+    monkeypatch.setattr(streamer_dashboard, "_oauth_browser_binding_status", lambda: (True, browser_binding))
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
     monkeypatch.setattr(streamer_dashboard, "_valid_twitch_state", lambda state, secret: state == "valid-state")
     now_ms = int(time.time() * 1000)
     memory_db.reference(
         f"streamdex_oauth_states/{streamer_dashboard.oauth_state_key('valid-state')}"
     ).set({
+        "browser_binding_hash": streamer_dashboard._oauth_browser_binding_key(browser_binding),
         "issued_at_ms": now_ms,
         "expires_at_ms": now_ms + 600_000,
         "consumed": False,
@@ -248,9 +252,35 @@ def test_twitch_oauth_callback_keeps_validated_account_in_session_only(monkeypat
     assert "valid-state" not in serialized_db  # Only a digest is allowed while a state is pending.
 
 
+
+def test_twitch_oauth_callback_rejects_state_from_another_browser(monkeypatch, memory_db):
+    fake_st = _fake_streamlit({"code": "temporary-code", "state": "valid-state"})
+    monkeypatch.setattr(streamer_dashboard, "st", fake_st)
+    monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
+    monkeypatch.setattr(streamer_dashboard, "_valid_twitch_state", lambda state, secret: state == "valid-state")
+    monkeypatch.setattr(streamer_dashboard, "_oauth_browser_binding_status", lambda: (True, "other_browser_binding_1234567890"))
+    now_ms = int(time.time() * 1000)
+    memory_db.reference(
+        f"streamdex_oauth_states/{streamer_dashboard.oauth_state_key('valid-state')}"
+    ).set({
+        "browser_binding_hash": streamer_dashboard._oauth_browser_binding_key("original_browser_binding_1234567890"),
+        "issued_at_ms": now_ms,
+        "expires_at_ms": now_ms + 600_000,
+        "consumed": False,
+    })
+    calls = []
+    monkeypatch.setattr(streamer_dashboard, "_twitch_http_json", lambda *a, **k: calls.append(a) or {})
+
+    assert streamer_dashboard.handle_twitch_oauth_callback() is True
+    assert not calls
+    assert "bereits verwendet oder ist abgelaufen" in fake_st.session_state["twitch_login_notice"]
+    assert "authenticated_tid" not in fake_st.session_state
+
+
 def test_twitch_oauth_callback_rejects_invalid_state_with_clear_notice(monkeypatch):
     fake_st = _fake_streamlit({"code": "temporary-code", "state": "forged-state"})
     monkeypatch.setattr(streamer_dashboard, "st", fake_st)
+    monkeypatch.setattr(streamer_dashboard, "_oauth_browser_binding_status", lambda: (True, "browser_binding_12345678901234567890"))
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
     monkeypatch.setattr(streamer_dashboard, "_valid_twitch_state", lambda state, secret: False)
     calls = []
