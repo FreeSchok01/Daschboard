@@ -23,8 +23,31 @@ def _fmt_ts(value):
         return "Gerade eben"
 
 
+def _load_recent(path, order_child, limit):
+    """Load recent records efficiently, with a compatibility fallback if Firebase lacks an index."""
+    try:
+        data = db.reference(path).order_by_child(order_child).limit_to_last(limit).get() or {}
+    except Exception as query_error:
+        # Older Firebase rules may not define .indexOn for ts/created_at yet.
+        # Retry without the indexed query so the community page remains usable.
+        try:
+            data = db.reference(path).get() or {}
+        except Exception:
+            raise query_error
+        if not isinstance(data, dict):
+            return {}
+        def sort_key(pair):
+            value = pair[1] if isinstance(pair[1], dict) else {}
+            try:
+                return int(value.get(order_child) or 0)
+            except (TypeError, ValueError):
+                return 0
+        data = dict(sorted(data.items(), key=sort_key)[-limit:])
+    return data if isinstance(data, dict) else {}
+
+
 def _load_suggestions():
-    data = db.reference("feedback_inbox").order_by_child("ts").limit_to_last(MAX_SUGGESTIONS).get() or {}
+    data = _load_recent("feedback_inbox", "ts", MAX_SUGGESTIONS)
     items = []
     for key, value in data.items():
         if not isinstance(value, dict) or not value.get("community_visible"):
@@ -39,7 +62,7 @@ def _load_suggestions():
 
 
 def _load_my_feedback(tid):
-    data = db.reference("feedback_inbox").order_by_child("ts").limit_to_last(MAX_SUGGESTIONS).get() or {}
+    data = _load_recent("feedback_inbox", "ts", MAX_SUGGESTIONS)
     items = []
     for key, value in data.items():
         if isinstance(value, dict) and str(value.get("tid") or "") == str(tid):
@@ -50,7 +73,7 @@ def _load_my_feedback(tid):
 
 
 def _load_polls():
-    data = db.reference("community_polls").order_by_child("created_at").limit_to_last(MAX_POLLS).get() or {}
+    data = _load_recent("community_polls", "created_at", MAX_POLLS)
     result = []
     for key, value in data.items():
         if not isinstance(value, dict):
