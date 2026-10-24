@@ -593,7 +593,7 @@ def render_shop(games):
     if cfg.get("open", True) is False:
         st.markdown(
             '<div class="sd-shop-empty"><strong>Shop gerade pausiert.</strong><br>'
-            'Wir sind bald wieder für dich da. Bereits gekaufte Downloads kannst du weiter unten über deinen Bestellcode aufrufen.</div>',
+            'Der Verkauf ist aktuell geschlossen. Bereits freigeschaltete Games bleiben erhalten. Schau später wieder vorbei.</div>',
             unsafe_allow_html=True,
         )
         return
