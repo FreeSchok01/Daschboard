@@ -333,7 +333,8 @@ def games_panel():
         g_streamers = db.reference("game_flags/streamers").get() or {}
         rows = load_streamers()
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
         return
 
     st.subheader("🌍 Global")
@@ -409,7 +410,8 @@ def bans_panel(ns=""):
         bans_tw = db.reference("bans/twitch").get() or {}
         bans_hw = db.reference("bans/hwid").get() or {}
     except Exception as e:
-        st.error(f"Firebase-Fehler: {e}")
+        print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
         return
 
     st.subheader("🚫 Streamer ausschließen")
@@ -490,7 +492,8 @@ def support_main():
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_fb:
         feedback_panel(me["name"], is_admin=False, tool="streamdex")
     with tab_team:
@@ -632,7 +635,8 @@ def main():
         try:
             stats_panel(load_streamers(), GAMES)
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_games:
         games_panel()
     with tab_shop:
@@ -647,7 +651,8 @@ def main():
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_fb:
         feedback_panel(ADMIN_NAME, is_admin=True, tool="streamdex")
     with tab_bans:
@@ -656,7 +661,8 @@ def main():
         try:
             admin_supporter_panel()
         except Exception as e:
-            st.error(f"Firebase-Fehler: {e}")
+            print(f"[streamdex] Firebase operation failed: {type(e).__name__}")
+        st.error("Die Daten konnten nicht geladen werden. Bitte versuche es später erneut.")
     with tab_team:
         team_chat_panel(ADMIN_NAME)
 
