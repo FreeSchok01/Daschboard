@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import creator_profile
 import feedback_hub
 import onboarding
 import streamdex_suite
@@ -159,6 +160,7 @@ def memory_db(monkeypatch):
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
     monkeypatch.setattr(streamdex_suite, "db", database)
+    monkeypatch.setattr(creator_profile, "db", database)
     return database
 
 
@@ -478,3 +480,14 @@ def test_quiz_answers_and_room_management_are_account_scoped(memory_db):
     with pytest.raises(ValueError, match="geschlossen"):
         streamdex_suite._save_quiz_answer("ABC123", "88888", 0, "A")
 
+
+
+
+def test_profile_slug_reservation_cannot_be_claimed_by_another_account(memory_db):
+    assert creator_profile._claim_slug_reservation("creator-name", "12345")
+    assert not creator_profile._claim_slug_reservation("creator-name", "99999")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() == "12345"
+    assert not creator_profile._release_slug_reservation("creator-name", "99999")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() == "12345"
+    assert creator_profile._release_slug_reservation("creator-name", "12345")
+    assert memory_db.reference("creator_profile_slugs/creator-name").get() is None
