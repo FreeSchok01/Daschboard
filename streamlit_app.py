@@ -499,6 +499,11 @@ def main():
         # The one-time OAuth state is checked against Firebase before exchanging the code.
         init_firebase()
         if handle_twitch_oauth_callback():
+            # Normalize the browser URL after Twitch has returned. The OAuth
+            # redirect URI stays at the registered site root; the app then
+            # always lands on the explicit dashboard route.
+            st.query_params.clear()
+            st.query_params["dashboard"] = "1"
             st.rerun()
         return
 
