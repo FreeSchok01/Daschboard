@@ -14,6 +14,7 @@ import pytest
 import events
 import feedback_hub
 import onboarding
+import streamdex_suite
 import streamer_dashboard
 
 
@@ -160,6 +161,7 @@ def memory_db(monkeypatch):
     monkeypatch.setattr(streamer_dashboard, "db", database)
     monkeypatch.setattr(feedback_hub, "db", database)
     monkeypatch.setattr(events, "db", database)
+    monkeypatch.setattr(streamdex_suite, "db", database)
     return database
 
 
@@ -394,6 +396,25 @@ def test_guided_onboarding_has_a_clear_first_success_path():
 
 
 
+
+def test_quiz_room_code_reservation_never_overwrites_existing_rooms(monkeypatch, memory_db):
+    memory_db.reference("streamdex_quiz_rooms/ABC123").set({
+        "code": "ABC123", "created_by": "99999", "title": "Existing room",
+    })
+    candidates = iter(["ABC123", "DEF456"])
+    monkeypatch.setattr(streamdex_suite.secrets, "token_hex", lambda size: next(candidates))
+    questions = [{"question": "Example?", "options": ["A", "B"], "correct_index": 0}]
+
+    code = streamdex_suite._create_quiz_room("12345", "TestCreator", "New room", questions)
+
+    assert code == "DEF456"
+    assert memory_db.reference("streamdex_quiz_rooms/ABC123/title").get() == "Existing room"
+    created = memory_db.reference("streamdex_quiz_rooms/DEF456").get()
+    assert created["created_by"] == "12345"
+    assert created["title"] == "New room"
+    assert created["answers"] == {}
+
+
 def test_event_mutations_recheck_the_owner_before_writing(memory_db):
     event = {
         "owner_tid": "12345",
@@ -437,6 +458,9 @@ def test_event_registration_checks_status_capacity_and_duplicate_names_atomicall
     memory_db.reference("streamdex_events/event_123").update({"capacity": 2})
     with pytest.raises(ValueError, match="bereits angemeldet"):
         events._register_event_participant("event_123", "FirstPerson", "Twitch", "33333")
+    with pytest.raises(ValueError, match="StreamDex-Konto"):
+        events._register_event_participant("event_123", "ChangedName", "Twitch", "11111")
+    assert len(memory_db.reference("streamdex_events/event_123/participants").get()) == 1
 
     memory_db.reference("streamdex_events/event_123/status").set("closed")
     with pytest.raises(ValueError, match="geschlossen"):
