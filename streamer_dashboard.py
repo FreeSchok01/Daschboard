@@ -653,6 +653,20 @@ def _de(n):
     return f"{n:,}".replace(",", ".")
 
 
+def _fmt_twitch_started_at(value):
+    """Formatiert den Twitch-Startzeitpunkt in die lokale Dashboard-Zeitzone."""
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return "Zeitpunkt unbekannt"
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=TZ)
+        return parsed.astimezone(TZ).strftime("%d.%m.%Y, %H:%M Uhr")
+    except (TypeError, ValueError, OverflowError):
+        return "Zeitpunkt unbekannt"
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _load_own_twitch_stream_status(login):
     """Lädt den tatsächlichen Twitch-Live-Status mit einem kurzlebigen App-Token."""
@@ -718,7 +732,7 @@ def _render_streamer_home_panel(twitch_username, stats_data, presence, is_online
         with left:
             st.success("🔴 **Du bist LIVE auf Twitch**")
             st.markdown(f"**{html.escape(live.get('title') or 'Ohne Streamtitel')}**")
-            st.caption(f"🎮 {live.get('game') or 'Unbekannte Kategorie'} · Seit {live.get('started_at') or 'Zeitpunkt unbekannt'}")
+            st.caption(f"🎮 {live.get('game') or 'Unbekannte Kategorie'} · Start: {_fmt_twitch_started_at(live.get('started_at'))}")
         with right:
             st.metric("Aktuelle Zuschauer", _de(live.get("viewers", 0)))
             st.link_button("▶️ Stream öffnen", live["url"], use_container_width=True)
@@ -744,13 +758,18 @@ def _render_streamer_home_panel(twitch_username, stats_data, presence, is_online
                 st.rerun()
 
     st.markdown("### 📈 Deine Aktivität")
-    a, b, c = st.columns(3)
-    a.metric("Giveaways", _de(_num(stats_data.get("giveaways"))))
-    b.metric("Teilnahmen", _de(_num(stats_data.get("giveaway_participants"))))
-    c.metric("StreamDex-App", "Online" if is_online else "Offline",
-             help="Dieser Status beschreibt die StreamDex-App und nicht den Twitch-Live-Status.")
+    activity_cols = st.columns(5)
+    activity_cols[0].metric("Giveaways gesamt", _de(_num(stats_data.get("giveaways"))))
+    activity_cols[1].metric("Teilnahmen", _de(_num(stats_data.get("giveaway_participants"))))
+    activity_cols[2].metric("Giveaways · 7 Tage", _de(_num(stats_data.get("giveaways_7d"))))
+    activity_cols[3].metric("Giveaways · 30 Tage", _de(_num(stats_data.get("giveaways_30d"))))
+    activity_cols[4].metric(
+        "StreamDex-App", "Online" if is_online else "Offline",
+        help="Dieser Status beschreibt die StreamDex-App und nicht den Twitch-Live-Status.",
+    )
     if presence.get("last_seen"):
         st.caption(f"StreamDex zuletzt aktiv: {_fmt_ago(presence.get('last_seen'))}")
+    st.caption("Die Aktivitätszahlen stammen aus StreamDex. Twitch-Zuschauer werden separat live von Twitch geladen.")
 
 
 def _overview_html(presence, stats, games, have_games, beta_info, is_online):
