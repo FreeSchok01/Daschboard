@@ -175,6 +175,42 @@ def _fake_streamlit(query_params=None, session_state=None):
     )
 
 
+
+def test_own_twitch_stream_status_returns_live_details(monkeypatch):
+    streamer_dashboard._load_own_twitch_stream_status.clear()
+    monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
+    responses = iter([
+        {"access_token": "app-token"},
+        {"data": [{
+            "title": "Test stream", "game_name": "Just Chatting",
+            "viewer_count": 42, "started_at": "2026-10-25T10:00:00Z",
+        }]},
+    ])
+    monkeypatch.setattr(streamer_dashboard, "_twitch_http_json", lambda *args, **kwargs: next(responses))
+
+    result = streamer_dashboard._load_own_twitch_stream_status("Test_Channel")
+
+    assert result["available"] is True
+    assert result["live"] is True
+    assert result["title"] == "Test stream"
+    assert result["game"] == "Just Chatting"
+    assert result["viewers"] == 42
+    assert result["url"] == "https://www.twitch.tv/test_channel"
+    streamer_dashboard._load_own_twitch_stream_status.clear()
+
+
+def test_own_twitch_stream_status_handles_offline_channel(monkeypatch):
+    streamer_dashboard._load_own_twitch_stream_status.clear()
+    monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
+    responses = iter([{"access_token": "app-token"}, {"data": []}])
+    monkeypatch.setattr(streamer_dashboard, "_twitch_http_json", lambda *args, **kwargs: next(responses))
+
+    result = streamer_dashboard._load_own_twitch_stream_status("test_channel")
+
+    assert result == {"available": True, "live": False}
+    streamer_dashboard._load_own_twitch_stream_status.clear()
+
+
 def test_twitch_oauth_state_is_signed_and_rejects_tampering():
     state = streamer_dashboard._make_twitch_state("test-secret")
     assert streamer_dashboard._valid_twitch_state(state, "test-secret")
