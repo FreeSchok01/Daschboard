@@ -176,6 +176,12 @@ def _fake_streamlit(query_params=None, session_state=None):
 
 
 
+def test_fmt_twitch_started_at_uses_berlin_time():
+    assert streamer_dashboard._fmt_twitch_started_at("2026-10-25T10:00:00Z") == "25.10.2026, 11:00 Uhr"
+    assert streamer_dashboard._fmt_twitch_started_at("") == "Zeitpunkt unbekannt"
+    assert streamer_dashboard._fmt_twitch_started_at("not-a-date") == "Zeitpunkt unbekannt"
+
+
 def test_own_twitch_stream_status_returns_live_details(monkeypatch):
     streamer_dashboard._load_own_twitch_stream_status.clear()
     monkeypatch.setattr(streamer_dashboard, "_twitch_credentials", lambda: ("client-id", "client-secret"))
