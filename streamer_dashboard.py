@@ -653,6 +653,106 @@ def _de(n):
     return f"{n:,}".replace(",", ".")
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_own_twitch_stream_status(login):
+    """Lädt den tatsächlichen Twitch-Live-Status mit einem kurzlebigen App-Token."""
+    login = str(login or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,25}", login):
+        return {"available": False, "reason": "Kein gültiger Twitch-Login vorhanden."}
+    try:
+        client_id, client_secret = _twitch_credentials()
+        token_data = _twitch_http_json(
+            TWITCH_TOKEN_URL,
+            method="POST",
+            form={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "client_credentials",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        app_token = str(token_data.get("access_token") or "")
+        if not app_token:
+            return {"available": False, "reason": "Twitch-App-Token fehlt."}
+        query = urllib.parse.urlencode({"user_login": login})
+        response = _twitch_http_json(
+            f"https://api.twitch.tv/helix/streams?{query}",
+            headers={"Client-Id": client_id, "Authorization": f"Bearer {app_token}"},
+        )
+        streams = response.get("data", [])
+        if not isinstance(streams, list):
+            return {"available": False, "reason": "Unerwartete Twitch-Antwort."}
+        if not streams:
+            return {"available": True, "live": False}
+        stream = streams[0]
+        if not isinstance(stream, dict):
+            return {"available": False, "reason": "Unerwartete Twitch-Antwort."}
+        return {
+            "available": True,
+            "live": True,
+            "title": str(stream.get("title") or "")[:300],
+            "game": str(stream.get("game_name") or "Unbekannte Kategorie")[:100],
+            "viewers": max(0, int(stream.get("viewer_count") or 0)),
+            "started_at": str(stream.get("started_at") or ""),
+            "url": f"https://www.twitch.tv/{login}",
+        }
+    except Exception:
+        # Keine technischen Details oder API-Zugangsdaten in der Oberfläche ausgeben.
+        return {"available": False, "reason": "Twitch-Live-Daten sind gerade nicht erreichbar."}
+
+
+def _render_streamer_home_panel(twitch_username, stats_data, presence, is_online):
+    """Persönliches Creator-Control-Center mit echten Twitch-Daten und vorhandenen Dashboard-Routen."""
+    st.markdown(
+        '<div class="sdx-card" style="margin:8px 0 16px">'
+        '<div class="sdx-title">🎥 Dein Twitch-Kanal</div>'
+        '<div class="sdx-empty">Der Live-Status wird direkt bei Twitch abgefragt und bis zu 60 Sekunden zwischengespeichert.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    live = _load_own_twitch_stream_status(twitch_username)
+    if not live.get("available"):
+        st.warning("⚠️ Twitch-Live-Status gerade nicht verfügbar. Deine übrigen Dashboard-Daten bleiben verfügbar.")
+    elif live.get("live"):
+        left, right = st.columns([3, 1])
+        with left:
+            st.success("🔴 **Du bist LIVE auf Twitch**")
+            st.markdown(f"**{html.escape(live.get('title') or 'Ohne Streamtitel')}**")
+            st.caption(f"🎮 {live.get('game') or 'Unbekannte Kategorie'} · Seit {live.get('started_at') or 'Zeitpunkt unbekannt'}")
+        with right:
+            st.metric("Aktuelle Zuschauer", _de(live.get("viewers", 0)))
+            st.link_button("▶️ Stream öffnen", live["url"], use_container_width=True)
+    else:
+        st.info("⚪ **Du bist aktuell offline.** Wenn du live gehst, erscheinen hier Titel, Kategorie und Zuschauerzahl.")
+
+    st.markdown("### 📌 Schnellzugriff")
+    st.caption("Öffne die Bereiche, die du als Streamer am häufigsten brauchst.")
+    shortcuts = [
+        ("🗓️ Planner", "planner"),
+        ("🎬 Clips", "clips"),
+        ("📊 Insight", "radar"),
+        ("🤝 Community & Events", "community"),
+        ("♙ Creator-Profil", "profile"),
+        ("🧩 Ideas & Tools", "ideas"),
+    ]
+    cols = st.columns(3)
+    for index, (label, route) in enumerate(shortcuts):
+        with cols[index % 3]:
+            if st.button(label, key=f"sd_home_shortcut_{route}", use_container_width=True):
+                st.query_params.clear()
+                st.query_params[route] = "1"
+                st.rerun()
+
+    st.markdown("### 📈 Deine Aktivität")
+    a, b, c = st.columns(3)
+    a.metric("Giveaways", _de(_num(stats_data.get("giveaways"))))
+    b.metric("Teilnahmen", _de(_num(stats_data.get("giveaway_participants"))))
+    c.metric("StreamDex-App", "Online" if is_online else "Offline",
+             help="Dieser Status beschreibt die StreamDex-App und nicht den Twitch-Live-Status.")
+    if presence.get("last_seen"):
+        st.caption(f"StreamDex zuletzt aktiv: {_fmt_ago(presence.get('last_seen'))}")
+
+
 def _overview_html(presence, stats, games, have_games, beta_info, is_online):
     """Baut das Übersichts-HTML. Alles Dynamische wird escaped; bewusst ohne Zeilenumbrüche/Einrückung,
     damit Streamlit-Markdown den Block nicht als Code interpretiert."""
@@ -2014,6 +2114,7 @@ def render_streamer_dashboard(games):
         except Exception:
             pass
         render_first_steps(authed_tid)
+        _render_streamer_home_panel(twitch_username, stats_data, presence, is_online)
         st.markdown(OVERVIEW_CSS + _overview_html(presence, stats_data, games, have_games, beta_info, is_online),
                     unsafe_allow_html=True)
         if beta_info:
