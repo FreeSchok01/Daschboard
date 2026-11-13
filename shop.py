@@ -455,15 +455,7 @@ def cart_view(cart, items, have, durations=None, have_features=None):
         covered_features |= features
         covered_games |= set(item.get("games", []))
     total = sum(duration_price(items[item_id], int(durations.get(item_id, 0))) for item_id in kept)
-    single = {
-        game: duration_price(item, int(durations.get(next((key for key, value in items.items() if value is item), ""), 0)))
-        for item in items.values()
-        if item.get("kind", "game") == "game"
-        for game in item.get("games", [])
-    }
-    worth = sum((single.get(game) or Decimal(0)) for game in covered_games - set(have))
-    return kept, total, max(Decimal(0), worth - total), covered_games
-
+    return kept, total, Decimal(0), covered_games
 
 def validate_coupon(code):
     code = (code or "").strip().upper()
@@ -1330,8 +1322,11 @@ def _order_box():
                 st.session_state.pop(key, None)
                 st.rerun()
 
-def _cart_box(tid, name, items, have):
-    ids, total, savings, _ = cart_view(st.session_state.get("cart", []), items, have)
+def _cart_box(tid, name, items, have, have_features=None):
+    durations = st.session_state.setdefault("cart_durations", {})
+    ids, total, savings, _ = cart_view(
+        st.session_state.get("cart", []), items, have, durations, have_features
+    )
     with st.container(border=True):
         st.markdown(
             f'<div class="sd-shop-cart-head"><div class="ct">Dein Warenkorb</div>'
@@ -1341,16 +1336,20 @@ def _cart_box(tid, name, items, have):
         if not ids:
             st.markdown(
                 '<div class="sd-shop-empty"><strong>Noch ist hier Platz.</strong><br>'
-                'Wähle ein einzelnes Game oder ein Pack aus. Deine Auswahl erscheint hier.</div>',
+                'Wähle ein Game oder ein Paket und lege die gewünschte Laufzeit fest.</div>',
                 unsafe_allow_html=True,
             )
-            st.markdown('<div class="sd-shop-legal">🔒 Du bezahlst nur die Module, die du auswählst.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sd-shop-legal">🔒 Kaufrechte werden deinem Twitch-Konto zugeordnet.</div>', unsafe_allow_html=True)
             return
+        duration_labels = {months: label for months, label in DURATION_OPTIONS}
         for item_id in ids:
+            months = int(durations.get(item_id, 0))
+            price = duration_price(items[item_id], months)
             left, right = st.columns([5, 1])
             left.markdown(
                 f'<div class="sd-shop-cart-line"><b>{html.escape(items[item_id]["name"])}</b><br>'
-                f'<span class="sd-shop-total-label">{_price(items[item_id]["price"])} €</span></div>',
+                f'<span class="sd-shop-total-label">{html.escape(duration_labels.get(months, "Lifetime"))} · '
+                f'{price:.2f} €</span></div>',
                 unsafe_allow_html=True,
             )
             right.button("✕", key=f"x_{item_id}", on_click=_rm, args=(item_id,), help="Aus dem Warenkorb entfernen")
@@ -1374,10 +1373,8 @@ def _cart_box(tid, name, items, have):
         else:
             col_code, col_apply = st.columns([3, 1.5])
             code_input = col_code.text_input(
-                "Gutschein- oder Partner-Code",
-                key="coupon_in",
-                placeholder="Code eingeben",
-                label_visibility="collapsed",
+                "Gutschein- oder Partner-Code", key="coupon_in",
+                placeholder="Code eingeben", label_visibility="collapsed",
             )
             if col_apply.button("Einlösen", use_container_width=True):
                 good, _coupon, message = validate_coupon(code_input)
@@ -1390,9 +1387,7 @@ def _cart_box(tid, name, items, have):
         st.markdown('<div class="sd-shop-total-label">Gesamtsumme</div>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="sd-shop-total">{final:.2f} €</div>'
-            + (f'<span class="old">{total:.2f} €</span>' if discount > 0 else "")
-            + (f'<div style="margin-top:.35rem"><span class="badge save">Du sparst {savings + discount:.2f} €</span></div>'
-               if savings + discount > 0 else ""),
+            + (f'<span class="old">{total:.2f} €</span>' if discount > 0 else ""),
             unsafe_allow_html=True,
         )
         agree = st.checkbox(
@@ -1400,22 +1395,25 @@ def _cart_box(tid, name, items, have):
         )
         if st.button(
             "🎁 Kostenlos freischalten" if final == 0 else "Sichere Bestellung erstellen",
-            type="primary",
-            disabled=not agree,
-            use_container_width=True,
+            type="primary", disabled=not agree, use_container_width=True,
         ):
             try:
                 order_code, order_price = create_cart_order(
                     tid, name, ids, items, coupon_code if valid_coupon else "",
-                    st.session_state.get("gift_data"),
+                    st.session_state.get("gift_data"), durations=durations,
                 )
             except ValueError as exc:
                 st.error(str(exc))
             else:
                 st.session_state["cart"] = []
+                st.session_state["cart_durations"] = {}
                 if Decimal(order_price) == 0:
-                    st.session_state["flash"] = fulfill(order_code, manual=True)[1]
-                    st.session_state["download_order_code"] = order_code
+                    ok, message = fulfill(order_code, manual=True)
+                    if ok:
+                        st.session_state["flash"] = message
+                        st.session_state["download_order_code"] = order_code
+                    else:
+                        st.error(message)
                 else:
                     st.session_state["order"] = (order_code, order_price)
                     if paypal_checkout_enabled():
