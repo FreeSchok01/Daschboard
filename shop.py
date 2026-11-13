@@ -1,10 +1,11 @@
 """Streamdex-Shop: Einzel-Games, 4 Packs, Warenkorb. Bezahlung per StreamElements-Tip mit Bestellcode.
 Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nach ~60 s). Preise/Einstellungen: Admin-Tab 🛒 Shop."""
+import calendar
 import html
 import re
 import secrets
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlencode, urlparse
 
@@ -34,12 +35,287 @@ PACKS = {
 }
 
 
+
+# v6 shop catalogue: product IDs stay stable; access is granted by feature IDs.
+FEATURE_LABELS = {
+    "game.arena": "2D-Viewer-Arena", "game.mining": "Minen", "game.hilo": "Hi-Lo",
+    "game.slot": "Slot Machine", "game.megaslot": "Mega Slot", "game.fishing": "Angel Game",
+    "game.farming": "Farm Game", "game.race": "Sim Racing",
+    "heist.bank": "Bank Heist", "heist.train": "Zug-Überfall", "heist.treasure": "Schatzkarte",
+    "heist.casino": "Casino-Einbruch", "heist.jail": "Gefängnis", "heist.breakout": "Gefängnisausbruch",
+    "heist.gangs": "Banden", "heist.safecracker": "Safe-Knacker", "heist.pickpocket": "Taschenraub",
+    "heist.raffel": "Raffel um Points", "heist.gambel": "Gambel", "heist.points_raffle": "Punkte-Raffle",
+    "progress.daily_quests": "Tagesquests", "progress.weekly_quests": "Wochenquests",
+    "progress.achievements": "Erfolge", "progress.pets": "Haustiere", "progress.album": "Sammelalbum",
+    "progress.levels": "Fortschritt & Level", "progress.daily_rewards": "Tagesbelohnungen",
+    "panel.duels": "Panel-Duelle", "panel.lottery": "Tageslotterie", "panel.scratch_cards": "Rubbellose",
+    "panel.savings": "Sparkonto", "panel.store_plus": "Erweiterter Zuschauer-Store",
+}
+GAME_FEATURES = {
+    "arena": ["game.arena"], "mining": ["game.mining"], "hilo": ["game.hilo"],
+    "slot": ["game.slot"], "megaslot": ["game.megaslot"], "fishing": ["game.fishing"],
+    "farming": ["game.farming"], "race": ["game.race"],
+    "steal": ["heist.pickpocket"], "raffel": ["heist.raffel"],
+    "gambel": ["heist.gambel"], "raffle": ["heist.points_raffle"],
+}
+FEATURE_GAMES = {feature: game for game, features in GAME_FEATURES.items() for feature in features}
+GAME_FEATURES_ALL = ["game.arena", "game.mining", "game.hilo", "game.slot", "game.megaslot", "game.fishing", "game.farming", "game.race"]
+HEIST_FEATURES = ["heist.bank", "heist.train", "heist.treasure", "heist.casino", "heist.jail", "heist.breakout", "heist.gangs", "heist.safecracker", "heist.pickpocket", "heist.raffel", "heist.gambel", "heist.points_raffle"]
+PROGRESSION_FEATURES = ["progress.daily_quests", "progress.weekly_quests", "progress.achievements", "progress.pets", "progress.album", "progress.levels", "progress.daily_rewards"]
+PANEL_PLUS_FEATURES = ["panel.duels", "panel.lottery", "panel.scratch_cards", "panel.savings", "panel.store_plus"]
+DURATION_OPTIONS = ((1, "1 Monat"), (3, "3 Monate"), (6, "6 Monate"), (12, "12 Monate"), (0, "Lifetime"))
+
+PRODUCT_CATALOG = {
+    "arena": {"name": "2D-Viewer-Arena", "desc": DESC["arena"], "kind": "game", "product_type": "single_game", "games": ["arena"], "features": GAME_FEATURES["arena"], "sort": 10},
+    "mining": {"name": "Minen", "desc": DESC["mining"], "kind": "game", "product_type": "single_game", "games": ["mining"], "features": GAME_FEATURES["mining"], "sort": 20},
+    "hilo": {"name": "Hi-Lo", "desc": DESC["hilo"], "kind": "game", "product_type": "single_game", "games": ["hilo"], "features": GAME_FEATURES["hilo"], "sort": 30},
+    "slot": {"name": "Slot Machine", "desc": DESC["slot"], "kind": "game", "product_type": "single_game", "games": ["slot"], "features": GAME_FEATURES["slot"], "sort": 40},
+    "megaslot": {"name": "Mega Slot", "desc": DESC["megaslot"], "kind": "game", "product_type": "single_game", "games": ["megaslot"], "features": GAME_FEATURES["megaslot"], "sort": 50},
+    "fishing": {"name": "Angel Game", "desc": DESC["fishing"], "kind": "game", "product_type": "single_game", "games": ["fishing"], "features": GAME_FEATURES["fishing"], "sort": 60},
+    "farming": {"name": "Farm Game", "desc": DESC["farming"], "kind": "game", "product_type": "single_game", "games": ["farming"], "features": GAME_FEATURES["farming"], "sort": 70},
+    "race": {"name": "Sim Racing", "desc": DESC["race"], "kind": "game", "product_type": "single_game", "games": ["race"], "features": GAME_FEATURES["race"], "sort": 80},
+    "pack_casino": {"name": "🎰 Casino-Paket", "desc": "Slot Machine, Mega Slot und Hi-Lo.", "kind": "pack", "product_type": "game_bundle", "games": ["slot", "megaslot", "hilo"], "features": ["game.slot", "game.megaslot", "game.hilo"], "sort": 110},
+    "pack_abenteuer": {"name": "🌾 Abenteuer-Paket", "desc": "Minen, Angeln und Farm.", "kind": "pack", "product_type": "game_bundle", "games": ["mining", "fishing", "farming"], "features": ["game.mining", "game.fishing", "game.farming"], "sort": 120},
+    "pack_action": {"name": "⚔️ Action & Competition", "desc": "2D-Viewer-Arena und Sim Racing.", "kind": "pack", "product_type": "game_bundle", "games": ["arena", "race"], "features": ["game.arena", "game.race"], "sort": 130},
+    "bundle_heist": {"name": "🏦 Heist & Gefängnis", "desc": "Crime- und Community-Spiele inklusive Bank Heist, Zug-Überfall, Schatzkarte, Gefängnis, Ausbruch, Banden, Safe-Knacker und Taschenraub.", "kind": "pack", "product_type": "community_bundle", "games": ["steal", "raffel", "gambel", "raffle"], "features": HEIST_FEATURES, "sort": 210},
+    "bundle_progression": {"name": "🏆 Community Progression", "desc": "Quests, Erfolge, Haustiere, Sammelalbum und dauerhafter Zuschauerfortschritt.", "kind": "pack", "product_type": "community_bundle", "games": [], "features": PROGRESSION_FEATURES, "sort": 220},
+    "premium_viewer_panel": {"name": "🌐 Zuschauer-Panel Plus", "desc": "Premium-Erweiterungen für das kostenlose Zuschauer-Panel.", "kind": "pack", "product_type": "premium", "games": [], "features": PANEL_PLUS_FEATURES, "sort": 230},
+    "bundle_ultimate": {"name": "👑 StreamDex Ultimate", "desc": "Alle kostenpflichtigen Games und Community-Systeme.", "kind": "pack", "product_type": "ultimate", "games": ["arena", "mining", "hilo", "slot", "megaslot", "fishing", "farming", "race", "steal", "raffel", "gambel", "raffle"], "features": GAME_FEATURES_ALL + HEIST_FEATURES + PROGRESSION_FEATURES + PANEL_PLUS_FEATURES, "sort": 300},
+}
+
+
 def default_items(games):
-    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n, "download_url": ""}
-          for n, (k, p) in enumerate(PRICES.items()) if k in games}
-    for n, (k, (nm, ds, gm, p)) in enumerate(PACKS.items()):
-        it[k] = {"kind": "pack", "name": nm, "desc": ds, "price": p, "games": [g for g in gm if g in games], "active": True, "sort": 100 + n}
-    return it
+    """Create the v6 catalogue. Offers remain disabled until the admin sets term prices."""
+    items = {}
+    for item_id, spec in PRODUCT_CATALOG.items():
+        product_games = [key for key in spec.get("games", []) if key in games]
+        if spec["kind"] == "game" and not product_games:
+            continue
+        items[item_id] = {
+            "kind": spec["kind"], "product_type": spec["product_type"],
+            "name": spec["name"], "desc": spec["desc"], "price": 0.50,
+            "games": product_games, "features": list(spec["features"]),
+            "active": False, "sort": spec["sort"], "download_url": "",
+            "duration_prices": {}, "pricing_required": True,
+        }
+    return items
+
+
+def _item_access_keys(item):
+    if not isinstance(item, dict):
+        return set()
+    features = item.get("features")
+    if isinstance(features, list) and features:
+        return {str(key) for key in features if str(key) in FEATURE_LABELS}
+    return {feature for game in item.get("games", []) for feature in GAME_FEATURES.get(str(game), [])}
+
+
+def _order_access_features(order):
+    raw = order.get("features")
+    resolved = {str(key) for key in raw if str(key) in FEATURE_LABELS} if isinstance(raw, list) else set()
+    if not resolved:
+        resolved = {feature for game in order.get("games", []) for feature in GAME_FEATURES.get(str(game), [])}
+    if not resolved:
+        for product_id in order.get("items", []) if isinstance(order.get("items"), list) else []:
+            resolved.update(PRODUCT_CATALOG.get(str(product_id), {}).get("features", []))
+    return resolved
+
+
+def _add_calendar_months_ms(timestamp_ms, months):
+    dt = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+    index = dt.month - 1 + int(months)
+    year, month = dt.year + index // 12, index % 12 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return int(dt.replace(year=year, month=month, day=day).timestamp() * 1000)
+
+
+def active_features(tid, now_ms=None, include_free_week=True):
+    """Return active paid rights plus currently active admin Free Week rights."""
+    if not tid:
+        return set()
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    records = db.reference(f"shop/entitlements/{tid}").get() or {}
+    active = set()
+    if isinstance(records, dict):
+        for feature, record in records.items():
+            if feature not in FEATURE_LABELS or not isinstance(record, dict) or record.get("active") is False:
+                continue
+            if record.get("license_type") == "lifetime":
+                active.add(feature)
+                continue
+            try:
+                expiry = int(record.get("expires_at_ms") or 0)
+            except (TypeError, ValueError):
+                expiry = 0
+            if expiry > now_ms:
+                active.add(feature)
+    if include_free_week:
+        free = db.reference("shop/free_week").get() or {}
+        if isinstance(free, dict) and free.get("enabled") is True:
+            try:
+                start, end = int(free.get("starts_at_ms") or 0), int(free.get("ends_at_ms") or 0)
+            except (TypeError, ValueError):
+                start, end = 0, 0
+            if start <= now_ms < end and end > start:
+                active.update(str(k) for k in free.get("features", []) if str(k) in FEATURE_LABELS)
+                for game in free.get("games", []) if isinstance(free.get("games"), list) else []:
+                    active.update(GAME_FEATURES.get(str(game), []))
+                for product in free.get("products", []) if isinstance(free.get("products"), list) else []:
+                    active.update(PRODUCT_CATALOG.get(str(product), {}).get("features", []))
+    return active
+
+
+def _apply_order_license(order, order_code, force_lifetime=False):
+    """Persist a license snapshot and aggregate per-feature active entitlements."""
+    tid = str(order.get("tid") or "").strip()
+    code = str(order_code or "").strip().upper()
+    if not tid or not code or "/" in tid or "/" in code:
+        raise ValueError("Für diese Bestellung fehlt eine gültige Konto- oder Bestellkennung.")
+    grants = order.get("licenses") if isinstance(order.get("licenses"), list) else []
+    if not grants:
+        grants = [{
+            "product_id": "legacy",
+            "features": sorted(_order_access_features(order)),
+            "games": list(order.get("games", [])) if isinstance(order.get("games"), list) else [],
+            "duration_months": 0 if force_lifetime else int(order.get("duration_months") or 0),
+        }]
+    normalized = []
+    for index, grant in enumerate(grants):
+        if not isinstance(grant, dict):
+            continue
+        features = {str(k) for k in grant.get("features", []) if str(k) in FEATURE_LABELS}
+        if not features:
+            continue
+        try:
+            months = 0 if force_lifetime else int(grant.get("duration_months") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("Die Lizenzlaufzeit der Bestellung ist ungültig.")
+        if months not in {0, 1, 3, 6, 12}:
+            raise ValueError("Erlaubte Laufzeiten sind Lifetime, 1, 3, 6 oder 12 Monate.")
+        normalized.append({"product_id": str(grant.get("product_id") or index), "features": sorted(features),
+                           "games": [str(g) for g in grant.get("games", []) if str(g) in GAME_FEATURES],
+                           "duration_months": months})
+    if not normalized:
+        return set()
+    license_ref = db.reference(f"shop/licenses/{tid}/{code}")
+    payload = {"order_id": code, "name": str(order.get("name") or ""),
+               "grants": normalized, "created_at_ms": int(time.time() * 1000)}
+    license_ref.transaction(lambda current: current if isinstance(current, dict) else payload)
+    saved = license_ref.get() or payload
+    normalized = saved.get("grants", normalized) if isinstance(saved, dict) else normalized
+    result = set()
+    for index, grant in enumerate(normalized):
+        months = int(grant.get("duration_months") or 0)
+        source_id = f"{code}:{grant.get('product_id') or index}"
+        created = int(saved.get("created_at_ms") or time.time() * 1000)
+        for feature in {str(k) for k in grant.get("features", []) if str(k) in FEATURE_LABELS}:
+            result.add(feature)
+            ref = db.reference(f"shop/entitlements/{tid}/{feature}")
+            def merge(current, months=months, source_id=source_id, created=created):
+                current = dict(current) if isinstance(current, dict) else {}
+                sources = current.get("source_orders")
+                sources = dict(sources) if isinstance(sources, dict) else {}
+                if sources.get(source_id):
+                    return current
+                now = int(time.time() * 1000)
+                if current.get("license_type") == "lifetime" or months == 0:
+                    current.update(active=True, license_type="lifetime",
+                                   starts_at_ms=min(int(current.get("starts_at_ms") or created), created),
+                                   expires_at_ms=None)
+                else:
+                    try:
+                        old_expiry = int(current.get("expires_at_ms") or 0)
+                    except (TypeError, ValueError):
+                        old_expiry = 0
+                    start = max(now, old_expiry)
+                    current.update(active=True, license_type="subscription", starts_at_ms=int(current.get("starts_at_ms") or start),
+                                   expires_at_ms=_add_calendar_months_ms(start, months))
+                sources[source_id] = True
+                current["source_orders"] = sources
+                current["updated_at_ms"] = now
+                return current
+            ref.transaction(merge)
+    # Lifetime records are mirrored for compatibility with pre-v6 app builds only.
+    for grant in normalized:
+        if int(grant.get("duration_months") or 0) == 0:
+            for game in grant.get("games", []):
+                db.reference(f"game_flags/streamers/{tid}/{game}").set(True)
+            for feature in grant.get("features", []):
+                game = FEATURE_GAMES.get(feature)
+                if game:
+                    db.reference(f"game_flags/streamers/{tid}/{game}").set(True)
+    return result
+
+
+def migrate_legacy_paid_orders(tid):
+    """Import legacy paid orders as Lifetime; beta flags and global flags are not purchase proof."""
+    tid = str(tid or "").strip()
+    if not tid:
+        return 0
+    marker = db.reference(f"shop/migrations/v6/legacy_orders/{tid}")
+    if marker.get():
+        return 0
+    orders = db.reference("shop/orders").get() or {}
+    imported = 0
+    if isinstance(orders, dict):
+        for order_id, order in orders.items():
+            if not isinstance(order, dict) or order.get("status") != "paid" or str(order.get("tid") or "") != tid:
+                continue
+            if order.get("item") == "tourskip" or isinstance(order.get("licenses"), list):
+                continue
+            if not _order_access_features(order):
+                continue
+            _apply_order_license(order, str(order_id), force_lifetime=True)
+            imported += 1
+    marker.set({"completed_at_ms": int(time.time() * 1000), "imported_orders": imported})
+    return imported
+
+
+def owned_features(tid):
+    migrate_legacy_paid_orders(tid)
+    return active_features(tid)
+
+
+def duration_price(item, months):
+    prices = item.get("duration_prices") if isinstance(item.get("duration_prices"), dict) else {}
+    key = "lifetime" if int(months) == 0 else str(int(months))
+    value = prices.get(key)
+    if value in (None, ""):
+        if item.get("pricing_required"):
+            return None
+        value = item.get("price")
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"))
+        return amount if amount >= Decimal("0.50") else None
+    except Exception:
+        return None
+
+
+def ensure_catalog_items(games):
+    """Add v6 products without overwriting configured prices or other admin values."""
+    stored = db.reference("shop/items").get() or {}
+    stored = dict(stored) if isinstance(stored, dict) else {}
+    for item_id, fresh in default_items(games).items():
+        current = stored.get(item_id)
+        if not isinstance(current, dict):
+            stored[item_id] = fresh
+            continue
+        current = dict(current)
+        for key in ("kind", "product_type", "name", "desc", "games", "features", "sort"):
+            current[key] = fresh[key]
+        if not isinstance(current.get("duration_prices"), dict):
+            current["duration_prices"] = {}
+        if not current["duration_prices"]:
+            current["active"] = False
+            current["pricing_required"] = True
+        stored[item_id] = current
+    for item_id, old in list(stored.items()):
+        if item_id not in PRODUCT_CATALOG and isinstance(old, dict):
+            old = dict(old)
+            old["active"] = False
+            stored[item_id] = old
+    db.reference("shop/items").set(stored)
+    return stored
 
 
 def _price(x):
@@ -143,9 +419,9 @@ def shop_settings():
 
 
 def owned_games(tid):
-    own = db.reference(f"game_flags/streamers/{tid}").get() or {}
-    glob = db.reference("game_flags/global").get() or {}
-    return {g for g in set(own) | set(glob) if own.get(g) is True or (not isinstance(own.get(g), bool) and glob.get(g) is True)}
+    """Legacy game IDs derived only from purchase entitlements or an active Free Week."""
+    features = owned_features(tid)
+    return {FEATURE_GAMES[feature] for feature in features if feature in FEATURE_GAMES}
 
 
 def _se():
