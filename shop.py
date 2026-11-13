@@ -1,10 +1,11 @@
 """Streamdex-Shop: Einzel-Games, 4 Packs, Warenkorb. Bezahlung per StreamElements-Tip mit Bestellcode.
 Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nach ~60 s). Preise/Einstellungen: Admin-Tab 🛒 Shop."""
+import calendar
 import html
 import re
 import secrets
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlencode, urlparse
 
@@ -34,12 +35,287 @@ PACKS = {
 }
 
 
+
+# v6 shop catalogue: product IDs stay stable; access is granted by feature IDs.
+FEATURE_LABELS = {
+    "game.arena": "2D-Viewer-Arena", "game.mining": "Minen", "game.hilo": "Hi-Lo",
+    "game.slot": "Slot Machine", "game.megaslot": "Mega Slot", "game.fishing": "Angel Game",
+    "game.farming": "Farm Game", "game.race": "Sim Racing",
+    "heist.bank": "Bank Heist", "heist.train": "Zug-Überfall", "heist.treasure": "Schatzkarte",
+    "heist.casino": "Casino-Einbruch", "heist.jail": "Gefängnis", "heist.breakout": "Gefängnisausbruch",
+    "heist.gangs": "Banden", "heist.safecracker": "Safe-Knacker", "heist.pickpocket": "Taschenraub",
+    "heist.raffel": "Raffel um Points", "heist.gambel": "Gambel", "heist.points_raffle": "Punkte-Raffle",
+    "progress.daily_quests": "Tagesquests", "progress.weekly_quests": "Wochenquests",
+    "progress.achievements": "Erfolge", "progress.pets": "Haustiere", "progress.album": "Sammelalbum",
+    "progress.levels": "Fortschritt & Level", "progress.daily_rewards": "Tagesbelohnungen",
+    "panel.duels": "Panel-Duelle", "panel.lottery": "Tageslotterie", "panel.scratch_cards": "Rubbellose",
+    "panel.savings": "Sparkonto", "panel.store_plus": "Erweiterter Zuschauer-Store",
+}
+GAME_FEATURES = {
+    "arena": ["game.arena"], "mining": ["game.mining"], "hilo": ["game.hilo"],
+    "slot": ["game.slot"], "megaslot": ["game.megaslot"], "fishing": ["game.fishing"],
+    "farming": ["game.farming"], "race": ["game.race"],
+    "steal": ["heist.pickpocket"], "raffel": ["heist.raffel"],
+    "gambel": ["heist.gambel"], "raffle": ["heist.points_raffle"],
+}
+FEATURE_GAMES = {feature: game for game, features in GAME_FEATURES.items() for feature in features}
+GAME_FEATURES_ALL = ["game.arena", "game.mining", "game.hilo", "game.slot", "game.megaslot", "game.fishing", "game.farming", "game.race"]
+HEIST_FEATURES = ["heist.bank", "heist.train", "heist.treasure", "heist.casino", "heist.jail", "heist.breakout", "heist.gangs", "heist.safecracker", "heist.pickpocket", "heist.raffel", "heist.gambel", "heist.points_raffle"]
+PROGRESSION_FEATURES = ["progress.daily_quests", "progress.weekly_quests", "progress.achievements", "progress.pets", "progress.album", "progress.levels", "progress.daily_rewards"]
+PANEL_PLUS_FEATURES = ["panel.duels", "panel.lottery", "panel.scratch_cards", "panel.savings", "panel.store_plus"]
+DURATION_OPTIONS = ((1, "1 Monat"), (3, "3 Monate"), (6, "6 Monate"), (12, "12 Monate"), (0, "Lifetime"))
+
+PRODUCT_CATALOG = {
+    "arena": {"name": "2D-Viewer-Arena", "desc": DESC["arena"], "kind": "game", "product_type": "single_game", "games": ["arena"], "features": GAME_FEATURES["arena"], "sort": 10},
+    "mining": {"name": "Minen", "desc": DESC["mining"], "kind": "game", "product_type": "single_game", "games": ["mining"], "features": GAME_FEATURES["mining"], "sort": 20},
+    "hilo": {"name": "Hi-Lo", "desc": DESC["hilo"], "kind": "game", "product_type": "single_game", "games": ["hilo"], "features": GAME_FEATURES["hilo"], "sort": 30},
+    "slot": {"name": "Slot Machine", "desc": DESC["slot"], "kind": "game", "product_type": "single_game", "games": ["slot"], "features": GAME_FEATURES["slot"], "sort": 40},
+    "megaslot": {"name": "Mega Slot", "desc": DESC["megaslot"], "kind": "game", "product_type": "single_game", "games": ["megaslot"], "features": GAME_FEATURES["megaslot"], "sort": 50},
+    "fishing": {"name": "Angel Game", "desc": DESC["fishing"], "kind": "game", "product_type": "single_game", "games": ["fishing"], "features": GAME_FEATURES["fishing"], "sort": 60},
+    "farming": {"name": "Farm Game", "desc": DESC["farming"], "kind": "game", "product_type": "single_game", "games": ["farming"], "features": GAME_FEATURES["farming"], "sort": 70},
+    "race": {"name": "Sim Racing", "desc": DESC["race"], "kind": "game", "product_type": "single_game", "games": ["race"], "features": GAME_FEATURES["race"], "sort": 80},
+    "pack_casino": {"name": "🎰 Casino-Paket", "desc": "Slot Machine, Mega Slot und Hi-Lo.", "kind": "pack", "product_type": "game_bundle", "games": ["slot", "megaslot", "hilo"], "features": ["game.slot", "game.megaslot", "game.hilo"], "sort": 110},
+    "pack_abenteuer": {"name": "🌾 Abenteuer-Paket", "desc": "Minen, Angeln und Farm.", "kind": "pack", "product_type": "game_bundle", "games": ["mining", "fishing", "farming"], "features": ["game.mining", "game.fishing", "game.farming"], "sort": 120},
+    "pack_action": {"name": "⚔️ Action & Competition", "desc": "2D-Viewer-Arena und Sim Racing.", "kind": "pack", "product_type": "game_bundle", "games": ["arena", "race"], "features": ["game.arena", "game.race"], "sort": 130},
+    "bundle_heist": {"name": "🏦 Heist & Gefängnis", "desc": "Crime- und Community-Spiele inklusive Bank Heist, Zug-Überfall, Schatzkarte, Gefängnis, Ausbruch, Banden, Safe-Knacker und Taschenraub.", "kind": "pack", "product_type": "community_bundle", "games": ["steal", "raffel", "gambel", "raffle"], "features": HEIST_FEATURES, "sort": 210},
+    "bundle_progression": {"name": "🏆 Community Progression", "desc": "Quests, Erfolge, Haustiere, Sammelalbum und dauerhafter Zuschauerfortschritt.", "kind": "pack", "product_type": "community_bundle", "games": [], "features": PROGRESSION_FEATURES, "sort": 220},
+    "premium_viewer_panel": {"name": "🌐 Zuschauer-Panel Plus", "desc": "Premium-Erweiterungen für das kostenlose Zuschauer-Panel.", "kind": "pack", "product_type": "premium", "games": [], "features": PANEL_PLUS_FEATURES, "sort": 230},
+    "bundle_ultimate": {"name": "👑 StreamDex Ultimate", "desc": "Alle kostenpflichtigen Games und Community-Systeme.", "kind": "pack", "product_type": "ultimate", "games": ["arena", "mining", "hilo", "slot", "megaslot", "fishing", "farming", "race", "steal", "raffel", "gambel", "raffle"], "features": GAME_FEATURES_ALL + HEIST_FEATURES + PROGRESSION_FEATURES + PANEL_PLUS_FEATURES, "sort": 300},
+}
+
+
 def default_items(games):
-    it = {k: {"kind": "game", "name": games[k], "desc": DESC.get(k, ""), "price": p, "games": [k], "active": True, "sort": n, "download_url": ""}
-          for n, (k, p) in enumerate(PRICES.items()) if k in games}
-    for n, (k, (nm, ds, gm, p)) in enumerate(PACKS.items()):
-        it[k] = {"kind": "pack", "name": nm, "desc": ds, "price": p, "games": [g for g in gm if g in games], "active": True, "sort": 100 + n}
-    return it
+    """Create the v6 catalogue. Offers remain disabled until the admin sets term prices."""
+    items = {}
+    for item_id, spec in PRODUCT_CATALOG.items():
+        product_games = [key for key in spec.get("games", []) if key in games]
+        if spec["kind"] == "game" and not product_games:
+            continue
+        items[item_id] = {
+            "kind": spec["kind"], "product_type": spec["product_type"],
+            "name": spec["name"], "desc": spec["desc"], "price": 0.50,
+            "games": product_games, "features": list(spec["features"]),
+            "active": False, "sort": spec["sort"], "download_url": "",
+            "duration_prices": {}, "pricing_required": True,
+        }
+    return items
+
+
+def _item_access_keys(item):
+    if not isinstance(item, dict):
+        return set()
+    features = item.get("features")
+    if isinstance(features, list) and features:
+        return {str(key) for key in features if str(key) in FEATURE_LABELS}
+    return {feature for game in item.get("games", []) for feature in GAME_FEATURES.get(str(game), [])}
+
+
+def _order_access_features(order):
+    raw = order.get("features")
+    resolved = {str(key) for key in raw if str(key) in FEATURE_LABELS} if isinstance(raw, list) else set()
+    if not resolved:
+        resolved = {feature for game in order.get("games", []) for feature in GAME_FEATURES.get(str(game), [])}
+    if not resolved:
+        for product_id in order.get("items", []) if isinstance(order.get("items"), list) else []:
+            resolved.update(PRODUCT_CATALOG.get(str(product_id), {}).get("features", []))
+    return resolved
+
+
+def _add_calendar_months_ms(timestamp_ms, months):
+    dt = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+    index = dt.month - 1 + int(months)
+    year, month = dt.year + index // 12, index % 12 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return int(dt.replace(year=year, month=month, day=day).timestamp() * 1000)
+
+
+def active_features(tid, now_ms=None, include_free_week=True):
+    """Return active paid rights plus currently active admin Free Week rights."""
+    if not tid:
+        return set()
+    now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
+    records = db.reference(f"shop/entitlements/{tid}").get() or {}
+    active = set()
+    if isinstance(records, dict):
+        for feature, record in records.items():
+            if feature not in FEATURE_LABELS or not isinstance(record, dict) or record.get("active") is False:
+                continue
+            if record.get("license_type") == "lifetime":
+                active.add(feature)
+                continue
+            try:
+                expiry = int(record.get("expires_at_ms") or 0)
+            except (TypeError, ValueError):
+                expiry = 0
+            if expiry > now_ms:
+                active.add(feature)
+    if include_free_week:
+        free = db.reference("shop/free_week").get() or {}
+        if isinstance(free, dict) and free.get("enabled") is True:
+            try:
+                start, end = int(free.get("starts_at_ms") or 0), int(free.get("ends_at_ms") or 0)
+            except (TypeError, ValueError):
+                start, end = 0, 0
+            if start <= now_ms < end and end > start:
+                active.update(str(k) for k in free.get("features", []) if str(k) in FEATURE_LABELS)
+                for game in free.get("games", []) if isinstance(free.get("games"), list) else []:
+                    active.update(GAME_FEATURES.get(str(game), []))
+                for product in free.get("products", []) if isinstance(free.get("products"), list) else []:
+                    active.update(PRODUCT_CATALOG.get(str(product), {}).get("features", []))
+    return active
+
+
+def _apply_order_license(order, order_code, force_lifetime=False):
+    """Persist a license snapshot and aggregate per-feature active entitlements."""
+    tid = str(order.get("tid") or "").strip()
+    code = str(order_code or "").strip().upper()
+    if not tid or not code or "/" in tid or "/" in code:
+        raise ValueError("Für diese Bestellung fehlt eine gültige Konto- oder Bestellkennung.")
+    grants = order.get("licenses") if isinstance(order.get("licenses"), list) else []
+    if not grants:
+        grants = [{
+            "product_id": "legacy",
+            "features": sorted(_order_access_features(order)),
+            "games": list(order.get("games", [])) if isinstance(order.get("games"), list) else [],
+            "duration_months": 0 if force_lifetime else int(order.get("duration_months") or 0),
+        }]
+    normalized = []
+    for index, grant in enumerate(grants):
+        if not isinstance(grant, dict):
+            continue
+        features = {str(k) for k in grant.get("features", []) if str(k) in FEATURE_LABELS}
+        if not features:
+            continue
+        try:
+            months = 0 if force_lifetime else int(grant.get("duration_months") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("Die Lizenzlaufzeit der Bestellung ist ungültig.")
+        if months not in {0, 1, 3, 6, 12}:
+            raise ValueError("Erlaubte Laufzeiten sind Lifetime, 1, 3, 6 oder 12 Monate.")
+        normalized.append({"product_id": str(grant.get("product_id") or index), "features": sorted(features),
+                           "games": [str(g) for g in grant.get("games", []) if str(g) in GAME_FEATURES],
+                           "duration_months": months})
+    if not normalized:
+        return set()
+    license_ref = db.reference(f"shop/licenses/{tid}/{code}")
+    payload = {"order_id": code, "name": str(order.get("name") or ""),
+               "grants": normalized, "created_at_ms": int(time.time() * 1000)}
+    license_ref.transaction(lambda current: current if isinstance(current, dict) else payload)
+    saved = license_ref.get() or payload
+    normalized = saved.get("grants", normalized) if isinstance(saved, dict) else normalized
+    result = set()
+    for index, grant in enumerate(normalized):
+        months = int(grant.get("duration_months") or 0)
+        source_id = f"{code}:{grant.get('product_id') or index}"
+        created = int(saved.get("created_at_ms") or time.time() * 1000)
+        for feature in {str(k) for k in grant.get("features", []) if str(k) in FEATURE_LABELS}:
+            result.add(feature)
+            ref = db.reference(f"shop/entitlements/{tid}/{feature}")
+            def merge(current, months=months, source_id=source_id, created=created):
+                current = dict(current) if isinstance(current, dict) else {}
+                sources = current.get("source_orders")
+                sources = dict(sources) if isinstance(sources, dict) else {}
+                if sources.get(source_id):
+                    return current
+                now = int(time.time() * 1000)
+                if current.get("license_type") == "lifetime" or months == 0:
+                    current.update(active=True, license_type="lifetime",
+                                   starts_at_ms=min(int(current.get("starts_at_ms") or created), created),
+                                   expires_at_ms=None)
+                else:
+                    try:
+                        old_expiry = int(current.get("expires_at_ms") or 0)
+                    except (TypeError, ValueError):
+                        old_expiry = 0
+                    start = max(now, old_expiry)
+                    current.update(active=True, license_type="subscription", starts_at_ms=int(current.get("starts_at_ms") or start),
+                                   expires_at_ms=_add_calendar_months_ms(start, months))
+                sources[source_id] = True
+                current["source_orders"] = sources
+                current["updated_at_ms"] = now
+                return current
+            ref.transaction(merge)
+    # Lifetime records are mirrored for compatibility with pre-v6 app builds only.
+    for grant in normalized:
+        if int(grant.get("duration_months") or 0) == 0:
+            for game in grant.get("games", []):
+                db.reference(f"game_flags/streamers/{tid}/{game}").set(True)
+            for feature in grant.get("features", []):
+                game = FEATURE_GAMES.get(feature)
+                if game:
+                    db.reference(f"game_flags/streamers/{tid}/{game}").set(True)
+    return result
+
+
+def migrate_legacy_paid_orders(tid):
+    """Import legacy paid orders as Lifetime; beta flags and global flags are not purchase proof."""
+    tid = str(tid or "").strip()
+    if not tid:
+        return 0
+    marker = db.reference(f"shop/migrations/v6/legacy_orders/{tid}")
+    if marker.get():
+        return 0
+    orders = db.reference("shop/orders").get() or {}
+    imported = 0
+    if isinstance(orders, dict):
+        for order_id, order in orders.items():
+            if not isinstance(order, dict) or order.get("status") != "paid" or str(order.get("tid") or "") != tid:
+                continue
+            if order.get("item") == "tourskip" or isinstance(order.get("licenses"), list):
+                continue
+            if not _order_access_features(order):
+                continue
+            _apply_order_license(order, str(order_id), force_lifetime=True)
+            imported += 1
+    marker.set({"completed_at_ms": int(time.time() * 1000), "imported_orders": imported})
+    return imported
+
+
+def owned_features(tid):
+    migrate_legacy_paid_orders(tid)
+    return active_features(tid)
+
+
+def duration_price(item, months):
+    prices = item.get("duration_prices") if isinstance(item.get("duration_prices"), dict) else {}
+    key = "lifetime" if int(months) == 0 else str(int(months))
+    value = prices.get(key)
+    if value in (None, ""):
+        if item.get("pricing_required"):
+            return None
+        value = item.get("price")
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"))
+        return amount if amount >= Decimal("0.50") else None
+    except Exception:
+        return None
+
+
+def ensure_catalog_items(games):
+    """Add v6 products without overwriting configured prices or other admin values."""
+    stored = db.reference("shop/items").get() or {}
+    stored = dict(stored) if isinstance(stored, dict) else {}
+    for item_id, fresh in default_items(games).items():
+        current = stored.get(item_id)
+        if not isinstance(current, dict):
+            stored[item_id] = fresh
+            continue
+        current = dict(current)
+        for key in ("kind", "product_type", "name", "desc", "games", "features", "sort"):
+            current[key] = fresh[key]
+        if not isinstance(current.get("duration_prices"), dict):
+            current["duration_prices"] = {}
+        if not current["duration_prices"]:
+            current["active"] = False
+            current["pricing_required"] = True
+        stored[item_id] = current
+    for item_id, old in list(stored.items()):
+        if item_id not in PRODUCT_CATALOG and isinstance(old, dict):
+            old = dict(old)
+            old["active"] = False
+            stored[item_id] = old
+    db.reference("shop/items").set(stored)
+    return stored
 
 
 def _price(x):
@@ -143,29 +419,50 @@ def shop_settings():
 
 
 def owned_games(tid):
-    own = db.reference(f"game_flags/streamers/{tid}").get() or {}
-    glob = db.reference("game_flags/global").get() or {}
-    return {g for g in set(own) | set(glob) if own.get(g) is True or (not isinstance(own.get(g), bool) and glob.get(g) is True)}
+    """Legacy game IDs derived only from purchase entitlements or an active Free Week."""
+    features = owned_features(tid)
+    return {FEATURE_GAMES[feature] for feature in features if feature in FEATURE_GAMES}
 
 
 def _se():
     return {"Authorization": f"Bearer {st.secrets['streamelements']['jwt']}"}
 
 
-def cart_view(cart, items, have):
-    """Bereinigt den Warenkorb: nichts doppelt kaufen (schon Besessenes oder von einem Pack Abgedecktes fliegt raus)."""
-    ids = [i for i in dict.fromkeys(cart) if i in items and not set(items[i].get("games", [])) <= have]
-    ids.sort(key=lambda i: -len(items[i].get("games", [])))
-    kept, covered = [], set()
-    for i in ids:
-        g = set(items[i].get("games", []))
-        if not g <= covered:
-            kept.append(i)
-            covered |= g
-    total = sum(Decimal(_price(items[i]["price"])) for i in kept)
-    single = {g: Decimal(_price(v["price"])) for v in items.values() if v.get("kind") == "game" for g in v.get("games", [])}
-    worth = sum(single.get(g, Decimal(0)) for g in covered - have)
-    return kept, total, max(Decimal(0), worth - total), covered
+def cart_view(cart, items, have, durations=None, have_features=None):
+    """Drop products already wholly owned and overlapping products from the same cart."""
+    durations = durations if isinstance(durations, dict) else {}
+    have_features = set(have_features or ())
+    ids = []
+    for item_id in dict.fromkeys(cart):
+        item = items.get(item_id)
+        if not isinstance(item, dict):
+            continue
+        features = _item_access_keys(item)
+        if features and features <= have_features:
+            continue
+        ids.append(item_id)
+    ids.sort(key=lambda item_id: -len(_item_access_keys(items[item_id])))
+    kept, covered_features, covered_games = [], set(), set()
+    for item_id in ids:
+        item = items[item_id]
+        features = _item_access_keys(item)
+        if features and features <= covered_features:
+            continue
+        price = duration_price(item, int(durations.get(item_id, 0)))
+        if price is None:
+            continue
+        kept.append(item_id)
+        covered_features |= features
+        covered_games |= set(item.get("games", []))
+    total = sum(duration_price(items[item_id], int(durations.get(item_id, 0))) for item_id in kept)
+    single = {
+        game: duration_price(item, int(durations.get(next((key for key, value in items.items() if value is item), ""), 0)))
+        for item in items.values()
+        if item.get("kind", "game") == "game"
+        for game in item.get("games", [])
+    }
+    worth = sum((single.get(game) or Decimal(0)) for game in covered_games - set(have))
+    return kept, total, max(Decimal(0), worth - total), covered_games
 
 
 def validate_coupon(code):
@@ -209,10 +506,25 @@ def cancel_order(code):
         db.reference(f"shop/orders/{code}").delete()
 
 
-def create_cart_order(tid, name, ids, items, coupon="", gift=None):
+def create_cart_order(tid, name, ids, items, coupon="", gift=None, durations=None):
     code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+    durations = durations if isinstance(durations, dict) else {}
     games = sorted({g for i in ids for g in items[i].get("games", [])})
-    total = sum(Decimal(_price(items[i]["price"])) for i in ids)
+    licenses = []
+    for item_id in ids:
+        months = int(durations.get(item_id, 0))
+        if months not in {0, 1, 3, 6, 12}:
+            raise ValueError("Ungültige Laufzeit für ein Shop-Produkt.")
+        price = duration_price(items[item_id], months)
+        if price is None:
+            raise ValueError(f"Für {items[item_id].get('name', item_id)} ist diese Laufzeit noch nicht konfiguriert.")
+        licenses.append({
+            "product_id": str(item_id),
+            "features": sorted(_item_access_keys(items[item_id])),
+            "games": list(items[item_id].get("games", [])),
+            "duration_months": months,
+        })
+    total = sum(duration_price(items[i], int(durations.get(i, 0))) for i in ids)
     ok, c, _ = validate_coupon(coupon) if coupon else (False, None, "")   # serverseitig neu geprüft
     final, disc = apply_coupon(total, c if ok else None)
     if ok and c.get("type") == "amount" and disc > 0:                      # Guthaben reservieren (atomar)
@@ -224,8 +536,10 @@ def create_cart_order(tid, name, ids, items, coupon="", gift=None):
             db.reference(f"shop/coupons/{c['code']}").transaction(take)
         except _Skip:
             raise ValueError("Das Guthaben dieses Gutscheins reicht nicht mehr.")
+    features = sorted({feature for grant in licenses for feature in grant["features"]})
     order = {"tid": tid, "name": name, "item": "cart", "item_name": " + ".join(items[i]["name"] for i in ids)[:200],
-             "items": ids, "games": games, "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
+             "items": ids, "games": games, "features": features, "licenses": licenses,
+             "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
     if ok:
         order.update(coupon=c["code"], coupon_type=c.get("type", "percent"), partner=c.get("partner", ""), discount=_price(disc))
     if gift:
@@ -257,6 +571,10 @@ def fulfill(code, manual=False, payment_id=None):
     if not isinstance(order, dict):
         return False, "Unbekannter Bestellcode."
     if order.get("status") == "paid":
+        try:
+            _apply_order_license(order, ref.key)
+        except Exception:
+            return False, "Die Zahlung ist bereits verbucht, aber die Lizenz konnte nicht vollständig aktualisiert werden. Bitte erneut prüfen oder den Support kontaktieren."
         return True, f"Bereits verbucht: **{order['item_name']}** für {order['name']}."
     tip_id = str(payment_id or "manuell") if manual else "manuell"
     if not manual:
@@ -288,8 +606,10 @@ def fulfill(code, manual=False, payment_id=None):
     if order.get("item") == "tourskip":        # Rundgang-Überspringen: Freigabe für die App (tour_skip/{tid})
         db.reference(f"tour_skip/{order['tid']}").set({"order": ref.key, "ts": {".sv": "timestamp"}})
         return True, f"✅ Zahlung erhalten! Danke für deine Spende. Das Überspringen ist für **{order['name']}** freigeschaltet. Klicke in der App auf „Ich habe bezahlt – prüfen“."
-    for g in order.get("games", []):
-        db.reference(f"game_flags/streamers/{order['tid']}/{g}").set(True)
+    try:
+        _apply_order_license(order, ref.key)
+    except Exception:
+        return False, "Zahlung erhalten, aber die Lizenz konnte nicht vollständig geschrieben werden. Bitte erneut prüfen oder den Support kontaktieren."
     if "gift_from" in order:      # Geschenk: Nachricht für den Streamer (wird in der App angezeigt)
         try:
             db.reference(f"gifts/{order['tid']}/{ref.key}").set({"from": order.get("gift_from", ""), "msg": order.get("gift_msg", ""),
@@ -365,42 +685,41 @@ div[data-testid="stExpander"] details{background:rgba(12,18,37,.74);border:1px s
 </style>"""
 
 
-def _add(i):
-    c = st.session_state.setdefault("cart", [])
-    if i not in c:
-        c.append(i)
+def _add(i, months=0):
+    cart = st.session_state.setdefault("cart", [])
+    if i not in cart:
+        cart.append(i)
+    st.session_state.setdefault("cart_durations", {})[i] = int(months)
 
 
 def _rm(i):
     st.session_state["cart"] = [x for x in st.session_state.get("cart", []) if x != i]
+    st.session_state.setdefault("cart_durations", {}).pop(i, None)
 
 
-def _card(iid, it, items, have, cart):
+def _card(iid, it, items, have, cart, have_features=None):
     games = it.get("games", [])
+    features = _item_access_keys(it)
+    have_features = set(have_features or ())
     pack = it.get("kind") == "pack"
+    owned = bool(features) and features <= have_features
+    configured = [(months, label, duration_price(it, months)) for months, label in DURATION_OPTIONS]
+    configured = [(m, label, price) for m, label, price in configured if price is not None]
     with st.container(border=True):
         label_map = {
-            k: v["name"] for v in items.values()
-            if v.get("kind", "game") == "game" for k in v.get("games", [])
+            game: item.get("name", game)
+            for item in items.values() if item.get("kind", "game") == "game"
+            for game in item.get("games", [])
         }
         chips = ""
         if pack:
+            chip_names = [label_map.get(game, game) for game in games]
+            if not chip_names:
+                chip_names = [FEATURE_LABELS.get(feature, feature) for feature in sorted(features)]
             chips = '<div class="chips">' + "".join(
-                f"<span>{html.escape(label_map.get(game, game))}</span>" for game in games
+                f"<span>{html.escape(str(name))}</span>" for name in chip_names
             ) + "</div>"
-        single_value = sum(
-            Decimal(_price(item["price"]))
-            for item in items.values()
-            if item.get("kind", "game") == "game"
-            and set(item.get("games", [])) <= set(games)
-        )
-        item_price = Decimal(_price(it["price"]))
-        old = f'<span class="old">{single_value:.2f} €</span>' if pack and single_value > item_price else ""
-        savings = (
-            f'<span class="badge save">↘ Spare {(single_value - item_price):.2f} €</span>'
-            if old else ""
-        )
-        category = "PACK" if pack else "EINZEL-GAME"
+        category = "PREMIUM" if it.get("product_type") in {"premium", "ultimate"} else ("COMMUNITY-PAKET" if it.get("product_type") == "community_bundle" else ("PACK" if pack else "EINZEL-GAME"))
         category_class = "sd-shop-kind pack" if pack else "sd-shop-kind"
         icon = "🎁" if pack else next(
             (char for char in str(it.get("name", ""))[:4] if ord(char) > 255),
@@ -408,38 +727,50 @@ def _card(iid, it, items, have, cart):
         )
         title = html.escape(str(it.get("name") or iid))
         description = html.escape(str(it.get("desc") or ""))
-        status = (
-            '<span class="sd-shop-state">✓ Freigeschaltet</span>'
-            if games and set(games) <= have else ""
+        status = '<span class="sd-shop-state">✓ Vollständig freigeschaltet</span>' if owned else ""
+        min_price = min((price for _, _, price in configured), default=None)
+        price_html = (
+            f'<div class="price">ab {min_price:.2f} <span class="unit">EUR</span></div>'
+            if min_price is not None else '<div class="price">Preis folgt</div>'
         )
         st.markdown(
             f'<div class="sd-shop-card-top"><span class="{category_class}">{category}</span>{status}</div>'
             f'<div class="sd-shop-icon">{html.escape(icon)}</div>'
             f'<div class="ct">{title}</div><div class="cd">{description}</div>{chips}'
-            f'<div class="sd-shop-price-row"><div class="price">{item_price:.2f} <span class="unit">EUR</span></div>{old}</div>'
-            f'{savings}',
+            f'<div class="sd-shop-price-row">{price_html}</div>',
             unsafe_allow_html=True,
         )
-        if games and set(games) <= have:
-            st.caption("Dieses Angebot ist für deinen Kanal bereits freigeschaltet.")
+        if owned:
+            st.caption("Alle Funktionen dieses Angebots sind für deinen Kanal bereits freigeschaltet.")
+        elif not it.get("active", True) or not configured:
+            st.caption("Dieses Angebot wird gerade vorbereitet und ist noch nicht kaufbar.")
         elif iid in cart:
+            current_months = int(st.session_state.get("cart_durations", {}).get(iid, configured[0][0]))
+            st.caption("Laufzeit im Warenkorb: " + dict((m, label) for m, label, _ in configured).get(current_months, "Lifetime"))
             st.button(
                 "✓ Im Warenkorb · entfernen",
-                key=f"rm_c_{iid}",
-                on_click=_rm,
-                args=(iid,),
+                key=f"rm_c_{iid}", on_click=_rm, args=(iid,),
                 use_container_width=True,
             )
         else:
+            choices = [months for months, _, _ in configured]
+            labels = {months: label for months, label, _ in configured}
+            selected = st.selectbox(
+                "Laufzeit",
+                choices,
+                format_func=lambda value: labels[value],
+                key=f"shop_duration_{iid}",
+            )
+            price = duration_price(it, selected)
+            st.caption(f"{price:.2f} €")
             st.button(
                 "Zum Warenkorb  →",
                 key=f"add_{iid}",
                 on_click=_add,
-                args=(iid,),
+                args=(iid, selected),
                 type="primary",
                 use_container_width=True,
             )
-
 
 
 PAYPAL_RETURN_BASE = "https://streamdex.streamlit.app/"
@@ -1107,8 +1438,7 @@ def render_shop(games):
     if st.session_state.get("flash"):
         st.success(st.session_state.pop("flash"))
         st.balloons()
-    if not db.reference("shop/items").get():
-        db.reference("shop/items").set(default_items(games))
+    ensure_catalog_items(games)
     cfg = shop_settings()
     if cfg.get("banner"):
         st.markdown(f'<div class="banner">📣 {html.escape(str(cfg["banner"]))}</div>', unsafe_allow_html=True)
@@ -1154,6 +1484,7 @@ def render_shop(games):
         st.session_state.pop("order", None)
         st.session_state.pop("download_order_code", None)
         st.session_state.pop("coupon", None)
+    have_features = owned_features(tid)
     have, items = owned_games(tid), load_items()
     if not items:
         st.info("Aktuell gibt es keine aktiven Angebote.")
@@ -1223,12 +1554,12 @@ def render_shop(games):
                     cols = st.columns(columns_count, gap="medium")
                     for col, (item_id, item) in zip(cols, catalog[row_start:row_start + columns_count]):
                         with col:
-                            _card(item_id, item, items, have, cart)
+                            _card(item_id, item, items, have, cart, have_features)
     with right:
         if st.session_state.get("order"):
             _order_box()
         else:
-            _cart_box(tid, profile.get("twitch_username"), items, have)
+            _cart_box(tid, profile.get("twitch_username"), items, have, have_features)
     _render_order_downloads(tid, load_items(active_only=False))
     with st.expander("Rechtliches & Hilfe"):
         settings = st.secrets.get("shop", {})
