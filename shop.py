@@ -5,7 +5,7 @@ import html
 import re
 import secrets
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import urlencode, urlparse
 
@@ -1558,7 +1558,7 @@ def render_shop(games):
             _order_box()
         else:
             _cart_box(tid, profile.get("twitch_username"), items, have, have_features)
-    _render_order_downloads(tid, load_items(active_only=False))
+
     with st.expander("Rechtliches & Hilfe"):
         settings = st.secrets.get("shop", {})
         st.markdown(
@@ -1618,18 +1618,54 @@ def admin_shop_panel(games):
         if st.form_submit_button("💾 Speichern"):
             db.reference("shop/settings").set({"open": op, "banner": bn.strip()})
             st.success("Gespeichert.")
-    st.caption("Welche Games standardmäßig für ALLE frei sind, stellst du im Tab „🎮 Game-Freigaben“ unter „Global“ ein.")
+    st.caption("Globale Game-Freigaben bleiben standardmäßig deaktiviert. Kostenlose Zugänge werden ausschließlich über eine zeitlich begrenzte Free Week geöffnet.")
+    st.subheader("🎉 Free Week – zeitlich begrenzte globale Freigabe")
+    free_cfg = db.reference("shop/free_week").get() or {}
+    with st.form("shop_free_week"):
+        fw_enabled = st.toggle("Free Week aktivieren", value=bool(free_cfg.get("enabled", False)))
+        current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS]
+        fw_features = st.multiselect(
+            "Inhalte für alle freigeben",
+            options=list(FEATURE_LABELS),
+            default=current_features,
+            format_func=lambda key: FEATURE_LABELS[key],
+        )
+        now_local = datetime.now().astimezone()
+        current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000).astimezone()
+        current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000).astimezone()
+        fw_start_date = st.date_input("Startdatum", value=current_start.date(), key="shop_fw_start_date")
+        fw_start_time = st.time_input("Startzeit", value=current_start.time().replace(second=0, microsecond=0), key="shop_fw_start_time")
+        fw_end_date = st.date_input("Enddatum", value=current_end.date(), key="shop_fw_end_date")
+        fw_end_time = st.time_input("Endzeit", value=current_end.time().replace(second=0, microsecond=0), key="shop_fw_end_time")
+        fw_saved = st.form_submit_button("Free Week speichern")
+    if fw_saved:
+        start_dt = datetime.combine(fw_start_date, fw_start_time).astimezone()
+        end_dt = datetime.combine(fw_end_date, fw_end_time).astimezone()
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        if not fw_features:
+            st.error("Bitte mindestens einen Inhalt für die Free Week auswählen.")
+        elif end_ms <= start_ms:
+            st.error("Das Ende muss nach dem Start liegen.")
+        else:
+            db.reference("shop/free_week").set({
+                "enabled": bool(fw_enabled), "features": fw_features,
+                "starts_at_ms": start_ms, "ends_at_ms": end_ms,
+                "updated_at_ms": int(time.time() * 1000),
+            })
+            st.success("Free Week gespeichert. Die Freigabe gilt für alle Nutzer nur innerhalb des gewählten Zeitfensters.")
+            st.rerun()
 
     st.subheader("💶 Preise & Sichtbarkeit")
     game_items = [(k, v) for k, v in items.items() if v.get("kind", "game") == "game"]
     pack_items = [(k, v) for k, v in items.items() if v.get("kind") == "pack"]
     active_count = sum(1 for _, item in items.items() if item.get("active", True))
-    links_count = sum(1 for _, item in game_items if _safe_download_url(item.get("download_url")))
+    configured_count = sum(1 for _, item in items.items() if isinstance(item.get("duration_prices"), dict) and len(item.get("duration_prices", {})) == 5)
     m1, m2, m3 = st.columns(3)
     m1.metric("Artikel gesamt", len(items))
     m2.metric("Im Shop aktiv", active_count)
-    m3.metric("Download-Links", f"{links_count}/{len(game_items)}")
-    st.caption("Jedes Game hat eine eigene Karte. Preis, Sichtbarkeit und Download-Link bearbeitest du direkt dort und speicherst nur diesen Artikel.")
+    m3.metric("Mit 5 Laufzeiten", f"{configured_count}/{len(items)}")
+    st.caption("Ein StreamDex-Download für alle. Du verwaltest hier nur Produktrechte, Laufzeitpreise und die Sichtbarkeit im Shop.")
     st.markdown("""
     <style>
     .st-key-shop_admin_card_slot [data-testid="stVerticalBlockBorderWrapper"],
@@ -1714,49 +1750,46 @@ def admin_shop_panel(games):
                             if description:
                                 st.caption(description)
                             with st.form(f"shop_admin_edit_{item_id}"):
-                                price_col, active_col = st.columns([1, 1])
-                                price = price_col.number_input(
-                                    "Preis (€)",
-                                    min_value=0.5,
-                                    max_value=500.0,
-                                    step=0.5,
-                                    value=float(item.get("price", 4.99)),
-                                    format="%.2f",
-                                    key=f"shop_admin_price_{item_id}",
-                                )
-                                active = active_col.toggle(
+                                current_prices = item.get("duration_prices") if isinstance(item.get("duration_prices"), dict) else {}
+                                st.caption("Lege für dieses Produkt eigene Preise für jede Laufzeit fest.")
+                                price_cols = st.columns(5)
+                                price_values = {}
+                                for column, (months, duration_label) in zip(price_cols, DURATION_OPTIONS):
+                                    duration_key = "lifetime" if months == 0 else str(months)
+                                    raw_value = current_prices.get(duration_key)
+                                    try:
+                                        default_value = float(raw_value) if raw_value not in (None, "") else 0.50
+                                    except (TypeError, ValueError):
+                                        default_value = 0.50
+                                    price_values[duration_key] = column.number_input(
+                                        duration_label + " (€)",
+                                        min_value=0.50,
+                                        max_value=500.00,
+                                        step=0.50,
+                                        value=default_value,
+                                        format="%.2f",
+                                        key=f"shop_admin_price_{item_id}_{duration_key}",
+                                    )
+                                active = st.toggle(
                                     "Im Shop sichtbar",
-                                    value=bool(item.get("active", True)),
+                                    value=bool(item.get("active", False)),
                                     key=f"shop_admin_active_{item_id}",
                                 )
-                                if kind == "game":
-                                    download_url = st.text_input(
-                                        "Download-Link (HTTPS)",
-                                        value=str(item.get("download_url") or ""),
-                                        placeholder="https://…/game.zip",
-                                        help="Direkter Link zur ZIP- oder EXE-Datei. Käufer sehen ihn nach erfolgreicher Zahlung.",
-                                        key=f"shop_admin_download_{item_id}",
-                                    ).strip()
-                                else:
-                                    download_url = ""
-                                    st.caption("Ein Pack verwendet die Download-Links seiner einzelnen Games.")
                                 saved = st.form_submit_button(
-                                    "Änderungen speichern",
+                                    "Laufzeitpreise speichern",
                                     type="primary",
                                     use_container_width=True,
                                 )
                             if saved:
-                                if not 0.5 <= float(price) <= 500:
-                                    st.error("Der Preis muss zwischen 0,50 € und 500 € liegen.")
-                                elif kind == "game" and download_url and not _safe_download_url(download_url):
-                                    st.error("Bitte einen gültigen HTTPS-Link ohne Zugangsdaten eintragen.")
+                                if any(not 0.50 <= float(value) <= 500.00 for value in price_values.values()):
+                                    st.error("Jeder Laufzeitpreis muss zwischen 0,50 € und 500,00 € liegen.")
                                 else:
                                     patch = {
-                                        "price": float(price),
+                                        "price": float(price_values["1"]),
+                                        "duration_prices": {key: round(float(value), 2) for key, value in price_values.items()},
+                                        "pricing_required": False,
                                         "active": bool(active),
                                     }
-                                    if kind == "game":
-                                        patch["download_url"] = _safe_download_url(download_url)
                                     db.reference(f"shop/items/{item_id}").update(patch)
                                     st.toast(f"{label} gespeichert.", icon="✅")
                                     st.rerun()
