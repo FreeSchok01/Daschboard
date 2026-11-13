@@ -428,20 +428,41 @@ def _se():
     return {"Authorization": f"Bearer {st.secrets['streamelements']['jwt']}"}
 
 
-def cart_view(cart, items, have):
-    """Bereinigt den Warenkorb: nichts doppelt kaufen (schon Besessenes oder von einem Pack Abgedecktes fliegt raus)."""
-    ids = [i for i in dict.fromkeys(cart) if i in items and not set(items[i].get("games", [])) <= have]
-    ids.sort(key=lambda i: -len(items[i].get("games", [])))
-    kept, covered = [], set()
-    for i in ids:
-        g = set(items[i].get("games", []))
-        if not g <= covered:
-            kept.append(i)
-            covered |= g
-    total = sum(Decimal(_price(items[i]["price"])) for i in kept)
-    single = {g: Decimal(_price(v["price"])) for v in items.values() if v.get("kind") == "game" for g in v.get("games", [])}
-    worth = sum(single.get(g, Decimal(0)) for g in covered - have)
-    return kept, total, max(Decimal(0), worth - total), covered
+def cart_view(cart, items, have, durations=None, have_features=None):
+    """Drop products already wholly owned and overlapping products from the same cart."""
+    durations = durations if isinstance(durations, dict) else {}
+    have_features = set(have_features or ())
+    ids = []
+    for item_id in dict.fromkeys(cart):
+        item = items.get(item_id)
+        if not isinstance(item, dict):
+            continue
+        features = _item_access_keys(item)
+        if features and features <= have_features:
+            continue
+        ids.append(item_id)
+    ids.sort(key=lambda item_id: -len(_item_access_keys(items[item_id])))
+    kept, covered_features, covered_games = [], set(), set()
+    for item_id in ids:
+        item = items[item_id]
+        features = _item_access_keys(item)
+        if features and features <= covered_features:
+            continue
+        price = duration_price(item, int(durations.get(item_id, 0)))
+        if price is None:
+            continue
+        kept.append(item_id)
+        covered_features |= features
+        covered_games |= set(item.get("games", []))
+    total = sum(duration_price(items[item_id], int(durations.get(item_id, 0))) for item_id in kept)
+    single = {
+        game: duration_price(item, int(durations.get(next((key for key, value in items.items() if value is item), ""), 0)))
+        for item in items.values()
+        if item.get("kind", "game") == "game"
+        for game in item.get("games", [])
+    }
+    worth = sum((single.get(game) or Decimal(0)) for game in covered_games - set(have))
+    return kept, total, max(Decimal(0), worth - total), covered_games
 
 
 def validate_coupon(code):
@@ -664,42 +685,41 @@ div[data-testid="stExpander"] details{background:rgba(12,18,37,.74);border:1px s
 </style>"""
 
 
-def _add(i):
-    c = st.session_state.setdefault("cart", [])
-    if i not in c:
-        c.append(i)
+def _add(i, months=0):
+    cart = st.session_state.setdefault("cart", [])
+    if i not in cart:
+        cart.append(i)
+    st.session_state.setdefault("cart_durations", {})[i] = int(months)
 
 
 def _rm(i):
     st.session_state["cart"] = [x for x in st.session_state.get("cart", []) if x != i]
+    st.session_state.setdefault("cart_durations", {}).pop(i, None)
 
 
-def _card(iid, it, items, have, cart):
+def _card(iid, it, items, have, cart, have_features=None):
     games = it.get("games", [])
+    features = _item_access_keys(it)
+    have_features = set(have_features or ())
     pack = it.get("kind") == "pack"
+    owned = bool(features) and features <= have_features
+    configured = [(months, label, duration_price(it, months)) for months, label in DURATION_OPTIONS]
+    configured = [(m, label, price) for m, label, price in configured if price is not None]
     with st.container(border=True):
         label_map = {
-            k: v["name"] for v in items.values()
-            if v.get("kind", "game") == "game" for k in v.get("games", [])
+            game: item.get("name", game)
+            for item in items.values() if item.get("kind", "game") == "game"
+            for game in item.get("games", [])
         }
         chips = ""
         if pack:
+            chip_names = [label_map.get(game, game) for game in games]
+            if not chip_names:
+                chip_names = [FEATURE_LABELS.get(feature, feature) for feature in sorted(features)]
             chips = '<div class="chips">' + "".join(
-                f"<span>{html.escape(label_map.get(game, game))}</span>" for game in games
+                f"<span>{html.escape(str(name))}</span>" for name in chip_names
             ) + "</div>"
-        single_value = sum(
-            Decimal(_price(item["price"]))
-            for item in items.values()
-            if item.get("kind", "game") == "game"
-            and set(item.get("games", [])) <= set(games)
-        )
-        item_price = Decimal(_price(it["price"]))
-        old = f'<span class="old">{single_value:.2f} €</span>' if pack and single_value > item_price else ""
-        savings = (
-            f'<span class="badge save">↘ Spare {(single_value - item_price):.2f} €</span>'
-            if old else ""
-        )
-        category = "PACK" if pack else "EINZEL-GAME"
+        category = "PREMIUM" if it.get("product_type") in {"premium", "ultimate"} else ("COMMUNITY-PAKET" if it.get("product_type") == "community_bundle" else ("PACK" if pack else "EINZEL-GAME"))
         category_class = "sd-shop-kind pack" if pack else "sd-shop-kind"
         icon = "🎁" if pack else next(
             (char for char in str(it.get("name", ""))[:4] if ord(char) > 255),
@@ -707,38 +727,50 @@ def _card(iid, it, items, have, cart):
         )
         title = html.escape(str(it.get("name") or iid))
         description = html.escape(str(it.get("desc") or ""))
-        status = (
-            '<span class="sd-shop-state">✓ Freigeschaltet</span>'
-            if games and set(games) <= have else ""
+        status = '<span class="sd-shop-state">✓ Vollständig freigeschaltet</span>' if owned else ""
+        min_price = min((price for _, _, price in configured), default=None)
+        price_html = (
+            f'<div class="price">ab {min_price:.2f} <span class="unit">EUR</span></div>'
+            if min_price is not None else '<div class="price">Preis folgt</div>'
         )
         st.markdown(
             f'<div class="sd-shop-card-top"><span class="{category_class}">{category}</span>{status}</div>'
             f'<div class="sd-shop-icon">{html.escape(icon)}</div>'
             f'<div class="ct">{title}</div><div class="cd">{description}</div>{chips}'
-            f'<div class="sd-shop-price-row"><div class="price">{item_price:.2f} <span class="unit">EUR</span></div>{old}</div>'
-            f'{savings}',
+            f'<div class="sd-shop-price-row">{price_html}</div>',
             unsafe_allow_html=True,
         )
-        if games and set(games) <= have:
-            st.caption("Dieses Angebot ist für deinen Kanal bereits freigeschaltet.")
+        if owned:
+            st.caption("Alle Funktionen dieses Angebots sind für deinen Kanal bereits freigeschaltet.")
+        elif not it.get("active", True) or not configured:
+            st.caption("Dieses Angebot wird gerade vorbereitet und ist noch nicht kaufbar.")
         elif iid in cart:
+            current_months = int(st.session_state.get("cart_durations", {}).get(iid, configured[0][0]))
+            st.caption("Laufzeit im Warenkorb: " + dict((m, label) for m, label, _ in configured).get(current_months, "Lifetime"))
             st.button(
                 "✓ Im Warenkorb · entfernen",
-                key=f"rm_c_{iid}",
-                on_click=_rm,
-                args=(iid,),
+                key=f"rm_c_{iid}", on_click=_rm, args=(iid,),
                 use_container_width=True,
             )
         else:
+            choices = [months for months, _, _ in configured]
+            labels = {months: label for months, label, _ in configured}
+            selected = st.selectbox(
+                "Laufzeit",
+                choices,
+                format_func=lambda value: labels[value],
+                key=f"shop_duration_{iid}",
+            )
+            price = duration_price(it, selected)
+            st.caption(f"{price:.2f} €")
             st.button(
                 "Zum Warenkorb  →",
                 key=f"add_{iid}",
                 on_click=_add,
-                args=(iid,),
+                args=(iid, selected),
                 type="primary",
                 use_container_width=True,
             )
-
 
 
 PAYPAL_RETURN_BASE = "https://streamdex.streamlit.app/"
@@ -1406,8 +1438,7 @@ def render_shop(games):
     if st.session_state.get("flash"):
         st.success(st.session_state.pop("flash"))
         st.balloons()
-    if not db.reference("shop/items").get():
-        db.reference("shop/items").set(default_items(games))
+    ensure_catalog_items(games)
     cfg = shop_settings()
     if cfg.get("banner"):
         st.markdown(f'<div class="banner">📣 {html.escape(str(cfg["banner"]))}</div>', unsafe_allow_html=True)
@@ -1453,6 +1484,7 @@ def render_shop(games):
         st.session_state.pop("order", None)
         st.session_state.pop("download_order_code", None)
         st.session_state.pop("coupon", None)
+    have_features = owned_features(tid)
     have, items = owned_games(tid), load_items()
     if not items:
         st.info("Aktuell gibt es keine aktiven Angebote.")
@@ -1522,12 +1554,12 @@ def render_shop(games):
                     cols = st.columns(columns_count, gap="medium")
                     for col, (item_id, item) in zip(cols, catalog[row_start:row_start + columns_count]):
                         with col:
-                            _card(item_id, item, items, have, cart)
+                            _card(item_id, item, items, have, cart, have_features)
     with right:
         if st.session_state.get("order"):
             _order_box()
         else:
-            _cart_box(tid, profile.get("twitch_username"), items, have)
+            _cart_box(tid, profile.get("twitch_username"), items, have, have_features)
     _render_order_downloads(tid, load_items(active_only=False))
     with st.expander("Rechtliches & Hilfe"):
         settings = st.secrets.get("shop", {})
