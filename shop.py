@@ -485,10 +485,25 @@ def cancel_order(code):
         db.reference(f"shop/orders/{code}").delete()
 
 
-def create_cart_order(tid, name, ids, items, coupon="", gift=None):
+def create_cart_order(tid, name, ids, items, coupon="", gift=None, durations=None):
     code = "SDX-" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+    durations = durations if isinstance(durations, dict) else {}
     games = sorted({g for i in ids for g in items[i].get("games", [])})
-    total = sum(Decimal(_price(items[i]["price"])) for i in ids)
+    licenses = []
+    for item_id in ids:
+        months = int(durations.get(item_id, 0))
+        if months not in {0, 1, 3, 6, 12}:
+            raise ValueError("Ungültige Laufzeit für ein Shop-Produkt.")
+        price = duration_price(items[item_id], months)
+        if price is None:
+            raise ValueError(f"Für {items[item_id].get('name', item_id)} ist diese Laufzeit noch nicht konfiguriert.")
+        licenses.append({
+            "product_id": str(item_id),
+            "features": sorted(_item_access_keys(items[item_id])),
+            "games": list(items[item_id].get("games", [])),
+            "duration_months": months,
+        })
+    total = sum(duration_price(items[i], int(durations.get(i, 0))) for i in ids)
     ok, c, _ = validate_coupon(coupon) if coupon else (False, None, "")   # serverseitig neu geprüft
     final, disc = apply_coupon(total, c if ok else None)
     if ok and c.get("type") == "amount" and disc > 0:                      # Guthaben reservieren (atomar)
@@ -500,8 +515,10 @@ def create_cart_order(tid, name, ids, items, coupon="", gift=None):
             db.reference(f"shop/coupons/{c['code']}").transaction(take)
         except _Skip:
             raise ValueError("Das Guthaben dieses Gutscheins reicht nicht mehr.")
+    features = sorted({feature for grant in licenses for feature in grant["features"]})
     order = {"tid": tid, "name": name, "item": "cart", "item_name": " + ".join(items[i]["name"] for i in ids)[:200],
-             "items": ids, "games": games, "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
+             "items": ids, "games": games, "features": features, "licenses": licenses,
+             "price": _price(final), "gross": _price(total), "status": "pending", "ts": {".sv": "timestamp"}}
     if ok:
         order.update(coupon=c["code"], coupon_type=c.get("type", "percent"), partner=c.get("partner", ""), discount=_price(disc))
     if gift:
@@ -533,6 +550,10 @@ def fulfill(code, manual=False, payment_id=None):
     if not isinstance(order, dict):
         return False, "Unbekannter Bestellcode."
     if order.get("status") == "paid":
+        try:
+            _apply_order_license(order, ref.key)
+        except Exception:
+            return False, "Die Zahlung ist bereits verbucht, aber die Lizenz konnte nicht vollständig aktualisiert werden. Bitte erneut prüfen oder den Support kontaktieren."
         return True, f"Bereits verbucht: **{order['item_name']}** für {order['name']}."
     tip_id = str(payment_id or "manuell") if manual else "manuell"
     if not manual:
@@ -564,8 +585,10 @@ def fulfill(code, manual=False, payment_id=None):
     if order.get("item") == "tourskip":        # Rundgang-Überspringen: Freigabe für die App (tour_skip/{tid})
         db.reference(f"tour_skip/{order['tid']}").set({"order": ref.key, "ts": {".sv": "timestamp"}})
         return True, f"✅ Zahlung erhalten! Danke für deine Spende. Das Überspringen ist für **{order['name']}** freigeschaltet. Klicke in der App auf „Ich habe bezahlt – prüfen“."
-    for g in order.get("games", []):
-        db.reference(f"game_flags/streamers/{order['tid']}/{g}").set(True)
+    try:
+        _apply_order_license(order, ref.key)
+    except Exception:
+        return False, "Zahlung erhalten, aber die Lizenz konnte nicht vollständig geschrieben werden. Bitte erneut prüfen oder den Support kontaktieren."
     if "gift_from" in order:      # Geschenk: Nachricht für den Streamer (wird in der App angezeigt)
         try:
             db.reference(f"gifts/{order['tid']}/{ref.key}").set({"from": order.get("gift_from", ""), "msg": order.get("gift_msg", ""),
