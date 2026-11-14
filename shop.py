@@ -78,10 +78,10 @@ PRODUCT_CATALOG = {
     "pack_casino": {"name": "🎰 Casino-Paket", "desc": "Slot Machine, Mega Slot und Hi-Lo.", "kind": "pack", "product_type": "game_bundle", "games": ["slot", "megaslot", "hilo"], "features": ["game.slot", "game.megaslot", "game.hilo"], "sort": 110},
     "pack_abenteuer": {"name": "🌾 Abenteuer-Paket", "desc": "Minen, Angeln und Farm.", "kind": "pack", "product_type": "game_bundle", "games": ["mining", "fishing", "farming"], "features": ["game.mining", "game.fishing", "game.farming"], "sort": 120},
     "pack_action": {"name": "⚔️ Action & Competition", "desc": "2D-Viewer-Arena und Sim Racing.", "kind": "pack", "product_type": "game_bundle", "games": ["arena", "race"], "features": ["game.arena", "game.race"], "sort": 130},
-    "bundle_heist": {"name": "🏦 Heist & Gefängnis", "desc": "Crime- und Community-Spiele inklusive Bank Heist, Zug-Überfall, Schatzkarte, Gefängnis, Ausbruch, Banden, Safe-Knacker und Taschenraub.", "kind": "pack", "product_type": "community_bundle", "games": ["steal", "raffel", "gambel", "raffle"], "features": HEIST_FEATURES, "sort": 210},
+    "bundle_heist": {"name": "🏦 Heist & Gefängnis", "desc": "Crime- und Community-Spiele inklusive Bank Heist, Zug-Überfall, Schatzkarte, Gefängnis, Ausbruch, Banden, Safe-Knacker und Taschenraub.", "kind": "pack", "product_type": "community_bundle", "games": ["steal"], "features": HEIST_FEATURES, "sort": 210},
     "bundle_progression": {"name": "🏆 Community Progression", "desc": "Quests, Erfolge, Haustiere, Sammelalbum und dauerhafter Zuschauerfortschritt.", "kind": "pack", "product_type": "community_bundle", "games": [], "features": PROGRESSION_FEATURES, "sort": 220},
     "premium_viewer_panel": {"name": "🌐 Zuschauer-Panel Plus", "desc": "Premium-Erweiterungen für das kostenlose Zuschauer-Panel: Duelle, Lotterie, Rubbellose und Sparkonto.", "kind": "pack", "product_type": "premium", "games": [], "features": PANEL_PLUS_FEATURES, "sort": 230},
-    "bundle_ultimate": {"name": "👑 StreamDex Ultimate", "desc": "Alle kostenpflichtigen Games und Community-Systeme.", "kind": "pack", "product_type": "ultimate", "games": ["arena", "mining", "hilo", "slot", "megaslot", "fishing", "farming", "race", "steal", "raffel", "gambel", "raffle"], "features": GAME_FEATURES_ALL + HEIST_FEATURES + PROGRESSION_FEATURES + PANEL_PLUS_FEATURES, "sort": 300},
+    "bundle_ultimate": {"name": "👑 StreamDex Ultimate", "desc": "Alle kostenpflichtigen Games und Community-Systeme.", "kind": "pack", "product_type": "ultimate", "games": ["arena", "mining", "hilo", "slot", "megaslot", "fishing", "farming", "race", "steal"], "features": GAME_FEATURES_ALL + HEIST_FEATURES + PROGRESSION_FEATURES + PANEL_PLUS_FEATURES, "sort": 300},
 }
 
 
@@ -321,6 +321,10 @@ def migrate_all_legacy_paid_orders():
     beta_records = db.reference("shop/beta").get() or {}
     if isinstance(beta_records, dict):
         accounts.update(str(tid).strip() for tid in beta_records if str(tid).strip())
+    # Also clean per-streamer legacy switches that were set manually and are not tied to a beta record.
+    old_streamer_flags = db.reference("game_flags/streamers").get() or {}
+    if isinstance(old_streamer_flags, dict):
+        accounts.update(str(tid).strip() for tid in old_streamer_flags if str(tid).strip())
     imported = 0
     for tid in sorted(accounts):
         imported += migrate_legacy_paid_orders(tid)
@@ -1703,13 +1707,13 @@ def admin_free_week_panel():
         end_dt = datetime.combine(fw_end_date, fw_end_time, tzinfo=ZoneInfo("Europe/Berlin"))
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
-        if not fw_features:
+        if fw_enabled and not fw_features:
             st.error("Bitte mindestens einen Inhalt für die Free Week auswählen.")
         elif end_ms <= start_ms:
             st.error("Das Ende muss nach dem Start liegen.")
         else:
             free_week_payload = {
-                "enabled": bool(fw_enabled), "features": fw_features,
+                "enabled": bool(fw_enabled), "features": fw_features if fw_enabled else [],
                 "starts_at_ms": start_ms, "ends_at_ms": end_ms,
                 "updated_at_ms": int(time.time() * 1000),
             }
@@ -1961,6 +1965,7 @@ def remove_beta(tid):
 
 
 def admin_beta_panel(games, rows):
+    migrate_all_legacy_paid_orders()
     st.subheader("🧪 Beta-Tester")
     st.caption("Beta-Tester bekommen Games ohne Kauf freigeschaltet. Beim Entfernen verschwinden nur die Beta-Freigaben, Gekauftes bleibt. "
                "„Alles“ gilt für die aktuell vorhandenen Games. Bei neuen Games den Status erneut setzen.")
