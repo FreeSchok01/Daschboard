@@ -79,7 +79,7 @@ PRODUCT_CATALOG = {
     "pack_action": {"name": "⚔️ Action & Competition", "desc": "2D-Viewer-Arena und Sim Racing.", "kind": "pack", "product_type": "game_bundle", "games": ["arena", "race"], "features": ["game.arena", "game.race"], "sort": 130},
     "bundle_heist": {"name": "🏦 Heist & Gefängnis", "desc": "Crime- und Community-Spiele inklusive Bank Heist, Zug-Überfall, Schatzkarte, Gefängnis, Ausbruch, Banden, Safe-Knacker und Taschenraub.", "kind": "pack", "product_type": "community_bundle", "games": ["steal", "raffel", "gambel", "raffle"], "features": HEIST_FEATURES, "sort": 210},
     "bundle_progression": {"name": "🏆 Community Progression", "desc": "Quests, Erfolge, Haustiere, Sammelalbum und dauerhafter Zuschauerfortschritt.", "kind": "pack", "product_type": "community_bundle", "games": [], "features": PROGRESSION_FEATURES, "sort": 220},
-    "premium_viewer_panel": {"name": "🌐 Zuschauer-Panel Plus", "desc": "Premium-Erweiterungen für das kostenlose Zuschauer-Panel.", "kind": "pack", "product_type": "premium", "games": [], "features": PANEL_PLUS_FEATURES, "sort": 230},
+    "premium_viewer_panel": {"name": "🌐 Zuschauer-Panel Plus", "desc": "Premium-Erweiterungen für das kostenlose Zuschauer-Panel: Duelle, Lotterie, Rubbellose und Sparkonto.", "kind": "pack", "product_type": "premium", "games": [], "features": PANEL_PLUS_FEATURES, "sort": 230},
     "bundle_ultimate": {"name": "👑 StreamDex Ultimate", "desc": "Alle kostenpflichtigen Games und Community-Systeme.", "kind": "pack", "product_type": "ultimate", "games": ["arena", "mining", "hilo", "slot", "megaslot", "fishing", "farming", "race", "steal", "raffel", "gambel", "raffle"], "features": GAME_FEATURES_ALL + HEIST_FEATURES + PROGRESSION_FEATURES + PANEL_PLUS_FEATURES, "sort": 300},
 }
 
@@ -268,6 +268,29 @@ def migrate_legacy_paid_orders(tid):
             _apply_order_license(order, str(order_id), force_lifetime=True)
             imported += 1
     marker.set({"completed_at_ms": int(time.time() * 1000), "imported_orders": imported})
+    return imported
+
+
+def migrate_all_legacy_paid_orders():
+    """One-time v6 migration for every account with an existing paid order."""
+    marker = db.reference("shop/migrations/v6/global_complete")
+    if marker.get():
+        return 0
+    orders = db.reference("shop/orders").get() or {}
+    accounts = {
+        str(order.get("tid") or "").strip()
+        for order in orders.values()
+        if isinstance(order, dict) and order.get("status") == "paid"
+        and order.get("item") != "tourskip" and str(order.get("tid") or "").strip()
+    } if isinstance(orders, dict) else set()
+    imported = 0
+    for tid in sorted(accounts):
+        imported += migrate_legacy_paid_orders(tid)
+    marker.set({
+        "completed_at_ms": int(time.time() * 1000),
+        "accounts_checked": len(accounts),
+        "orders_imported": imported,
+    })
     return imported
 
 
@@ -1437,6 +1460,7 @@ def render_shop(games):
         st.success(st.session_state.pop("flash"))
         st.balloons()
     ensure_catalog_items(games)
+    migrate_all_legacy_paid_orders()
     cfg = shop_settings()
     if cfg.get("banner"):
         st.markdown(f'<div class="banner">📣 {html.escape(str(cfg["banner"]))}</div>', unsafe_allow_html=True)
