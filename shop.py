@@ -236,6 +236,10 @@ def _apply_order_license(order, order_code, force_lifetime=False):
                 current["updated_at_ms"] = now
                 return current
             ref.transaction(merge)
+            # Mirror the effective feature record below the existing per-streamer
+            # flags node as a fallback for app deployments with narrower Firebase rules.
+            mirror_record = ref.get() or {}
+            db.reference(f"game_flags/streamers/{tid}/_features/{feature}").set(mirror_record)
     # Lifetime records are mirrored for compatibility with pre-v6 app builds only.
     for grant in normalized:
         if int(grant.get("duration_months") or 0) == 0:
