@@ -16,6 +16,8 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import db
 
+from admin_audit import write_admin_audit
+
 TZ = ZoneInfo("Europe/Berlin")
 SERVER_TS = {".sv": "timestamp"}
 TEAM_REFRESH_SECONDS = 4
@@ -125,6 +127,7 @@ def admin_supporter_panel():
             else:
                 db.reference(f"supporters/{u}").set({"name": (name.strip() or u)[:40], "active": True, "created": SERVER_TS})
                 _set_password(u, pw)
+                write_admin_audit("Supporter erstellt", "Team", u)
                 st.success(f"Supporter {u} angelegt.")
                 st.rerun()
 
@@ -138,15 +141,18 @@ def admin_supporter_panel():
         new_pw = st.text_input("Neues Passwort", type="password", key=f"sup_pw_{pick}")
         if st.button("🔑 Passwort setzen", disabled=len(new_pw) < MIN_PW, key=f"sup_setpw_{pick}"):
             _set_password(pick, new_pw)
+            write_admin_audit("Supporter-Passwort zurückgesetzt", "Team", pick)
             st.success("Passwort geändert, Sperre aufgehoben.")
     with c2:
         active = cur.get("active", True)
         if st.button("⏸️ Deaktivieren" if active else "▶️ Aktivieren", key=f"sup_toggle_{pick}"):
             db.reference(f"supporters/{pick}/active").set(not active)
+            write_admin_audit("Supporter aktiviert" if not active else "Supporter deaktiviert", "Team", pick)
             st.rerun()
         ok = st.checkbox("Ja, wirklich löschen", key=f"sup_delok_{pick}")
         if st.button("🗑️ Supporter löschen", disabled=not ok, key=f"sup_del_{pick}"):
             db.reference(f"supporters/{pick}").delete()
+            write_admin_audit("Supporter gelöscht", "Team", pick)
             st.rerun()
 
 
