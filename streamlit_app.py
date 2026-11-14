@@ -234,40 +234,94 @@ def _p(ns=""):
     return f"{ns}/" if ns else ""
 
 
-def load_streamers(ns=""):
+def _presence_rows(ns="", product="StreamDex OS"):
     presence = db.reference(f"{_p(ns)}presence").get() or {}
     meta = db.reference(f"{_p(ns)}chat_meta").get() or {}
     read = db.reference(f"{_p(ns)}admin_state/read").get() or {}
+    result = []
+    for key, payload in presence.items():
+        if not isinstance(payload, dict):
+            continue
+        tid = str(payload.get("twitch_id") or (str(key)[4:] if str(key).startswith("mod_") else key))
+        if not tid.isdigit():
+            continue
+        seen = int(payload.get("last_seen") or 0)
+        age = (int(time.time() * 1000) - seen) / 1000 if seen else None
+        online = payload.get("status") == "online" and age is not None and 0 <= age <= ONLINE_STALE_SECONDS
+        m = meta.get(key) if isinstance(meta.get(key), dict) else {}
+        last_msg_ts = int(m.get("last_ts") or 0)
+        unread = m.get("last_sender") == "streamer" and last_msg_ts > int(read.get(key) or 0)
+        result.append({
+            "tid": tid, "name": payload.get("twitch_username") or tid,
+            "version": payload.get("app_version") or "?",
+            "online": online, "age": age, "last_seen": seen,
+            "unread": unread, "preview": m.get("last_text", ""),
+            "namespace": ns, "presence_key": str(key), "product": product,
+            "chat": product in ("StreamDex OS", "StreamDex Lurk"),
+            "hw": [h for h in (payload.get("hw_machine"), payload.get("hw_board")) if isinstance(h, str) and len(h) == 64],
+            "blocked": payload.get("status") == "blocked",
+        })
+    return result
+
+
+def load_streamers(ns=""):
+    # Lurk-Unterseiten behalten ihre bisherige, produktbezogene Nutzerliste.
+    if ns:
+        source_rows = _presence_rows(ns, "StreamDex Lurk")
+    else:
+        # Ein Twitch-Konto = ein Nutzer. Mehrere Produkt-Presence-Einträge
+        # werden anhand der echten Twitch-ID zusammengeführt.
+        source_rows = (
+            _presence_rows("", "StreamDex OS")
+            + _presence_rows("lurk", "StreamDex Lurk")
+        )
+        core = db.reference("presence").get() or {}
+        if isinstance(core, dict):
+            mod_rows = []
+            for key, payload in core.items():
+                if str(key).startswith("mod_") and isinstance(payload, dict):
+                    tid = str(payload.get("twitch_id") or str(key)[4:])
+                    if tid.isdigit():
+                        seen = int(payload.get("last_seen") or 0)
+                        age = (int(time.time() * 1000) - seen) / 1000 if seen else None
+                        mod_rows.append({
+                            "tid": tid, "name": payload.get("twitch_username") or tid,
+                            "version": payload.get("app_version") or "?",
+                            "online": payload.get("status") == "online" and age is not None and 0 <= age <= ONLINE_STALE_SECONDS,
+                            "age": age, "last_seen": seen, "unread": False, "preview": "",
+                            "namespace": "", "presence_key": str(key), "product": "StreamDex Mod Control",
+                            "chat": False, "hw": [h for h in (payload.get("hw_machine"), payload.get("hw_board")) if isinstance(h, str) and len(h) == 64],
+                            "blocked": payload.get("status") == "blocked",
+                        })
+            source_rows.extend(mod_rows)
+
     bans_tw = db.reference("bans/twitch").get() or {}
     bans_hw = db.reference("bans/hwid").get() or {}
-    now_ms = int(time.time() * 1000)
-    rows = []
-    for tid, p in presence.items():
-        if not isinstance(p, dict):
-            continue
-        last_seen = int(p.get("last_seen") or 0)
-        age = (now_ms - last_seen) / 1000 if last_seen else None
-        online = p.get("status") == "online" and age is not None and age <= ONLINE_STALE_SECONDS
-        m = meta.get(tid) if isinstance(meta.get(tid), dict) else {}
-        last_msg_ts = int(m.get("last_ts") or 0)
-        unread = m.get("last_sender") == "streamer" and last_msg_ts > int(read.get(tid) or 0)
-        hw = [h for h in (p.get("hw_machine"), p.get("hw_board")) if isinstance(h, str) and len(h) == 64]
-        banned = tid in bans_tw
-        hw_banned = any(h in bans_hw for h in hw)
-        rows.append({
-            "banned": banned,
-            "hw_banned": hw_banned and not banned,
-            "blocked": p.get("status") == "blocked",
-            "hw": hw,
-            "tid": tid,
-            "name": p.get("twitch_username") or tid,
-            "version": p.get("app_version") or "?",
-            "online": online,
-            "age": age,
-            "last_seen": last_seen,
-            "unread": unread,
-            "preview": m.get("last_text", ""),
+    grouped = {}
+    for app in source_rows:
+        tid = app["tid"]
+        user = grouped.setdefault(tid, {
+            "tid": tid, "name": app["name"], "apps": {}, "hw": [],
+            "unread": False, "preview": "", "last_seen": 0, "online": False,
+            "banned": tid in bans_tw, "hw_banned": False, "blocked": False,
         })
+        if app["name"] and (not user["name"] or user["name"] == tid):
+            user["name"] = app["name"]
+        user["apps"][app["product"]] = app
+        user["hw"].extend(app["hw"])
+        user["unread"] = user["unread"] or app["unread"]
+        if app["unread"] and app["last_seen"] >= user["last_seen"]:
+            user["preview"] = app["preview"]
+        user["last_seen"] = max(user["last_seen"], app["last_seen"])
+        user["online"] = user["online"] or app["online"]
+        user["blocked"] = user["blocked"] or app["blocked"]
+    rows = []
+    for user in grouped.values():
+        user["hw"] = sorted(set(user["hw"]))
+        user["hw_banned"] = any(h in bans_hw for h in user["hw"]) and not user["banned"]
+        user["version"] = " · ".join(f"{name}: {record['version']}" for name, record in user["apps"].items())
+        user["age"] = (int(time.time() * 1000) - user["last_seen"]) / 1000 if user["last_seen"] else None
+        rows.append(user)
     rows.sort(key=lambda r: (not r["unread"], not r["online"], -r["last_seen"]))
     return rows
 
@@ -312,7 +366,8 @@ def streamer_list(search, only_online, ns=""):
     for r in shown:
         icon = "🚫" if r["banned"] else "⚠️" if r["hw_banned"] else "🟢" if r["online"] else "⚪"
         badge = " 🔴" if r["unread"] else ""
-        label = f"{icon} {r['name']}{badge} · {r['version']} · {fmt_ago(r['age'])}"
+        products = ", ".join(r.get("apps", {}).keys()) if r.get("apps") else r.get("product", "StreamDex Lurk")
+        label = f"{icon} {r['name']}{badge} · {products} · {fmt_ago(r['age'])}"
         selected = st.session_state.get(sel_key) == r["tid"]
         if st.button(label, key=f"sel_{ns}_{r['tid']}", use_container_width=True, type="primary" if selected else "secondary"):
             st.session_state[sel_key] = r["tid"]
@@ -349,21 +404,47 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
     name = info.get("name", tid)
     st.subheader(f"💬 {name}")
     st.caption(
-        f"Twitch-ID `{tid}` · Version {info.get('version', '?')} · "
-        f"{'🟢 online' if info.get('online') else '⚪ offline'} · zuletzt aktiv {fmt_ago(info.get('age'))}"
+        f"Twitch-ID `{tid}` · {'🟢 online' if info.get('online') else '⚪ offline'} · "
+        f"zuletzt aktiv {fmt_ago(info.get('age'))}"
     )
+    apps = info.get("apps", {})
+    if apps:
+        st.markdown("**Verwendete StreamDex-Produkte**")
+        for product, app in apps.items():
+            st.write(f"{'🟢' if app['online'] else '⚪'} **{product}** · Version {app['version']} · zuletzt {fmt_ago(app['age'])}")
+        chat_apps = {product: app for product, app in apps.items() if app.get("chat")}
+        if chat_apps:
+            selected_product = st.selectbox(
+                "Support-Chat für Produkt",
+                list(chat_apps),
+                key=f"support_product_{tid}",
+            )
+            chat_ns = chat_apps[selected_product]["namespace"]
+            chat_key = chat_apps[selected_product]["presence_key"]
+            messages_area = st.container()
+            prompt = st.chat_input(f"Antwort an {name} · {selected_product} ...", key=f"support_prompt_{tid}_{selected_product}")
+            if prompt:
+                try:
+                    send_admin_message(chat_key, prompt, sender_name, chat_ns)
+                except Exception:
+                    st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es erneut.")
+            with messages_area:
+                chat_messages(chat_key, chat_ns)
+        else:
+            st.info("Für die verbundenen Produkte ist aktuell kein Support-Chat-Endpunkt vorhanden.")
+    else:
+        # Produktbezogene Lurk-Ansicht (separater Tab)
+        messages_area = st.container()
+        prompt = st.chat_input(f"Antwort an {name} ...")
+        if prompt:
+            try:
+                send_admin_message(tid, prompt, sender_name, ns)
+            except Exception:
+                st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es erneut.")
+        with messages_area:
+            chat_messages(tid, ns)
 
-    messages_area = st.container()
-    prompt = st.chat_input(f"Antwort an {name} ...")
-    if prompt:
-        try:
-            send_admin_message(tid, prompt, sender_name, ns)
-        except Exception as e:
-            st.error("Die Nachricht konnte nicht gesendet werden. Bitte versuche es erneut.")
-    with messages_area:
-        chat_messages(tid, ns)
-
-    if allow_actions:
+    if allow_actions and not apps:
         with st.expander("⚙️ Aktionen"):
             st.caption("Setzt die Geräte-Bindung des Streamers zurück.")
             confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{ns}_{tid}")
