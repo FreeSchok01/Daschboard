@@ -941,3 +941,24 @@ def test_v6_beta_status_never_creates_game_entitlements_or_flags(memory_db):
     shop.remove_beta("beta-user")
     assert memory_db.reference("shop/beta/beta-user").get() is None
     assert memory_db.reference("game_flags/streamers/beta-user").get() is None
+
+def test_v6_rebuilding_licences_after_refund_keeps_other_paid_rights(memory_db):
+    memory_db.reference("shop/orders/SDX-AAAAAA").set({
+        "tid": "refund-user", "name": "RefundUser", "status": "paid", "games": ["slot"],
+    })
+    memory_db.reference("shop/orders/SDX-BBBBBB").set({
+        "tid": "refund-user", "name": "RefundUser", "status": "paid",
+        "licenses": [{
+            "product_id": "premium_viewer_panel",
+            "features": ["panel.duels"], "games": [], "duration_months": 3,
+        }],
+    })
+    shop.migrate_legacy_paid_orders("refund-user")
+    assert "game.slot" in shop.active_features("refund-user", include_free_week=False)
+    assert "panel.duels" in shop.active_features("refund-user", include_free_week=False)
+
+    shop.rebuild_user_entitlements("refund-user", exclude_orders={"SDX-AAAAAA"})
+    remaining = shop.active_features("refund-user", include_free_week=False)
+    assert "game.slot" not in remaining
+    assert "panel.duels" in remaining
+    assert memory_db.reference("game_flags/streamers/refund-user/slot").get() is None
