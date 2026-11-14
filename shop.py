@@ -45,7 +45,7 @@ FEATURE_LABELS = {
     "heist.bank": "Bank Heist", "heist.train": "Zug-Überfall", "heist.treasure": "Schatzkarte",
     "heist.casino": "Casino-Einbruch", "heist.jail": "Gefängnis", "heist.breakout": "Gefängnisausbruch",
     "heist.gangs": "Banden", "heist.safecracker": "Safe-Knacker", "heist.pickpocket": "Taschenraub",
-    "heist.raffel": "Raffel um Points", "heist.gambel": "Gambel", "heist.points_raffle": "Punkte-Raffle",
+    "legacy.raffel": "Alte Punkte-Raffel", "legacy.gambel": "Altes Gambel-Spiel", "legacy.raffle": "Altes Punkte-Raffle",
     "progress.daily_quests": "Tagesquests", "progress.weekly_quests": "Wochenquests",
     "progress.achievements": "Erfolge", "progress.pets": "Haustiere", "progress.album": "Sammelalbum",
     "progress.levels": "Fortschritt & Level", "progress.daily_rewards": "Tagesbelohnungen",
@@ -56,12 +56,12 @@ GAME_FEATURES = {
     "arena": ["game.arena"], "mining": ["game.mining"], "hilo": ["game.hilo"],
     "slot": ["game.slot"], "megaslot": ["game.megaslot"], "fishing": ["game.fishing"],
     "farming": ["game.farming"], "race": ["game.race"],
-    "steal": ["heist.pickpocket"], "raffel": ["heist.raffel"],
-    "gambel": ["heist.gambel"], "raffle": ["heist.points_raffle"],
+    "steal": ["heist.pickpocket"], "raffel": ["legacy.raffel"],
+    "gambel": ["legacy.gambel"], "raffle": ["legacy.raffle"],
 }
 FEATURE_GAMES = {feature: game for game, features in GAME_FEATURES.items() for feature in features}
 GAME_FEATURES_ALL = ["game.arena", "game.mining", "game.hilo", "game.slot", "game.megaslot", "game.fishing", "game.farming", "game.race"]
-HEIST_FEATURES = ["heist.bank", "heist.train", "heist.treasure", "heist.casino", "heist.jail", "heist.breakout", "heist.gangs", "heist.safecracker", "heist.pickpocket", "heist.raffel", "heist.gambel", "heist.points_raffle"]
+HEIST_FEATURES = ["heist.bank", "heist.train", "heist.treasure", "heist.casino", "heist.jail", "heist.breakout", "heist.gangs", "heist.safecracker", "heist.pickpocket"]
 PROGRESSION_FEATURES = ["progress.daily_quests", "progress.weekly_quests", "progress.achievements", "progress.pets", "progress.album", "progress.levels", "progress.daily_rewards"]
 PANEL_PLUS_FEATURES = ["panel.duels", "panel.lottery", "panel.scratch_cards", "panel.savings"]
 DURATION_OPTIONS = ((1, "1 Monat"), (3, "3 Monate"), (6, "6 Monate"), (12, "12 Monate"), (0, "Lifetime"))
