@@ -317,7 +317,7 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
                 st.success("Zurückgesetzt.")
 
 
-def games_panel():
+def games_panel(allow_free_week=False):
     st.caption(
         "StreamDex v6 vergibt Rechte ausschließlich über bezahlte Lizenzen. "
         "Globale Freigaben bleiben dauerhaft aus; zeitlich begrenzte Ausnahmen laufen über Free Week."
@@ -345,7 +345,10 @@ def games_panel():
         for label in GAMES.values()
     ])
     st.dataframe(global_df, hide_index=True, use_container_width=True)
-    admin_free_week_panel()
+    if allow_free_week:
+        admin_free_week_panel()
+    else:
+        st.caption("Die Free-Week-Steuerung ist nur im Admin-Bereich verfügbar.")
 
     st.divider()
     st.subheader("👤 Aktive Kaufrechte pro Streamer")
@@ -722,7 +725,7 @@ def main():
         except Exception as e:
             st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_games:
-        games_panel()
+        games_panel(allow_free_week=True)
     with tab_shop:
         admin_shop_panel(GAMES)
     with tab_coupons:
