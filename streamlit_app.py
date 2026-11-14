@@ -19,6 +19,7 @@ from firebase_admin import credentials, db
 from admin_users import render_user_admin
 from admin_overview import render_admin_overview
 from admin_audit import render_admin_audit, write_admin_audit
+from admin_search import render_admin_search
 from admin_events import render_admin_events
 from admin_registry import render_admin_registry, render_arcaid_admin
 from admin_system import render_admin_system_status
@@ -66,6 +67,7 @@ ADMIN_NAV_GROUPS = [
     ]),
     ("VERWALTUNG", [
         ("users", "👤 Nutzer & Accounts"),
+        ("search", "🔎 Globale Suche"),
         ("analytics", "📊 Analytics"),
         ("games", "🎮 Games & Lizenzen"),
         ("shop", "🛒 Shop & Bestellungen"),
@@ -87,6 +89,7 @@ ADMIN_PAGE_TITLES = {
     "mod_control": "StreamDex Mod Control",
     "arcaid": "StreamDex Arcaid",
     "users": "Nutzer & Accounts",
+    "search": "Globale Nutzer- & Client-Suche",
     "analytics": "Analytics",
     "games": "Games & Lizenzen",
     "shop": "Shop & Bestellungen",
@@ -806,6 +809,9 @@ def main():
             chat_panel(rows_by_tid)
         return
 
+    if page == "search":
+        render_admin_search()
+        return
     if page == "users":
         try:
             render_user_admin()
