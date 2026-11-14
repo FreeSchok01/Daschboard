@@ -8,6 +8,8 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import db as firebase_db
 
+from admin_audit import write_admin_audit
+
 TZ = ZoneInfo("Europe/Berlin")
 ONLINE_STALE_SECONDS = 150
 SERVER_TS = {".sv": "timestamp"}
@@ -89,6 +91,7 @@ def _ban(row, reason, include_hw):
             firebase_db.reference(f"bans/hwid/{value}").set({
                 "reason": reason, "tid": row["tid"], "name": row["name"][:100], "ts": SERVER_TS,
             })
+    write_admin_audit("Mod-Control-Sperre aktiviert", "Mod Control", f"{row['name']} ({row['tid']})")
 
 
 def _unban(tid):
@@ -99,6 +102,7 @@ def _unban(tid):
             if isinstance(record, dict) and str(record.get("tid") or "") == str(tid):
                 if HW_HASH_RE.fullmatch(str(value).lower()):
                     firebase_db.reference(f"bans/hwid/{value}").delete()
+    write_admin_audit("Mod-Control-Sperre aufgehoben", "Mod Control", str(tid))
 
 
 def render_mod_control_admin():
