@@ -18,6 +18,7 @@ DEFAULT_PRODUCTS = [
         "icon": "⚡",
         "button_label": "StreamDex entdecken",
         "button_url": "/?dashboard=1",
+        "image_url": "",
         "visible": True,
         "accent": "violet",
     },
@@ -31,6 +32,7 @@ DEFAULT_PRODUCTS = [
         "icon": "🛡️",
         "button_label": "Download starten",
         "button_url": "",
+        "image_url": "",
         "visible": True,
         "accent": "cyan",
     },
@@ -61,6 +63,15 @@ def _safe_url(value):
     return value if parsed.scheme in ("https", "http") and parsed.netloc else ""
 
 
+def _safe_image_url(value):
+    """Only allow remote HTTPS image URLs in public product cards."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    return value if parsed.scheme == "https" and parsed.netloc else ""
+
+
 def load_public_products():
     """Load editable product content; defaults keep the page usable before first save."""
     try:
@@ -74,10 +85,11 @@ def load_public_products():
         saved = stored.get(default["key"])
         if isinstance(saved, dict):
             for field in ("name", "eyebrow", "description", "status", "status_key",
-                          "icon", "button_label", "button_url", "visible", "accent"):
+                          "icon", "button_label", "button_url", "image_url", "visible", "accent"):
                 if field in saved:
                     item[field] = saved[field]
         item["button_url"] = _safe_url(item.get("button_url"))
+        item["image_url"] = _safe_image_url(item.get("image_url"))
         item["visible"] = bool(item.get("visible", True))
         products.append(item)
     return products
@@ -93,6 +105,11 @@ def _product_card(product, index):
     accent = str(product.get("accent") or "violet")
     accent = accent if accent in ("violet", "cyan", "amber") else "violet"
     url = _safe_url(product.get("button_url"))
+    image_url = _safe_image_url(product.get("image_url"))
+    image = (
+        f'<div class="sd-product-image"><img src="{html.escape(image_url, quote=True)}" alt="{name} Produktbild" loading="lazy"></div>'
+        if image_url else '<div class="sd-product-image sd-product-image-empty"><span>✦</span></div>'
+    )
     label = html.escape(str(product.get("button_label") or "Mehr erfahren"))
     coming = status_key == "coming_soon"
     action = (
@@ -101,6 +118,7 @@ def _product_card(product, index):
     )
     return (
         f'<article class="sd-product-card accent-{accent}">'
+        f'{image}'
         f'<div class="sd-product-top"><span class="sd-product-icon">{icon}</span>'
         f'<span class="sd-product-status {"soon" if coming else "ready"}">{status}</span></div>'
         f'<div class="sd-product-eyebrow">{eyebrow}</div>'
@@ -135,6 +153,9 @@ def render_public_product_portfolio():
         .sd-product-card.accent-violet{--product-glow:rgba(139,92,246,.22)}
         .sd-product-card.accent-cyan{--product-glow:rgba(34,211,238,.18)}
         .sd-product-card.accent-amber{--product-glow:rgba(245,158,11,.16)}
+        .sd-product-image{height:132px;margin:-19px -19px 17px;overflow:hidden;position:relative;background:linear-gradient(120deg,rgba(124,58,237,.2),rgba(8,145,178,.12));border-bottom:1px solid rgba(148,163,184,.12)}
+        .sd-product-image img{width:100%;height:100%;object-fit:cover;display:block}
+        .sd-product-image-empty{display:grid;place-items:center;color:rgba(196,181,253,.55);font-size:2.2rem}
         .sd-product-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px;position:relative}
         .sd-product-icon{display:grid;place-items:center;width:47px;height:47px;border:1px solid rgba(167,139,250,.24);
           border-radius:14px;background:linear-gradient(135deg,rgba(139,92,246,.2),rgba(34,211,238,.08));font-size:1.45rem}
@@ -192,10 +213,19 @@ def render_admin_product_editor():
             visible = st.checkbox("Auf der öffentlichen Seite anzeigen", value=product["visible"])
             button_label = st.text_input("Button-Beschriftung", value=str(product["button_label"]))
         button_url = st.text_input("Button-/Download-Link", value=str(product["button_url"]), placeholder="https://... oder /?dashboard=1")
+        image_url = st.text_input("Produktbild-URL (HTTPS)", value=str(product.get("image_url") or ""), placeholder="https://.../streamdex-banner.png")
+        if image_url.strip() and _safe_image_url(image_url):
+            st.image(image_url.strip(), caption="Vorschau des Produktbildes", use_container_width=True)
+        elif image_url.strip():
+            st.warning("Bitte eine vollständige HTTPS-Bildadresse eintragen.")
         st.caption("Erlaubt sind http(s)-Links oder interne Pfade wie /?dashboard=1. Bei Coming Soon wird kein aktiver Download-Button angezeigt.")
         save = st.form_submit_button("Änderungen speichern", type="primary", use_container_width=True)
     if save:
         safe = _safe_url(button_url)
+        safe_image = _safe_image_url(image_url)
+        if image_url.strip() and not safe_image:
+            st.error("Das Produktbild benötigt eine vollständige HTTPS-Adresse.")
+            return
         if button_url.strip() and not safe:
             st.error("Der Link ist ungültig. Bitte eine vollständige http(s)-Adresse oder einen internen Pfad angeben.")
             return
@@ -208,6 +238,7 @@ def render_admin_product_editor():
             "accent": accent, "status_key": status_key, "status": status.strip()[:40],
             "visible": bool(visible), "button_label": button_label.strip()[:60] or "Mehr erfahren",
             "button_url": safe,
+            "image_url": safe_image,
         }
         try:
             db.reference(f"{PRODUCTS_PATH}/{selected}").set(payload)
