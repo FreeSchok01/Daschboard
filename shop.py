@@ -253,28 +253,57 @@ def _apply_order_license(order, order_code, force_lifetime=False):
 
 
 def migrate_legacy_paid_orders(tid):
-    """Import legacy paid orders as Lifetime; beta flags and global flags are not purchase proof."""
+    """Import historical paid purchases as Lifetime, remove Beta/manual unlocks, and keep only Lifetime legacy flags."""
     tid = str(tid or "").strip()
     if not tid:
         return 0
     marker = db.reference(f"shop/migrations/v6/legacy_orders/{tid}")
     if marker.get():
         return 0
+
     orders = db.reference("shop/orders").get() or {}
     imported = 0
     if isinstance(orders, dict):
         for order_id, order in orders.items():
             if not isinstance(order, dict) or order.get("status") != "paid" or str(order.get("tid") or "") != tid:
                 continue
-            if order.get("item") == "tourskip" or isinstance(order.get("licenses"), list):
+            if order.get("item") == "tourskip":
+                continue
+            if isinstance(order.get("licenses"), list):
+                # v6 purchase: repair a partially completed fulfilment if necessary.
+                _apply_order_license(order, str(order_id))
                 continue
             if not _order_access_features(order):
                 continue
             _apply_order_license(order, str(order_id), force_lifetime=True)
             imported += 1
-    marker.set({"completed_at_ms": int(time.time() * 1000), "imported_orders": imported})
-    return imported
 
+    entitlements = db.reference(f"shop/entitlements/{tid}").get() or {}
+    lifetime_features = {
+        str(feature) for feature, record in (entitlements.items() if isinstance(entitlements, dict) else [])
+        if isinstance(record, dict) and record.get("license_type") == "lifetime"
+        and record.get("active") is not False
+    }
+    lifetime_games = {
+        FEATURE_GAMES[feature] for feature in lifetime_features if feature in FEATURE_GAMES
+    }
+    flags_ref = db.reference(f"game_flags/streamers/{tid}")
+    old_flags = flags_ref.get() or {}
+    if isinstance(old_flags, dict):
+        for game in GAME_FEATURES:
+            if game in lifetime_games:
+                flags_ref.child(game).set(True)
+            else:
+                flags_ref.child(game).delete()
+
+    # A Beta invitation is not a purchase and must not survive the v6 migration.
+    db.reference(f"shop/beta/{tid}").delete()
+    marker.set({
+        "completed_at_ms": int(time.time() * 1000),
+        "imported_orders": imported,
+        "lifetime_features": sorted(lifetime_features),
+    })
+    return imported
 
 def migrate_all_legacy_paid_orders():
     """One-time v6 migration for every account with an existing paid order."""
@@ -1643,6 +1672,49 @@ def render_tour_skip():
         st.markdown(f"[Impressum]({sec.get('impressum_url', '#')}) · [AGB]({sec.get('agb_url', '#')}) · [Widerruf]({sec.get('widerruf_url', '#')})")
 
 
+def admin_free_week_panel():
+    """Global timed access override shown inside Admin → Game-Freigaben."""
+        st.subheader("🎉 Free Week – zeitlich begrenzte globale Freigabe")
+        free_cfg = db.reference("shop/free_week").get() or {}
+        with st.form("shop_free_week"):
+            fw_enabled = st.toggle("Free Week aktivieren", value=bool(free_cfg.get("enabled", False)))
+            current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS]
+            fw_features = st.multiselect(
+                "Inhalte für alle freigeben",
+                options=list(FEATURE_LABELS),
+                default=current_features,
+                format_func=lambda key: FEATURE_LABELS[key],
+            )
+            shop_tz = ZoneInfo("Europe/Berlin")
+            now_local = datetime.now(shop_tz)
+            current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000, shop_tz)
+            current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000, shop_tz)
+            fw_start_date = st.date_input("Startdatum", value=current_start.date(), key="shop_fw_start_date")
+            fw_start_time = st.time_input("Startzeit", value=current_start.time().replace(second=0, microsecond=0), key="shop_fw_start_time")
+            fw_end_date = st.date_input("Enddatum", value=current_end.date(), key="shop_fw_end_date")
+            fw_end_time = st.time_input("Endzeit", value=current_end.time().replace(second=0, microsecond=0), key="shop_fw_end_time")
+            fw_saved = st.form_submit_button("Free Week speichern")
+        if fw_saved:
+            start_dt = datetime.combine(fw_start_date, fw_start_time, tzinfo=ZoneInfo("Europe/Berlin"))
+            end_dt = datetime.combine(fw_end_date, fw_end_time, tzinfo=ZoneInfo("Europe/Berlin"))
+            start_ms = int(start_dt.timestamp() * 1000)
+            end_ms = int(end_dt.timestamp() * 1000)
+            if not fw_features:
+                st.error("Bitte mindestens einen Inhalt für die Free Week auswählen.")
+            elif end_ms <= start_ms:
+                st.error("Das Ende muss nach dem Start liegen.")
+            else:
+                free_week_payload = {
+                    "enabled": bool(fw_enabled), "features": fw_features,
+                    "starts_at_ms": start_ms, "ends_at_ms": end_ms,
+                    "updated_at_ms": int(time.time() * 1000),
+                }
+                db.reference("shop/free_week").set(free_week_payload)
+                db.reference("game_flags/free_week").set(free_week_payload)
+                st.success("Free Week gespeichert. Die Freigabe gilt für alle Nutzer nur innerhalb des gewählten Zeitfensters.")
+                st.rerun()
+
+
 def admin_shop_panel(games):
     items = load_items(active_only=False)
     cfg = shop_settings()
@@ -1654,45 +1726,7 @@ def admin_shop_panel(games):
             db.reference("shop/settings").set({"open": op, "banner": bn.strip()})
             st.success("Gespeichert.")
     st.caption("Globale Game-Freigaben bleiben standardmäßig deaktiviert. Kostenlose Zugänge werden ausschließlich über eine zeitlich begrenzte Free Week geöffnet.")
-    st.subheader("🎉 Free Week – zeitlich begrenzte globale Freigabe")
-    free_cfg = db.reference("shop/free_week").get() or {}
-    with st.form("shop_free_week"):
-        fw_enabled = st.toggle("Free Week aktivieren", value=bool(free_cfg.get("enabled", False)))
-        current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS]
-        fw_features = st.multiselect(
-            "Inhalte für alle freigeben",
-            options=list(FEATURE_LABELS),
-            default=current_features,
-            format_func=lambda key: FEATURE_LABELS[key],
-        )
-        shop_tz = ZoneInfo("Europe/Berlin")
-        now_local = datetime.now(shop_tz)
-        current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000, shop_tz)
-        current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000, shop_tz)
-        fw_start_date = st.date_input("Startdatum", value=current_start.date(), key="shop_fw_start_date")
-        fw_start_time = st.time_input("Startzeit", value=current_start.time().replace(second=0, microsecond=0), key="shop_fw_start_time")
-        fw_end_date = st.date_input("Enddatum", value=current_end.date(), key="shop_fw_end_date")
-        fw_end_time = st.time_input("Endzeit", value=current_end.time().replace(second=0, microsecond=0), key="shop_fw_end_time")
-        fw_saved = st.form_submit_button("Free Week speichern")
-    if fw_saved:
-        start_dt = datetime.combine(fw_start_date, fw_start_time, tzinfo=ZoneInfo("Europe/Berlin"))
-        end_dt = datetime.combine(fw_end_date, fw_end_time, tzinfo=ZoneInfo("Europe/Berlin"))
-        start_ms = int(start_dt.timestamp() * 1000)
-        end_ms = int(end_dt.timestamp() * 1000)
-        if not fw_features:
-            st.error("Bitte mindestens einen Inhalt für die Free Week auswählen.")
-        elif end_ms <= start_ms:
-            st.error("Das Ende muss nach dem Start liegen.")
-        else:
-            free_week_payload = {
-                "enabled": bool(fw_enabled), "features": fw_features,
-                "starts_at_ms": start_ms, "ends_at_ms": end_ms,
-                "updated_at_ms": int(time.time() * 1000),
-            }
-            db.reference("shop/free_week").set(free_week_payload)
-            db.reference("game_flags/free_week").set(free_week_payload)
-            st.success("Free Week gespeichert. Die Freigabe gilt für alle Nutzer nur innerhalb des gewählten Zeitfensters.")
-            st.rerun()
+
 
     st.subheader("💶 Preise & Sichtbarkeit")
     game_items = [(k, v) for k, v in items.items() if v.get("kind", "game") == "game"]
