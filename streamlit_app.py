@@ -40,18 +40,14 @@ SERVER_TS = {".sv": "timestamp"}
 
 # Muss zu GAME_LABELS in app.py passen (gleiche Schlüssel!)
 GAMES = {
+    "arena": "🚶 2D-Viewer-Arena",
+    "mining": "⛏️ Minen",
+    "hilo": "🃏 Hi-Lo",
     "slot": "🎰 Slot Machine",
     "megaslot": "🎡 Mega Slot",
-    "steal": "🕵️ Taschenraub",
-    "raffel": "🎫 Raffel (!raffel)",
-    "gambel": "🎲 Gambel",
-    "hilo": "🃏 Hi-Lo",
-    "raffle": "🎟️ Punkte-Raffle",
-    "fishing": "🎣 Angeln/Kraken",
-    "mining": "⛏️ Minen",
-    "farming": "🌱 Farm",
+    "fishing": "🎣 Angel Game",
+    "farming": "🌱 Farm Game",
     "race": "🏎️ Sim Racing",
-    "arena": "🚶 Arena",
 }
 # Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
 TOOLS = {"streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk"}
@@ -331,8 +327,9 @@ def games_panel():
         migrate_all_legacy_paid_orders()
         g_global = db.reference("game_flags/global").get() or {}
         rows = load_streamers()
-        forced_global = {key: False for key in GAMES}
-        if not isinstance(g_global, dict) or any(g_global.get(key) is not False for key in GAMES) or set(g_global) != set(GAMES):
+        g_global = g_global if isinstance(g_global, dict) else {}
+        forced_global = {key: False for key in (set(GAMES) | set(g_global))}
+        if g_global != forced_global:
             db.reference("game_flags/global").set(forced_global)
     except Exception:
         st.error("Die Rechteübersicht konnte wegen eines internen Dienstfehlers nicht geladen werden. Bitte versuche es erneut.")
@@ -365,7 +362,7 @@ def games_panel():
     now_ms = int(time.time() * 1000)
     for row in shown:
         tid = str(row["tid"])
-        rights = active_features(tid)
+        rights = {feature for feature in active_features(tid) if not feature.startswith("legacy.")}
         records = db.reference(f"shop/entitlements/{tid}").get() or {}
         labels = []
         for feature in sorted(rights):
