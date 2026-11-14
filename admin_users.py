@@ -434,7 +434,7 @@ def render_user_admin():
             m7.metric("Ernten", _number(stats.get("harvests")))
             m8.metric("Raids", _number(stats.get("raids")))
             st.markdown("### 🎮 Game-Freigaben")
-            game_keys = sorted(set(detail["global_flags"]) | set(detail["flags"]))
+            game_keys = sorted(key for key in (set(detail["global_flags"]) | set(detail["flags"])) if not str(key).startswith("_"))
             if game_keys:
                 game_df = pd.DataFrame([{
                     "Game": key,
