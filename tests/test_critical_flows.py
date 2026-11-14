@@ -833,3 +833,96 @@ def test_tebex_return_rejects_incomplete_or_wrong_price_basket(monkeypatch, memo
     assert memory_db.reference("shop/orders/SDX-ABC234/status").get() == "pending"
     assert memory_db.reference("game_flags/streamers/12345/slot").get() is None
 
+
+
+
+def test_v6_shop_catalog_has_the_approved_products_and_term_prices():
+    games = {
+        "arena": "2D-Viewer-Arena", "mining": "Minen", "hilo": "Hi-Lo",
+        "slot": "Slot Machine", "megaslot": "Mega Slot", "fishing": "Angel Game",
+        "farming": "Farm Game", "race": "Sim Racing",
+    }
+    items = shop.default_items(games)
+    assert set(games) <= set(items)
+    assert {
+        "pack_casino", "pack_abenteuer", "pack_action",
+        "bundle_heist", "bundle_progression", "premium_viewer_panel", "bundle_ultimate",
+    } <= set(items)
+    assert len(items) == 15
+    assert all(item["active"] is False for item in items.values())
+    assert items["bundle_heist"]["features"] == shop.HEIST_FEATURES
+    assert items["bundle_progression"]["features"] == shop.PROGRESSION_FEATURES
+    assert items["premium_viewer_panel"]["features"] == shop.PANEL_PLUS_FEATURES
+
+    item = {"price": 4.99, "pricing_required": True,
+            "duration_prices": {"1": 2.99, "3": 7.99, "6": 14.99, "12": 26.99, "lifetime": 49.99}}
+    assert shop.duration_price(item, 1) == shop.Decimal("2.99")
+    assert shop.duration_price(item, 3) == shop.Decimal("7.99")
+    assert shop.duration_price(item, 6) == shop.Decimal("14.99")
+    assert shop.duration_price(item, 12) == shop.Decimal("26.99")
+    assert shop.duration_price(item, 0) == shop.Decimal("49.99")
+    assert shop.duration_price({"price": 4.99, "pricing_required": True}, 1) is None
+
+
+def test_v6_timed_licence_expires_and_lifetime_overrides_it(memory_db):
+    now_ms = int(time.time() * 1000)
+    order = {
+        "tid": "license-user", "name": "LicenseUser",
+        "licenses": [{
+            "product_id": "slot", "features": ["game.slot"], "games": ["slot"],
+            "duration_months": 3,
+        }],
+    }
+    granted = shop._apply_order_license(order, "SDX-ABC234")
+    assert granted == {"game.slot"}
+    record = memory_db.reference("shop/entitlements/license-user/game.slot").get()
+    assert record["license_type"] == "term"
+    assert record["expires_at_ms"] > now_ms
+    assert memory_db.reference("game_flags/streamers/license-user/slot").get() is None
+    assert "game.slot" in shop.active_features("license-user", now_ms=record["expires_at_ms"] - 1, include_free_week=False)
+    assert "game.slot" not in shop.active_features("license-user", now_ms=record["expires_at_ms"], include_free_week=False)
+
+    lifetime_order = {
+        "tid": "license-user", "name": "LicenseUser",
+        "licenses": [{
+            "product_id": "slot", "features": ["game.slot"], "games": ["slot"],
+            "duration_months": 0,
+        }],
+    }
+    shop._apply_order_license(lifetime_order, "SDX-DEF234")
+    lifetime = memory_db.reference("shop/entitlements/license-user/game.slot").get()
+    assert lifetime["license_type"] == "lifetime"
+    assert lifetime["expires_at_ms"] is None
+    assert memory_db.reference("game_flags/streamers/license-user/slot").get() is True
+
+
+def test_v6_free_week_only_grants_inside_its_schedule(memory_db):
+    now_ms = int(time.time() * 1000)
+    memory_db.reference("shop/free_week").set({
+        "enabled": True,
+        "features": ["game.arena", "heist.bank"],
+        "starts_at_ms": now_ms - 1000,
+        "ends_at_ms": now_ms + 1000,
+    })
+    assert {"game.arena", "heist.bank"} <= shop.active_features("free-week-user", now_ms=now_ms)
+    assert "game.arena" not in shop.active_features("free-week-user", now_ms=now_ms + 1001)
+    memory_db.reference("shop/free_week/enabled").set(False)
+    assert "game.arena" not in shop.active_features("free-week-user", now_ms=now_ms)
+
+
+def test_v6_legacy_paid_orders_migrate_but_beta_and_global_flags_do_not(memory_db):
+    memory_db.reference("shop/orders/SDX-ABC234").set({
+        "tid": "paid-user", "name": "PaidUser", "status": "paid",
+        "item": "cart", "games": ["slot", "steal"],
+    })
+    memory_db.reference("shop/orders/SDX-DEF234").set({
+        "tid": "pending-user", "status": "pending", "games": ["arena"],
+    })
+    memory_db.reference("game_flags/streamers/beta-only-user/slot").set(True)
+    memory_db.reference("game_flags/global/arena").set(True)
+    assert shop.migrate_legacy_paid_orders("paid-user") == 1
+    paid = shop.owned_features("paid-user")
+    assert {"game.slot", "heist.pickpocket"} <= paid
+    assert memory_db.reference("shop/entitlements/paid-user/game.slot").get()["license_type"] == "lifetime"
+    assert shop.owned_games("beta-only-user") == set()
+    assert shop.owned_games("pending-user") == set()
