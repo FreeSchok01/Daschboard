@@ -18,6 +18,11 @@ from firebase_admin import credentials, db
 
 from admin_users import render_user_admin
 from admin_overview import render_admin_overview
+from admin_audit import render_admin_audit, write_admin_audit
+from admin_search import render_admin_search
+from admin_events import render_admin_events
+from admin_registry import render_admin_registry, render_arcaid_admin
+from admin_system import render_admin_system_status
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
@@ -52,7 +57,52 @@ GAMES = {
     "race": "🏎️ Sim Racing",
 }
 # Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
-TOOLS = {"overview": "🏠 Übersicht", "streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk", "mod_control": "🛡️ StreamDex Mod Control"}
+ADMIN_NAV_GROUPS = [
+    ("START", [("overview", "🏠 Control Center"), ("apps", "🧩 Produktportfolio")]),
+    ("PRODUKTE", [
+        ("support", "💬 StreamDex Live-Support"),
+        ("lurk", "👁️ StreamDex Lurk"),
+        ("mod_control", "🛡️ StreamDex Mod Control"),
+        ("arcaid", "🗃️ StreamDex Arcaid"),
+    ]),
+    ("VERWALTUNG", [
+        ("users", "👤 Nutzer & Accounts"),
+        ("search", "🔎 Globale Suche"),
+        ("analytics", "📊 Analytics"),
+        ("games", "🎮 Games & Lizenzen"),
+        ("shop", "🛒 Shop & Bestellungen"),
+        ("coupons", "🎟️ Gutscheine"),
+        ("beta", "🧪 Beta-Verwaltung"),
+        ("feedback", "🐞 Feedback & Ideen"),
+        ("events", "🎉 Event Center"),
+        ("bans", "🚫 Sperren"),
+    ]),
+    ("TEAM", [("supporters", "👥 Supporter"), ("team_chat", "💭 Team-Chat")]),
+    ("SYSTEM", [("system", "🩺 System- & Datenstatus"), ("audit", "🧾 Admin-Protokoll")]),
+]
+
+ADMIN_PAGE_TITLES = {
+    "overview": "Control Center",
+    "apps": "Produktportfolio",
+    "support": "StreamDex Live-Support",
+    "lurk": "StreamDex Lurk",
+    "mod_control": "StreamDex Mod Control",
+    "arcaid": "StreamDex Arcaid",
+    "users": "Nutzer & Accounts",
+    "search": "Globale Nutzer- & Client-Suche",
+    "analytics": "Analytics",
+    "games": "Games & Lizenzen",
+    "shop": "Shop & Bestellungen",
+    "coupons": "Gutscheine",
+    "beta": "Beta-Verwaltung",
+    "feedback": "Feedback & Ideen",
+    "events": "Event Center",
+    "bans": "Sperren",
+    "supporters": "Supporter",
+    "team_chat": "Team-Chat",
+    "system": "System- & Datenstatus",
+    "audit": "Admin-Aktivitätsprotokoll",
+}
 
 OPT_DEFAULT = "➖ wie global"
 OPT_ON = "✅ frei"
@@ -396,6 +446,7 @@ def ban_streamer(row, reason, with_hw=True):
     if with_hw:
         for h in row["hw"]:
             db.reference(f"bans/hwid/{h}").set({"reason": reason, "tid": row["tid"], "name": row["name"], "ts": SERVER_TS})
+    write_admin_audit("Sperre aktiviert", "Sicherheit", f"{row['name']} ({row['tid']})")
 
 
 def unban_streamer(tid):
@@ -403,6 +454,7 @@ def unban_streamer(tid):
     for h, v in (db.reference("bans/hwid").get() or {}).items():
         if isinstance(v, dict) and str(v.get("tid")) == str(tid):
             db.reference(f"bans/hwid/{h}").delete()
+    write_admin_audit("Sperre aufgehoben", "Sicherheit", str(tid))
 
 
 def bans_panel(ns=""):
@@ -678,23 +730,56 @@ def main():
     init_firebase()
     apply_theme()
 
+    page = st.session_state.get("admin_page", "overview")
+    with st.sidebar:
+        st.markdown("## ⚡ STREAMDEX OS")
+        st.caption("ADMIN CONTROL CENTER")
+        st.divider()
+        for group_name, group_items in ADMIN_NAV_GROUPS:
+            st.markdown(f"**{group_name}**")
+            for page_key, page_label in group_items:
+                if st.button(
+                    page_label,
+                    key=f"admin_nav_{page_key}",
+                    use_container_width=True,
+                    type="primary" if page == page_key else "secondary",
+                ):
+                    st.session_state["admin_page"] = page_key
+                    st.rerun()
+            st.markdown("")
+        st.divider()
+        st.caption("Geschützte Administrator-Sitzung")
+
+    page = st.session_state.get("admin_page", "overview")
+    title = ADMIN_PAGE_TITLES.get(page, "Control Center")
     top_l, top_r = st.columns([6, 1], vertical_alignment="center")
-    top_l.markdown(header_html("ADMIN"), unsafe_allow_html=True)
+    top_l.markdown(header_html(f"ADMIN · {title.upper()}"), unsafe_allow_html=True)
     if top_r.button("Abmelden"):
         st.session_state.clear()
         st.rerun()
 
-    with st.sidebar:
-        st.markdown("## STREAMDEX OS")
-        st.caption("Administration & Systemverwaltung")
-        tool = st.radio("Navigation", list(TOOLS), format_func=TOOLS.get, key="os_tool")
-    if tool == "overview":
+    if page == "overview":
         render_admin_overview()
         return
-    if tool == "mod_control":
+    if page == "apps":
+        render_admin_registry()
+        return
+    if page == "arcaid":
+        render_arcaid_admin()
+        return
+    if page == "system":
+        render_admin_system_status()
+        return
+    if page == "audit":
+        render_admin_audit()
+        return
+    if page == "events":
+        render_admin_events()
+        return
+    if page == "mod_control":
         render_mod_control_admin()
         return
-    if tool == "lurk":
+    if page == "lurk":
         lurk_panel(
             load_streamers=load_streamers,
             streamer_list=streamer_list,
@@ -705,13 +790,10 @@ def main():
         )
         return
 
-    tab_support, tab_users, tab_stats, tab_games, tab_shop, tab_coupons, tab_beta, tab_fb, tab_bans, tab_sups, tab_team = st.tabs(
-        ["💬 Support", "👤 User", "📊 Statistiken", "🎮 Game-Freigaben", "🛒 Shop", "🎟️ Gutscheine", "🧪 Beta", _fb_label(), "🚫 Sperren", "👥 Supporter", "💭 Team-Chat"]
-    )
-    with tab_support:
+    if page == "support":
         try:
             vacation_panel(ADMIN_NAME)
-        except Exception as e:
+        except Exception:
             st.error("Der Urlaubsmodus ist gerade nicht verfügbar. Bitte versuche es erneut.")
         left, right = st.columns([1, 2], gap="large")
         with left:
@@ -725,42 +807,59 @@ def main():
             except Exception:
                 rows_by_tid = {}
             chat_panel(rows_by_tid)
-    with tab_users:
+        return
+
+    if page == "search":
+        render_admin_search()
+        return
+    if page == "users":
         try:
             render_user_admin()
-        except Exception as e:
-            st.error(f"User-Übersicht konnte nicht geladen werden: {type(e).__name__}")
-    with tab_stats:
+        except Exception as exc:
+            st.error(f"User-Übersicht konnte nicht geladen werden: {type(exc).__name__}")
+        return
+    if page == "analytics":
         try:
             stats_panel(load_streamers(), GAMES)
-        except Exception as e:
-            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
-    with tab_games:
+        except Exception:
+            st.error("Die Statistiken konnten nicht geladen werden. Bitte Firebase-Verbindung prüfen.")
+        return
+    if page == "games":
         games_panel(allow_free_week=True)
-    with tab_shop:
+        return
+    if page == "shop":
         admin_shop_panel(GAMES)
-    with tab_coupons:
+        return
+    if page == "coupons":
         admin_coupon_panel()
-    with tab_beta:
+        return
+    if page == "beta":
         try:
             t_apps, t_testers = st.tabs(["📝 Bewerbungen", "🧪 Beta-Tester"])
             with t_apps:
                 admin_beta_applications(GAMES, ADMIN_NAME, is_admin=True)
             with t_testers:
                 admin_beta_panel(GAMES, load_streamers())
-        except Exception as e:
-            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
-    with tab_fb:
+        except Exception:
+            st.error("Die Beta-Verwaltung konnte nicht geladen werden. Bitte Firebase-Verbindung prüfen.")
+        return
+    if page == "feedback":
         feedback_panel(ADMIN_NAME, is_admin=True, tool="streamdex")
-    with tab_bans:
+        return
+    if page == "bans":
         bans_panel()
-    with tab_sups:
+        return
+    if page == "supporters":
         try:
             admin_supporter_panel()
-        except Exception as e:
-            st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
-    with tab_team:
+        except Exception:
+            st.error("Die Supporter-Verwaltung konnte nicht geladen werden. Bitte Firebase-Verbindung prüfen.")
+        return
+    if page == "team_chat":
         team_chat_panel(ADMIN_NAME)
+        return
+
+    render_admin_overview()
 
 
 main()

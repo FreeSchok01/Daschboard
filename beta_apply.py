@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from firebase_admin import db
 
+from admin_audit import write_admin_audit
+
 from downloads import REPO_RE, beta_link, notify_beta_testers, render_public_downloads
 from shop import remove_beta, set_beta
 
@@ -237,6 +239,7 @@ def _approve(k, rec, games, me):
     else:
         upd["applied"] = False
     db.reference(f"beta_applications/{k}").update(upd)
+    write_admin_audit("Beta-Bewerbung freigegeben", "Beta", str(rec.get("name") or k), me)
 
 
 def _revoke_beta(rec):
@@ -349,6 +352,7 @@ def admin_beta_applications(games, me, is_admin=False):
                 _revoke_beta(v)
                 db.reference(f"beta_applications/{k}").update(
                     {"status": "rejected", "applied": False, "decided_by": me, "decided_ts": SERVER_TS})
+                write_admin_audit("Beta-Zugang widerrufen", "Beta", str(v.get("name") or k), me)
                 st.rerun()
             if status != "rejected":
                 why = b2.text_input("Ablehnungsgrund (optional, sieht der Bewerber)", key=f"ba_why_{k}", max_chars=200)
@@ -356,6 +360,7 @@ def admin_beta_applications(games, me, is_admin=False):
                     db.reference(f"beta_applications/{k}").update(
                         {"status": "rejected", "reject_reason": why.strip() or None,
                          "decided_by": me, "decided_ts": SERVER_TS})
+                    write_admin_audit("Beta-Bewerbung abgelehnt", "Beta", str(v.get("name") or k), me)
                     st.rerun()
             if is_admin:
                 ok = b3.checkbox("Ja, löschen", key=f"ba_delok_{k}")
@@ -363,4 +368,5 @@ def admin_beta_applications(games, me, is_admin=False):
                     _revoke_beta(v)
                     db.reference(f"beta_applications/{k}").delete()
                     db.reference(f"beta_codes/{k}").delete()
+                    write_admin_audit("Beta-Bewerbung gelöscht", "Beta", str(v.get("name") or k), me)
                     st.rerun()
