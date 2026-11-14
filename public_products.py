@@ -220,6 +220,6 @@ def render_admin_product_editor():
     preview = dict(product)
     preview["name"] = product["name"]
     st.caption("Die öffentliche Produktseite nutzt dieselben Karten und Inhalte.")
-    _product_card(preview, 0)
+    st.markdown(_product_card(preview, 0), unsafe_allow_html=True)
     st.markdown("### Sichtbarkeit")
     st.write("Nur die hier aktivierten Produkte erscheinen öffentlich. Die aktuelle Vorauswahl umfasst StreamDex, StreamDex Mod Control und StreamDex Arcaid.")
