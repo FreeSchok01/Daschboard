@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from firebase_admin import db
 
+from admin_audit import write_admin_audit
+
 TZ = ZoneInfo("Europe/Berlin")
 KINDS = {"Bug": "🐞 Bug", "Feature-Wunsch": "💡 Idee", "Feedback": "💬 Feedback"}
 STATUSES = ["neu", "in Arbeit", "erledigt", "abgelehnt"]
@@ -107,11 +109,13 @@ def feedback_panel(me, is_admin=False, tool=None):
                 if changed:
                     updates["status_changed_at"] = SERVER_TS
                 db.reference(f"feedback_inbox/{k}").update(updates)
+                write_admin_audit("Feedback aktualisiert", "Feedback", f"{m.get('streamer') or 'Unbekannt'} · {k} · {status} → {new_status}", me)
                 new_count.clear()
                 st.rerun()
             if is_admin:
                 ok = b2.checkbox("Ja, löschen", key=f"fb_delok_{k}")
                 if b2.button("🗑️ Löschen", disabled=not ok, key=f"fb_del_{k}"):
                     db.reference(f"feedback_inbox/{k}").delete()
+                    write_admin_audit("Feedback gelöscht", "Feedback", f"{m.get('streamer') or 'Unbekannt'} · {k}", me)
                     new_count.clear()
                     st.rerun()
