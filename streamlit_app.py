@@ -23,6 +23,7 @@ from admin_search import render_admin_search
 from admin_events import render_admin_events
 from admin_registry import render_admin_registry, render_arcaid_admin
 from admin_system import render_admin_system_status
+from admin_operations import render_release_center, render_security_center
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
@@ -78,7 +79,7 @@ ADMIN_NAV_GROUPS = [
         ("bans", "🚫 Sperren"),
     ]),
     ("TEAM", [("supporters", "👥 Supporter"), ("team_chat", "💭 Team-Chat")]),
-    ("SYSTEM", [("system", "🩺 System- & Datenstatus"), ("audit", "🧾 Admin-Protokoll")]),
+    ("SYSTEM", [("system", "🩺 System- & Datenstatus"), ("releases", "📦 Release & Versionen"), ("security", "🛡️ Sicherheits-Center"), ("audit", "🧾 Admin-Protokoll")]),
 ]
 
 ADMIN_PAGE_TITLES = {
@@ -101,6 +102,8 @@ ADMIN_PAGE_TITLES = {
     "supporters": "Supporter",
     "team_chat": "Team-Chat",
     "system": "System- & Datenstatus",
+    "releases": "Release & Versions-Center",
+    "security": "Sicherheits-Center",
     "audit": "Admin-Aktivitätsprotokoll",
 }
 
@@ -769,6 +772,12 @@ def main():
         return
     if page == "system":
         render_admin_system_status()
+        return
+    if page == "releases":
+        render_release_center()
+        return
+    if page == "security":
+        render_security_center()
         return
     if page == "audit":
         render_admin_audit()
