@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 from firebase_admin import db
 
+from admin_audit import write_admin_audit
+
 TZ = ZoneInfo("Europe/Berlin")
 EVENTS_PATH = "streamdex_events"
 
@@ -107,6 +109,7 @@ def render_admin_events():
                     if st.button("Anmeldung schließen", key=f"admin_event_close_{event_id}", use_container_width=True):
                         try:
                             db.reference(f"{EVENTS_PATH}/{event_id}/status").set("closed")
+                            write_admin_audit("Event geschlossen", "Events", f"{title} ({event_id})")
                             st.success("Anmeldung geschlossen.")
                             st.rerun()
                         except Exception:
@@ -115,6 +118,7 @@ def render_admin_events():
                     if st.button("Event wieder öffnen", key=f"admin_event_open_{event_id}", use_container_width=True):
                         try:
                             db.reference(f"{EVENTS_PATH}/{event_id}/status").set("open")
+                            write_admin_audit("Event wieder geöffnet", "Events", f"{title} ({event_id})")
                             st.success("Event wieder geöffnet.")
                             st.rerun()
                         except Exception:
@@ -143,6 +147,7 @@ def render_admin_events():
                     if st.button("Teilnehmer entfernen", disabled=not confirm_remove, key=f"admin_event_remove_{event_id}"):
                         try:
                             db.reference(f"{EVENTS_PATH}/{event_id}/participants/{participant_options[selected_participant]}").delete()
+                            write_admin_audit("Event-Anmeldung entfernt", "Events", f"{title}: {selected_participant.split(' · ')[0]}")
                             st.success("Anmeldung entfernt.")
                             st.rerun()
                         except Exception:
@@ -155,6 +160,7 @@ def render_admin_events():
             if st.button("🗑️ Event löschen", type="primary", disabled=not confirm_delete, key=f"admin_event_delete_{event_id}"):
                 try:
                     db.reference(f"{EVENTS_PATH}/{event_id}").delete()
+                    write_admin_audit("Event gelöscht", "Events", f"{title} ({event_id})")
                     st.success("Event und Anmeldungen wurden gelöscht.")
                     st.rerun()
                 except Exception:
