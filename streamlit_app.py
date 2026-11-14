@@ -22,7 +22,7 @@ from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
 from events import render_public_events, render_public_event
 from lurk import lurk_panel
-from shop import admin_beta_panel, admin_coupon_panel, admin_shop_panel, handle_paypal_return, handle_tebex_return, render_shop, render_tour_skip
+from shop import (FEATURE_LABELS, active_features, admin_beta_panel, admin_coupon_panel, admin_free_week_panel, admin_shop_panel, handle_paypal_return, handle_tebex_return, migrate_all_legacy_paid_orders, render_shop, render_tour_skip)
 from stats_panel import stats_panel
 from streamer_dashboard import handle_twitch_oauth_callback, has_active_streamer_login, render_streamer_dashboard
 from privacy_security import admin_session_is_valid, safe_exception_label
@@ -40,18 +40,14 @@ SERVER_TS = {".sv": "timestamp"}
 
 # Muss zu GAME_LABELS in app.py passen (gleiche Schlüssel!)
 GAMES = {
+    "arena": "🚶 2D-Viewer-Arena",
+    "mining": "⛏️ Minen",
+    "hilo": "🃏 Hi-Lo",
     "slot": "🎰 Slot Machine",
     "megaslot": "🎡 Mega Slot",
-    "steal": "🕵️ Taschenraub",
-    "raffel": "🎫 Raffel (!raffel)",
-    "gambel": "🎲 Gambel",
-    "hilo": "🃏 Hi-Lo",
-    "raffle": "🎟️ Punkte-Raffle",
-    "fishing": "🎣 Angeln/Kraken",
-    "mining": "⛏️ Minen",
-    "farming": "🌱 Farm",
+    "fishing": "🎣 Angel Game",
+    "farming": "🌱 Farm Game",
     "race": "🏎️ Sim Racing",
-    "arena": "🚶 Arena",
 }
 # Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
 TOOLS = {"streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk"}
@@ -321,66 +317,75 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
                 st.success("Zurückgesetzt.")
 
 
-def games_panel():
-    st.caption("Alle Games sind standardmäßig **gesperrt**.")
+def games_panel(allow_free_week=False):
+    st.caption(
+        "StreamDex v6 vergibt Rechte ausschließlich über bezahlte Lizenzen. "
+        "Globale Freigaben bleiben dauerhaft aus; zeitlich begrenzte Ausnahmen laufen über Free Week."
+    )
     try:
+        # Nur Admin-Aufrufe dürfen die einmalige Migration / Bereinigung auslösen.
+        if allow_free_week:
+            migrate_all_legacy_paid_orders()
         g_global = db.reference("game_flags/global").get() or {}
-        g_streamers = db.reference("game_flags/streamers").get() or {}
         rows = load_streamers()
-    except Exception as e:
-        st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
+        g_global = g_global if isinstance(g_global, dict) else {}
+        forced_global = {key: False for key in (set(GAMES) | set(g_global))}
+        if allow_free_week and g_global != forced_global:
+            db.reference("game_flags/global").set(forced_global)
+    except Exception:
+        st.error("Die Rechteübersicht konnte wegen eines internen Dienstfehlers nicht geladen werden. Bitte versuche es erneut.")
         return
 
     st.subheader("🌍 Global")
-    gl_df = pd.DataFrame([{k: bool(g_global.get(k, False)) for k in GAMES}])
-    gl_edit = st.data_editor(gl_df, hide_index=True, use_container_width=True, key="gl_editor", column_config={k: st.column_config.CheckboxColumn(v) for k, v in GAMES.items()})
-    if st.button("💾 Global speichern", key="save_global"):
-        db.reference("game_flags/global").set({k: bool(gl_edit.iloc[0][k]) for k in GAMES})
-        st.success("Global gespeichert.")
-        st.rerun()
+    st.info(
+        "Alle globalen Game-Schalter sind dauerhaft deaktiviert. "
+        "Kostenloser Zugriff für alle ist nur während einer ausdrücklich geplanten Free Week möglich."
+    )
+    global_df = pd.DataFrame([
+        {"Game": label, "Globale Freigabe": "⛔ Dauerhaft deaktiviert"}
+        for label in GAMES.values()
+    ])
+    st.dataframe(global_df, hide_index=True, use_container_width=True)
+    if allow_free_week:
+        admin_free_week_panel()
+    else:
+        st.caption("Die Free-Week-Steuerung ist nur im Admin-Bereich verfügbar.")
 
-    st.subheader("👤 Pro Streamer")
+    st.divider()
+    st.subheader("👤 Aktive Kaufrechte pro Streamer")
+    st.caption(
+        "Diese Übersicht zeigt echte Lifetime- und Zeitlizenzen. Beta-Status und alte manuelle Game-Schalter "
+        "werden in v6 nicht als Kaufnachweis akzeptiert."
+    )
     if not rows:
         st.info("Noch keine Streamer registriert.")
         return
     q = st.text_input("Streamer suchen", key="games_search", placeholder="Twitch-Name ...")
-    shown = [r for r in rows if not q.strip() or q.strip().lower() in r["name"].lower()]
-
-    def to_opt(v):
-        return OPT_ON if v is True else OPT_OFF if v is False else OPT_DEFAULT
-
-    data = []
-    for r in shown:
-        own = g_streamers.get(r["tid"]) if isinstance(g_streamers.get(r["tid"]), dict) else {}
-        row = {"Streamer": r["name"], "Twitch-ID": r["tid"]}
-        for k, label in GAMES.items():
-            row[label] = to_opt(own.get(k))
-        data.append(row)
-    df = pd.DataFrame(data)
-    cfg = {"Streamer": st.column_config.TextColumn(disabled=True), "Twitch-ID": st.column_config.TextColumn(disabled=True)}
-    for label in GAMES.values():
-        cfg[label] = st.column_config.SelectboxColumn(label, options=[OPT_DEFAULT, OPT_ON, OPT_OFF], required=True)
-    edited = st.data_editor(df, hide_index=True, use_container_width=True, column_config=cfg, key="streamer_games_editor")
-
-    c1, c2 = st.columns([1, 3])
-    if c1.button("💾 Streamer speichern", type="primary", key="save_streamers"):
-        changed = 0
-        for i, r in enumerate(shown):
-            new_flags = {}
-            for k, label in GAMES.items():
-                v = edited.iloc[i][label]
-                if v == OPT_ON:
-                    new_flags[k] = True
-                elif v == OPT_OFF:
-                    new_flags[k] = False
-            old = g_streamers.get(r["tid"]) if isinstance(g_streamers.get(r["tid"]), dict) else {}
-            old = {k: v for k, v in old.items() if k in GAMES and isinstance(v, bool)}
-            if new_flags != old:
-                ref = db.reference(f"game_flags/streamers/{r['tid']}")
-                ref.set(new_flags) if new_flags else ref.delete()
-                changed += 1
-        st.success(f"{changed} Streamer aktualisiert.")
-        st.rerun()
+    shown = [row for row in rows if not q.strip() or q.strip().lower() in row["name"].lower()]
+    result_rows = []
+    now_ms = int(time.time() * 1000)
+    for row in shown:
+        tid = str(row["tid"])
+        rights = {feature for feature in active_features(tid) if not feature.startswith("legacy.")}
+        records = db.reference(f"shop/entitlements/{tid}").get() or {}
+        labels = []
+        for feature in sorted(rights):
+            label = FEATURE_LABELS.get(feature, feature)
+            record = records.get(feature) if isinstance(records, dict) else None
+            if isinstance(record, dict) and record.get("license_type") == "lifetime":
+                status = "Lifetime"
+            elif isinstance(record, dict) and int(record.get("expires_at_ms") or 0) > now_ms:
+                expiry = datetime.fromtimestamp(int(record["expires_at_ms"]) / 1000, TZ)
+                status = "bis " + expiry.strftime("%d.%m.%Y")
+            else:
+                status = "Free Week"
+            labels.append(f"{label} ({status})")
+        result_rows.append({
+            "Streamer": row["name"],
+            "Twitch-ID": tid,
+            "Aktive Rechte": " · ".join(labels) if labels else "Keine aktiven Kaufrechte",
+        })
+    st.dataframe(pd.DataFrame(result_rows), hide_index=True, use_container_width=True)
 
 
 def ban_streamer(row, reason, with_hw=True):
@@ -721,7 +726,7 @@ def main():
         except Exception as e:
             st.error("Die Aktion konnte wegen eines internen Dienstfehlers nicht abgeschlossen werden. Bitte versuche es erneut.")
     with tab_games:
-        games_panel()
+        games_panel(allow_free_week=True)
     with tab_shop:
         admin_shop_panel(GAMES)
     with tab_coupons:
