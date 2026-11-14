@@ -1610,34 +1610,8 @@ def _render_landing():
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        '<section class="sd-public-tools" id="tools"><div class="sd-public-toolshead"><div><h2>'
-        'Unsere Tools – Dein Vorteil <span class="sd-public-count">30+ Tools</span></h2>'
-        '<p>Von der Stream-Planung bis zur Community-Verwaltung – alles, was du brauchst.</p></div>'
-        '<a class="sd-public-all" href="#tools">Alle Tools anzeigen →</a></div>'
-        '<div class="sd-public-toolgrid">'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">🎮</span><span><b>Multi Tool</b><small>Chat Games, Kanalpunkte, Commands, Automationen und mehr.</small></span></a>'
-        '<a class="sd-public-tool" href="/?planner=1"><span class="sd-public-tool-icon">▣</span><span><b>Planner</b><small>Stream-Planung, Kalender und Erinnerungen.</small></span></a>'
-        '<a class="sd-public-tool" href="/?events=1"><span class="sd-public-tool-icon">♜</span><span><b>Events</b><small>Community-Events, Turniere und Specials.</small></span></a>'
-        '<a class="sd-public-tool" href="/?radar=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Radar</b><small>Live-Status, Statistiken und mehrere Streamer im Blick.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">⚑</span><span><b>Promo</b><small>Ankündigungen, Grafikvorlagen und Social Media.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">◉</span><span><b>Lurk Tool</b><small>Browser öffnet sich automatisch, wenn ein Stream live geht.</small></span></a>'
-        '<a class="sd-public-tool" href="/?feedback=1"><span class="sd-public-tool-icon cyan">▤</span><span><b>Feedback</b><small>Umfragen, Vorschläge und Community-Feedback.</small></span></a>'
-        '<a class="sd-public-tool" href="/?ideas=1"><span class="sd-public-tool-icon">💡</span><span><b>StreamDex Ideas</b><small>Ideen sammeln, priorisieren und umsetzen.</small></span></a>'
-        '<a class="sd-public-tool" href="/?bracket=1"><span class="sd-public-tool-icon">🏆</span><span><b>StreamDex Bracket</b><small>Turnierbäume und Match-Ergebnisse.</small></span></a>'
-        '<a class="sd-public-tool" href="/?wheel=1"><span class="sd-public-tool-icon cyan">🎡</span><span><b>StreamDex Wheel</b><small>Glücksrad für Entscheidungen und Giveaways.</small></span></a>'
-        '<a class="sd-public-tool" href="/?wishlist=1"><span class="sd-public-tool-icon">🎁</span><span><b>StreamDex Wishlist</b><small>Community-Wünsche und Abstimmungen.</small></span></a>'
-        '<a class="sd-public-tool" href="/?quiz=1"><span class="sd-public-tool-icon cyan">🧠</span><span><b>StreamDex Quiz</b><small>Quizräume erstellen, teilen und spielen.</small></span></a>'
-        '<a class="sd-public-tool" href="/?clips=1"><span class="sd-public-tool-icon">🎬</span><span><b>StreamDex Clips</b><small>Highlights sammeln, taggen und wiederfinden.</small></span></a>'
-        '<a class="sd-public-tool" href="/?goals=1"><span class="sd-public-tool-icon cyan">🎯</span><span><b>StreamDex Goals</b><small>Ziele setzen und Fortschritt verfolgen.</small></span></a>'
-        '<a class="sd-public-tool" href="/?modlog=1"><span class="sd-public-tool-icon">🛡️</span><span><b>StreamDex ModLog</b><small>Moderationsaktionen sauber protokollieren.</small></span></a>'
-        '<a class="sd-public-tool" href="/?modteam=1"><span class="sd-public-tool-icon cyan">👥</span><span><b>StreamDex ModTeam</b><small>Rollen, Zuständigkeiten und Aufgaben planen.</small></span></a>'
-        '<a class="sd-public-tool" href="/?profile=1"><span class="sd-public-tool-icon cyan">♙</span><span><b>Profile</b><small>Dein öffentliches Creator-Profil mit allen Infos.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon cyan">⚙</span><span><b>Automation</b><small>Automationen für Chat, Events, Commands und mehr.</small></span></a>'
-        '<a class="sd-public-tool" href="/?dashboard=1"><span class="sd-public-tool-icon">▱</span><span><b>Overlay Editor</b><small>Gestalte deine Overlays einfach und professionell.</small></span></a>'
-        '</div></section>',
-        unsafe_allow_html=True,
-    )
+    from public_products import render_public_product_portfolio
+    render_public_product_portfolio()
     _render_public_live_streamers()
 
     st.markdown(
