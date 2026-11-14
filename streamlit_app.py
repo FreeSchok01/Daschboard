@@ -18,6 +18,7 @@ from firebase_admin import credentials, db
 
 from admin_users import render_user_admin
 from admin_overview import render_admin_overview
+from admin_audit import render_admin_audit, write_admin_audit
 from admin_events import render_admin_events
 from admin_registry import render_admin_registry, render_arcaid_admin
 from admin_system import render_admin_system_status
@@ -75,7 +76,7 @@ ADMIN_NAV_GROUPS = [
         ("bans", "🚫 Sperren"),
     ]),
     ("TEAM", [("supporters", "👥 Supporter"), ("team_chat", "💭 Team-Chat")]),
-    ("SYSTEM", [("system", "🩺 System- & Datenstatus")]),
+    ("SYSTEM", [("system", "🩺 System- & Datenstatus"), ("audit", "🧾 Admin-Protokoll")]),
 ]
 
 ADMIN_PAGE_TITLES = {
@@ -97,6 +98,7 @@ ADMIN_PAGE_TITLES = {
     "supporters": "Supporter",
     "team_chat": "Team-Chat",
     "system": "System- & Datenstatus",
+    "audit": "Admin-Aktivitätsprotokoll",
 }
 
 OPT_DEFAULT = "➖ wie global"
@@ -441,6 +443,7 @@ def ban_streamer(row, reason, with_hw=True):
     if with_hw:
         for h in row["hw"]:
             db.reference(f"bans/hwid/{h}").set({"reason": reason, "tid": row["tid"], "name": row["name"], "ts": SERVER_TS})
+    write_admin_audit("Sperre aktiviert", "Sicherheit", f"{row['name']} ({row['tid']})")
 
 
 def unban_streamer(tid):
@@ -448,6 +451,7 @@ def unban_streamer(tid):
     for h, v in (db.reference("bans/hwid").get() or {}).items():
         if isinstance(v, dict) and str(v.get("tid")) == str(tid):
             db.reference(f"bans/hwid/{h}").delete()
+    write_admin_audit("Sperre aufgehoben", "Sicherheit", str(tid))
 
 
 def bans_panel(ns=""):
@@ -762,6 +766,9 @@ def main():
         return
     if page == "system":
         render_admin_system_status()
+        return
+    if page == "audit":
+        render_admin_audit()
         return
     if page == "events":
         render_admin_events()
