@@ -43,7 +43,7 @@ def _format_time(value):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _load_audit():
-    root = db.reference("admin_audit").order_by_child("created_ms").limit_to_last(500).get() or {}
+    root = db.reference("admin_audit").order_by_key().limit_to_last(500).get() or {}
     if not isinstance(root, dict):
         return []
     rows = []
