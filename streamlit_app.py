@@ -59,7 +59,7 @@ GAMES = {
 }
 # Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
 ADMIN_NAV_GROUPS = [
-    ("START", [("overview", "🏠 Control Center"), ("apps", "🧩 Produktportfolio")]),
+    ("START", [("overview", "🏠 Control Center"), ("apps", "🧩 Produktportfolio"), ("public_products", "🌐 Öffentliche Produktseite")]),
     ("PRODUKTE", [
         ("support", "💬 StreamDex Live-Support"),
         ("lurk", "👁️ StreamDex Lurk"),
@@ -85,6 +85,7 @@ ADMIN_NAV_GROUPS = [
 ADMIN_PAGE_TITLES = {
     "overview": "Control Center",
     "apps": "Produktportfolio",
+    "public_products": "Öffentliche Produktseite",
     "support": "StreamDex Live-Support",
     "lurk": "StreamDex Lurk",
     "mod_control": "StreamDex Mod Control",
@@ -850,6 +851,10 @@ def main():
         return
     if page == "apps":
         render_admin_registry()
+        return
+    if page == "public_products":
+        from public_products import render_admin_product_editor
+        render_admin_product_editor()
         return
     if page == "arcaid":
         render_arcaid_admin()
