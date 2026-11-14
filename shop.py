@@ -228,7 +228,7 @@ def _apply_order_license(order, order_code, force_lifetime=False):
                     except (TypeError, ValueError):
                         old_expiry = 0
                     start = max(now, old_expiry)
-                    current.update(active=True, license_type="subscription", starts_at_ms=int(current.get("starts_at_ms") or start),
+                    current.update(active=True, license_type="term", starts_at_ms=int(current.get("starts_at_ms") or start),
                                    expires_at_ms=_add_calendar_months_ms(start, months))
                 sources[source_id] = True
                 current["source_orders"] = sources
@@ -1822,7 +1822,7 @@ def admin_shop_panel(games):
             db.reference(f"shop/items/{pick}").delete()
             st.rerun()
         st.divider()
-        ok = st.checkbox("Standard-Katalog (12 Games + 4 Packs) neu anlegen. Überschreibt ALLE Artikel und Preise!")
+        ok = st.checkbox("v6-Produktkatalog (8 Einzel-Games + 7 Pakete) neu anlegen. Überschreibt ALLE Artikel und Preise!")
         if st.button("♻️ Standard-Katalog anlegen", disabled=not ok):
             db.reference("shop/items").set(default_items(games))
             st.rerun()
