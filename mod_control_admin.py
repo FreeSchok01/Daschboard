@@ -48,7 +48,7 @@ def _load_clients():
         if not str(key).startswith("mod_") or not isinstance(payload, dict):
             continue
         tid = str(payload.get("twitch_id") or str(key)[4:]).strip()
-        if not re.fullmatch(r"\\d{1,20}", tid):
+        if not re.fullmatch(r"\d{1,20}", tid):
             continue
         try:
             last_seen = int(payload.get("last_seen") or 0)
