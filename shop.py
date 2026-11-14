@@ -1840,9 +1840,9 @@ def admin_shop_panel(games):
                                     duration_key = "lifetime" if months == 0 else str(months)
                                     raw_value = current_prices.get(duration_key)
                                     try:
-                                        default_value = float(raw_value) if raw_value not in (None, "") else 0.50
+                                        default_value = float(raw_value) if raw_value not in (None, "") else None
                                     except (TypeError, ValueError):
-                                        default_value = 0.50
+                                        default_value = None
                                     price_values[duration_key] = column.number_input(
                                         duration_label + " (€)",
                                         min_value=0.50,
@@ -1850,6 +1850,7 @@ def admin_shop_panel(games):
                                         step=0.50,
                                         value=default_value,
                                         format="%.2f",
+                                        placeholder="Preis eintragen",
                                         key=f"shop_admin_price_{item_id}_{duration_key}",
                                     )
                                 active = st.toggle(
@@ -1863,8 +1864,8 @@ def admin_shop_panel(games):
                                     use_container_width=True,
                                 )
                             if saved:
-                                if any(not 0.50 <= float(value) <= 500.00 for value in price_values.values()):
-                                    st.error("Jeder Laufzeitpreis muss zwischen 0,50 € und 500,00 € liegen.")
+                                if any(value is None or not 0.50 <= float(value) <= 500.00 for value in price_values.values()):
+                                    st.error("Bitte trage alle fünf Laufzeitpreise zwischen 0,50 € und 500,00 € ein.")
                                 else:
                                     patch = {
                                         "price": float(price_values["1"]),
