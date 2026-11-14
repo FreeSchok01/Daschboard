@@ -323,13 +323,14 @@ def games_panel(allow_free_week=False):
         "Globale Freigaben bleiben dauerhaft aus; zeitlich begrenzte Ausnahmen laufen über Free Week."
     )
     try:
-        # Einmalig alte Käufe in Lifetime-Lizenzen umwandeln und Beta-/manuelle Altfreigaben entfernen.
-        migrate_all_legacy_paid_orders()
+        # Nur Admin-Aufrufe dürfen die einmalige Migration / Bereinigung auslösen.
+        if allow_free_week:
+            migrate_all_legacy_paid_orders()
         g_global = db.reference("game_flags/global").get() or {}
         rows = load_streamers()
         g_global = g_global if isinstance(g_global, dict) else {}
         forced_global = {key: False for key in (set(GAMES) | set(g_global))}
-        if g_global != forced_global:
+        if allow_free_week and g_global != forced_global:
             db.reference("game_flags/global").set(forced_global)
     except Exception:
         st.error("Die Rechteübersicht konnte wegen eines internen Dienstfehlers nicht geladen werden. Bitte versuche es erneut.")
