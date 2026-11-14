@@ -628,13 +628,14 @@ def _find_tip(code, price):
 
 def fulfill(code, manual=False, payment_id=None):
     """Gibt (ok, Text) zurück. Ein Tip und eine Bestellung werden höchstens einmal verbucht."""
-    ref = db.reference(f"shop/orders/{code.strip().upper()}")
+    order_code = str(code or "").strip().upper()
+    ref = db.reference(f"shop/orders/{order_code}")
     order = ref.get()
     if not isinstance(order, dict):
         return False, "Unbekannter Bestellcode."
     if order.get("status") == "paid":
         try:
-            _apply_order_license(order, ref.key)
+            _apply_order_license(order, order_code)
         except Exception:
             return False, "Die Zahlung ist bereits verbucht, aber die Lizenz konnte nicht vollständig aktualisiert werden. Bitte erneut prüfen oder den Support kontaktieren."
         return True, f"Bereits verbucht: **{order['item_name']}** für {order['name']}."
