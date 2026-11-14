@@ -1674,45 +1674,45 @@ def render_tour_skip():
 
 def admin_free_week_panel():
     """Global timed access override shown inside Admin → Game-Freigaben."""
-        st.subheader("🎉 Free Week – zeitlich begrenzte globale Freigabe")
-        free_cfg = db.reference("shop/free_week").get() or {}
-        with st.form("shop_free_week"):
-            fw_enabled = st.toggle("Free Week aktivieren", value=bool(free_cfg.get("enabled", False)))
-            current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS]
-            fw_features = st.multiselect(
-                "Inhalte für alle freigeben",
-                options=list(FEATURE_LABELS),
-                default=current_features,
-                format_func=lambda key: FEATURE_LABELS[key],
-            )
-            shop_tz = ZoneInfo("Europe/Berlin")
-            now_local = datetime.now(shop_tz)
-            current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000, shop_tz)
-            current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000, shop_tz)
-            fw_start_date = st.date_input("Startdatum", value=current_start.date(), key="shop_fw_start_date")
-            fw_start_time = st.time_input("Startzeit", value=current_start.time().replace(second=0, microsecond=0), key="shop_fw_start_time")
-            fw_end_date = st.date_input("Enddatum", value=current_end.date(), key="shop_fw_end_date")
-            fw_end_time = st.time_input("Endzeit", value=current_end.time().replace(second=0, microsecond=0), key="shop_fw_end_time")
-            fw_saved = st.form_submit_button("Free Week speichern")
-        if fw_saved:
-            start_dt = datetime.combine(fw_start_date, fw_start_time, tzinfo=ZoneInfo("Europe/Berlin"))
-            end_dt = datetime.combine(fw_end_date, fw_end_time, tzinfo=ZoneInfo("Europe/Berlin"))
-            start_ms = int(start_dt.timestamp() * 1000)
-            end_ms = int(end_dt.timestamp() * 1000)
-            if not fw_features:
-                st.error("Bitte mindestens einen Inhalt für die Free Week auswählen.")
-            elif end_ms <= start_ms:
-                st.error("Das Ende muss nach dem Start liegen.")
-            else:
-                free_week_payload = {
-                    "enabled": bool(fw_enabled), "features": fw_features,
-                    "starts_at_ms": start_ms, "ends_at_ms": end_ms,
-                    "updated_at_ms": int(time.time() * 1000),
-                }
-                db.reference("shop/free_week").set(free_week_payload)
-                db.reference("game_flags/free_week").set(free_week_payload)
-                st.success("Free Week gespeichert. Die Freigabe gilt für alle Nutzer nur innerhalb des gewählten Zeitfensters.")
-                st.rerun()
+    st.subheader("🎉 Free Week – zeitlich begrenzte globale Freigabe")
+    free_cfg = db.reference("shop/free_week").get() or {}
+    with st.form("shop_free_week"):
+        fw_enabled = st.toggle("Free Week aktivieren", value=bool(free_cfg.get("enabled", False)))
+        current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS]
+        fw_features = st.multiselect(
+            "Inhalte für alle freigeben",
+            options=list(FEATURE_LABELS),
+            default=current_features,
+            format_func=lambda key: FEATURE_LABELS[key],
+        )
+        shop_tz = ZoneInfo("Europe/Berlin")
+        now_local = datetime.now(shop_tz)
+        current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000, shop_tz)
+        current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000, shop_tz)
+        fw_start_date = st.date_input("Startdatum", value=current_start.date(), key="shop_fw_start_date")
+        fw_start_time = st.time_input("Startzeit", value=current_start.time().replace(second=0, microsecond=0), key="shop_fw_start_time")
+        fw_end_date = st.date_input("Enddatum", value=current_end.date(), key="shop_fw_end_date")
+        fw_end_time = st.time_input("Endzeit", value=current_end.time().replace(second=0, microsecond=0), key="shop_fw_end_time")
+        fw_saved = st.form_submit_button("Free Week speichern")
+    if fw_saved:
+        start_dt = datetime.combine(fw_start_date, fw_start_time, tzinfo=ZoneInfo("Europe/Berlin"))
+        end_dt = datetime.combine(fw_end_date, fw_end_time, tzinfo=ZoneInfo("Europe/Berlin"))
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+        if not fw_features:
+            st.error("Bitte mindestens einen Inhalt für die Free Week auswählen.")
+        elif end_ms <= start_ms:
+            st.error("Das Ende muss nach dem Start liegen.")
+        else:
+            free_week_payload = {
+                "enabled": bool(fw_enabled), "features": fw_features,
+                "starts_at_ms": start_ms, "ends_at_ms": end_ms,
+                "updated_at_ms": int(time.time() * 1000),
+            }
+            db.reference("shop/free_week").set(free_week_payload)
+            db.reference("game_flags/free_week").set(free_week_payload)
+            st.success("Free Week gespeichert. Die Freigabe gilt für alle Nutzer nur innerhalb des gewählten Zeitfensters.")
+            st.rerun()
 
 
 def admin_shop_panel(games):
