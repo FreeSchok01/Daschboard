@@ -774,6 +774,33 @@ def _card(iid, it, items, have, cart, have_features=None):
     owned = bool(features) and features <= have_features
     configured = [(months, label, duration_price(it, months)) for months, label in DURATION_OPTIONS]
     configured = [(m, label, price) for m, label, price in configured if price is not None]
+    choices = [months for months, _, _ in configured]
+    labels = {months: label for months, label, _ in configured}
+
+    # Die angezeigte Summe folgt immer der aktuell gewählten Laufzeit.
+    # Im Warenkorb gilt die dort gespeicherte Laufzeit, sonst die Auswahl der Produktkarte.
+    selected_months = None
+    selected_price = None
+    if configured and not owned:
+        if iid in cart:
+            try:
+                candidate = int(st.session_state.get("cart_durations", {}).get(iid, choices[0]))
+            except (TypeError, ValueError):
+                candidate = choices[0]
+        else:
+            widget_key = f"shop_duration_{iid}"
+            raw_candidate = st.session_state.get(widget_key, choices[0])
+            try:
+                candidate = int(raw_candidate)
+            except (TypeError, ValueError):
+                candidate = choices[0]
+            if candidate not in choices:
+                # Veraltete Widget-Auswahlen abfangen, wenn ein Admin Laufzeiten ändert.
+                st.session_state.pop(widget_key, None)
+                candidate = choices[0]
+        selected_months = candidate if candidate in choices else choices[0]
+        selected_price = duration_price(it, selected_months)
+
     with st.container(border=True):
         label_map = {
             game: item.get("name", game)
@@ -797,11 +824,16 @@ def _card(iid, it, items, have, cart, have_features=None):
         title = html.escape(str(it.get("name") or iid))
         description = html.escape(str(it.get("desc") or ""))
         status = '<span class="sd-shop-state">✓ Vollständig freigeschaltet</span>' if owned else ""
-        min_price = min((price for _, _, price in configured), default=None)
-        price_html = (
-            f'<div class="price">ab {min_price:.2f} <span class="unit">EUR</span></div>'
-            if min_price is not None else '<div class="price">Preis folgt</div>'
-        )
+        if owned:
+            price_html = ""
+        elif selected_price is not None:
+            selected_label = html.escape(labels.get(selected_months, ""))
+            price_html = (
+                f'<div class="price">{selected_price:.2f} '
+                f'<span class="unit">EUR · für {selected_label}</span></div>'
+            )
+        else:
+            price_html = '<div class="price">Preis folgt</div>'
         st.markdown(
             f'<div class="sd-shop-card-top"><span class="{category_class}">{category}</span>{status}</div>'
             f'<div class="sd-shop-icon">{html.escape(icon)}</div>'
@@ -814,29 +846,24 @@ def _card(iid, it, items, have, cart, have_features=None):
         elif not it.get("active", True) or not configured:
             st.caption("Dieses Angebot wird gerade vorbereitet und ist noch nicht kaufbar.")
         elif iid in cart:
-            current_months = int(st.session_state.get("cart_durations", {}).get(iid, configured[0][0]))
-            st.caption("Laufzeit im Warenkorb: " + dict((m, label) for m, label, _ in configured).get(current_months, "Lifetime"))
+            st.caption("Laufzeit im Warenkorb: " + labels.get(selected_months, "Lifetime"))
             st.button(
                 "✓ Im Warenkorb · entfernen",
                 key=f"rm_c_{iid}", on_click=_rm, args=(iid,),
                 use_container_width=True,
             )
         else:
-            choices = [months for months, _, _ in configured]
-            labels = {months: label for months, label, _ in configured}
-            selected = st.selectbox(
+            st.selectbox(
                 "Laufzeit",
                 choices,
                 format_func=lambda value: labels[value],
                 key=f"shop_duration_{iid}",
             )
-            price = duration_price(it, selected)
-            st.caption(f"{price:.2f} €")
             st.button(
                 "Zum Warenkorb  →",
                 key=f"add_{iid}",
                 on_click=_add,
-                args=(iid, selected),
+                args=(iid, selected_months),
                 type="primary",
                 use_container_width=True,
             )
