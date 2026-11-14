@@ -1,5 +1,4 @@
-"""Streamdex-Shop: Einzel-Games, 4 Packs, Warenkorb. Bezahlung per StreamElements-Tip mit Bestellcode.
-Freischaltung: game_flags/streamers/{tid}/{game}=True (die App übernimmt es nach ~60 s). Preise/Einstellungen: Admin-Tab 🛒 Shop."""
+"""StreamDex licence shop: single games, bundles, subscriptions, lifetime licences and Free Week access."""
 import calendar
 import html
 import re
@@ -1497,7 +1496,7 @@ def render_shop(games):
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="sd-shop-hero">'
-        '<div class="sd-shop-eyebrow"><span class="sd-shop-dot"></span> STREAMDEX OS · MODUL-STORE</div>'
+        '<div class="sd-shop-eyebrow"><span class="sd-shop-dot"></span> STREAMDEX OS · LIZENZ-SHOP</div>'
         '<h1>Mach deinen Stream <span>interaktiver.</span></h1>'
         '<p>Stelle dir deinen StreamDex zusammen: einzelne Chat-Games für deinen Kanal oder günstige Packs für das komplette Community-Erlebnis. Einmal auswählen, bequem und sicher bezahlen und direkt in der App nutzen.</p>'
         '<div class="sd-shop-hero-foot"><span>🎮 Einzelmodule</span><span>🎁 Bundle-Angebote</span><span>⚡ Freischaltung in ca. 1 Minute</span><span>🔐 Sichere Bestellprüfung</span></div>'
@@ -1686,10 +1685,10 @@ def admin_free_week_panel():
     free_cfg = db.reference("shop/free_week").get() or {}
     with st.form("shop_free_week"):
         fw_enabled = st.toggle("Free Week aktivieren", value=bool(free_cfg.get("enabled", False)))
-        current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS]
+        current_features = [key for key in free_cfg.get("features", []) if key in FEATURE_LABELS and not key.startswith("legacy.")]
         fw_features = st.multiselect(
             "Inhalte für alle freigeben",
-            options=list(FEATURE_LABELS),
+            options=[key for key in FEATURE_LABELS if not key.startswith("legacy.")],
             default=current_features,
             format_func=lambda key: FEATURE_LABELS[key],
         )
