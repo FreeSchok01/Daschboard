@@ -851,8 +851,10 @@ def test_v6_shop_catalog_has_the_approved_products_and_term_prices():
     assert len(items) == 15
     assert all(item["active"] is False for item in items.values())
     assert items["bundle_heist"]["features"] == shop.HEIST_FEATURES
+    assert "heist.pickpocket" in items["bundle_heist"]["features"]
     assert items["bundle_progression"]["features"] == shop.PROGRESSION_FEATURES
     assert items["premium_viewer_panel"]["features"] == shop.PANEL_PLUS_FEATURES
+    assert "panel.store_plus" in items["premium_viewer_panel"]["features"]
 
     item = {"price": 4.99, "pricing_required": True,
             "duration_prices": {"1": 2.99, "3": 7.99, "6": 14.99, "12": 26.99, "lifetime": 49.99}}
@@ -926,3 +928,16 @@ def test_v6_legacy_paid_orders_migrate_but_beta_and_global_flags_do_not(memory_d
     assert memory_db.reference("shop/entitlements/paid-user/game.slot").get()["license_type"] == "lifetime"
     assert shop.owned_games("beta-only-user") == set()
     assert shop.owned_games("pending-user") == set()
+
+
+
+def test_v6_beta_status_never_creates_game_entitlements_or_flags(memory_db):
+    shop.set_beta("beta-user", "BetaUser", ["slot", "arena"], "some", "Testet v6")
+
+    assert memory_db.reference("shop/beta/beta-user").get()["games"] == ["slot", "arena"]
+    assert memory_db.reference("game_flags/streamers/beta-user").get() is None
+    assert shop.owned_games("beta-user") == set()
+
+    shop.remove_beta("beta-user")
+    assert memory_db.reference("shop/beta/beta-user").get() is None
+    assert memory_db.reference("game_flags/streamers/beta-user").get() is None
