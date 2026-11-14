@@ -157,10 +157,24 @@ def render_admin_overview():
 
     st.caption(f"Letzte Aktualisierung: {_time(data['refreshed'])} · Online-Status nach maximal {ONLINE_STALE_SECONDS} Sekunden ohne Heartbeat.")
     st.markdown("### Dienste")
-    c = st.columns(3)
+    c = st.columns(4)
     c[0].metric("⚡ StreamDex", f"{data['streamdex_online']} online", f"{data['streamdex_total']} registriert")
     c[1].metric("👁️ Lurk", f"{data['lurk_online']} online", f"{data['lurk_total']} registriert")
     c[2].metric("🛡️ Mod Control", f"{data['mod_online']} online", f"{data['mod_total']} registriert")
+    c[3].metric("🗃️ StreamDex Arcaid", "Geplant", "Verwaltung vorbereitet")
+
+    st.markdown("### Schnellzugriff")
+    quick = st.columns(4)
+    quick_targets = [
+        ("🧩 Produktportfolio", "apps"),
+        ("🎉 Event Center", "events"),
+        ("🩺 Systemstatus", "system"),
+        ("🗃️ Arcaid", "arcaid"),
+    ]
+    for col, (label, target) in zip(quick, quick_targets):
+        if col.button(label, key=f"overview_quick_{target}", use_container_width=True):
+            st.session_state["admin_page"] = target
+            st.rerun()
 
     st.markdown("### Was gerade Aufmerksamkeit braucht")
     c = st.columns(4)
