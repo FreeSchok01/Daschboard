@@ -1935,12 +1935,19 @@ def admin_shop_panel(games):
         rv = st.checkbox("Bei bezahlten Bestellungen auch die Freischaltung entziehen (z. B. Rückerstattung)")
         sure = st.checkbox("Ja, endgültig löschen")
         if st.button("🗑️ Löschen", disabled=not (sel and sure)):
+            if rv:
+                revoke_by_user = {}
+                for code in sel:
+                    order = orders.get(code) or {}
+                    if isinstance(order, dict) and order.get("status") == "paid" and order.get("tid"):
+                        revoke_by_user.setdefault(str(order["tid"]), set()).add(str(code))
+                for tid, revoked_codes in revoke_by_user.items():
+                    rebuild_user_entitlements(tid, exclude_orders=revoked_codes)
             for code in sel:
-                o = orders.get(code) or {}
-                if rv and o.get("status") == "paid":
-                    for g in set(o.get("games", [])) - protected_games(o["tid"], exclude=set(sel)):
-                        db.reference(f"game_flags/streamers/{o['tid']}/{g}").delete()
-                release_credit(o)
+                order = orders.get(code) or {}
+                release_credit(order)
+                if isinstance(order, dict) and order.get("tid"):
+                    db.reference(f"shop/licenses/{order['tid']}/{code}").delete()
                 db.reference(f"shop/orders/{code}").delete()
             st.rerun()
 
@@ -1954,6 +1961,37 @@ def protected_games(tid, exclude=()):
                 and order.get("status") == "paid" and order_id not in exclude):
             keep |= set(order.get("games", []))
     return keep
+
+
+def rebuild_user_entitlements(tid, exclude_orders=()):
+    """Rebuild effective rights from all remaining paid orders after a refund/revocation."""
+    tid = str(tid or "").strip()
+    excluded = {str(code) for code in exclude_orders}
+    if not tid:
+        return
+    db.reference(f"shop/entitlements/{tid}").delete()
+    db.reference(f"game_flags/streamers/{tid}/_features").delete()
+
+    # Remove the legacy bool mirrors first; the remaining paid orders recreate only
+    # Lifetime compatibility flags. Term licences remain feature records with expiry.
+    flags_ref = db.reference(f"game_flags/streamers/{tid}")
+    old_flags = flags_ref.get() or {}
+    if isinstance(old_flags, dict):
+        for game in GAME_FEATURES:
+            flags_ref.child(game).delete()
+
+    orders = db.reference("shop/orders").get() or {}
+    if not isinstance(orders, dict):
+        return
+    for order_id, order in orders.items():
+        if (str(order_id) in excluded or not isinstance(order, dict)
+                or str(order.get("tid") or "") != tid or order.get("status") != "paid"
+                or order.get("item") == "tourskip"):
+            continue
+        if isinstance(order.get("licenses"), list):
+            _apply_order_license(order, str(order_id))
+        elif _order_access_features(order):
+            _apply_order_license(order, str(order_id), force_lifetime=True)
 
 
 def set_beta(tid, name, games, scope, note):
