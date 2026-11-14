@@ -17,6 +17,7 @@ import streamlit as st
 from firebase_admin import credentials, db
 
 from admin_users import render_user_admin
+from admin_overview import render_admin_overview
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
@@ -51,7 +52,7 @@ GAMES = {
     "race": "🏎️ Sim Racing",
 }
 # Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
-TOOLS = {"streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk", "mod_control": "🛡️ StreamDex Mod Control"}
+TOOLS = {"overview": "🏠 Übersicht", "streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk", "mod_control": "🛡️ StreamDex Mod Control"}
 
 OPT_DEFAULT = "➖ wie global"
 OPT_ON = "✅ frei"
@@ -683,8 +684,13 @@ def main():
         st.session_state.clear()
         st.rerun()
 
-    with st.container(key="os_nav"):
-        tool = st.radio("Tool", list(TOOLS), format_func=TOOLS.get, horizontal=True, label_visibility="collapsed", key="os_tool")
+    with st.sidebar:
+        st.markdown("## STREAMDEX OS")
+        st.caption("Administration & Systemverwaltung")
+        tool = st.radio("Navigation", list(TOOLS), format_func=TOOLS.get, key="os_tool")
+    if tool == "overview":
+        render_admin_overview()
+        return
     if tool == "mod_control":
         render_mod_control_admin()
         return
