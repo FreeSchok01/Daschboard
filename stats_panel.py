@@ -55,8 +55,19 @@ def stats_panel(rows, games):
         top = pd.Series({names.get(t, t): int(s.get("giveaways") or 0) for t, s in stats.items()}).sort_values(ascending=False).head(10)
         st.bar_chart(top) if not top.empty else st.info("Noch keine Daten.")
     with r_:
-        st.subheader("🧩 App-Versionen")
-        st.bar_chart(pd.Series([r["version"] for r in rows]).value_counts())
+        st.subheader("🧩 App-Versionen nach Produkt")
+        version_rows = []
+        for user in rows:
+            for product, app in (user.get("apps") or {}).items():
+                version_rows.append({"Produkt": product, "Version": app.get("version") or "Unbekannt"})
+        if version_rows:
+            version_df = pd.DataFrame(version_rows)
+            st.dataframe(
+                version_df.groupby(["Produkt", "Version"]).size().reset_index(name="Installationen"),
+                hide_index=True, use_container_width=True,
+            )
+        else:
+            st.info("Keine produktbezogenen Versionsdaten vorhanden.")
 
     st.subheader("🎮 Freigeschaltete Games (Streamer)")
     g_glob, g_own = flags.get("global") or {}, flags.get("streamers") or {}
@@ -74,6 +85,10 @@ def stats_panel(rows, games):
     c[2].metric("Käufer", len({o['tid'] for o in paid}))
 
     st.subheader("📋 Pro Streamer")
-    df = pd.DataFrame([{"Streamer": r["name"], "Online": r["online"], "Version": r["version"],
-                        **{STAT_KEYS[k]: int((stats.get(r["tid"]) or {}).get(k) or 0) for k in STAT_KEYS}} for r in rows])
+    df = pd.DataFrame([{
+        "Streamer": r["name"], "Twitch-ID": r["tid"], "Online": r["online"],
+        "Verwendete Produkte": ", ".join((r.get("apps") or {}).keys()) or "—",
+        "Versionen": " | ".join(f"{product}: {app.get('version') or 'Unbekannt'}" for product, app in (r.get("apps") or {}).items()) or "—",
+        **{STAT_KEYS[k]: int((stats.get(r["tid"]) or {}).get(k) or 0) for k in STAT_KEYS}
+    } for r in rows])
     st.dataframe(df.sort_values("Giveaways", ascending=False), hide_index=True, use_container_width=True)
