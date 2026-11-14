@@ -317,6 +317,10 @@ def migrate_all_legacy_paid_orders():
         if isinstance(order, dict) and order.get("status") == "paid"
         and order.get("item") != "tourskip" and str(order.get("tid") or "").strip()
     } if isinstance(orders, dict) else set()
+    # Beta-only users also need the v6 cleanup even when they never bought anything.
+    beta_records = db.reference("shop/beta").get() or {}
+    if isinstance(beta_records, dict):
+        accounts.update(str(tid).strip() for tid in beta_records if str(tid).strip())
     imported = 0
     for tid in sorted(accounts):
         imported += migrate_legacy_paid_orders(tid)
