@@ -62,7 +62,7 @@ FEATURE_GAMES = {feature: game for game, features in GAME_FEATURES.items() for f
 GAME_FEATURES_ALL = ["game.arena", "game.mining", "game.hilo", "game.slot", "game.megaslot", "game.fishing", "game.farming", "game.race"]
 HEIST_FEATURES = ["heist.bank", "heist.train", "heist.treasure", "heist.casino", "heist.jail", "heist.breakout", "heist.gangs", "heist.safecracker", "heist.pickpocket"]
 PROGRESSION_FEATURES = ["progress.daily_quests", "progress.weekly_quests", "progress.achievements", "progress.pets", "progress.album", "progress.levels", "progress.daily_rewards"]
-PANEL_PLUS_FEATURES = ["panel.duels", "panel.lottery", "panel.scratch_cards", "panel.savings"]
+PANEL_PLUS_FEATURES = ["panel.duels", "panel.lottery", "panel.scratch_cards", "panel.savings", "panel.store_plus"]
 DURATION_OPTIONS = ((1, "1 Monat"), (3, "3 Monate"), (6, "6 Monate"), (12, "12 Monate"), (0, "Lifetime"))
 
 PRODUCT_CATALOG = {
@@ -1946,36 +1946,34 @@ def admin_shop_panel(games):
 
 
 def protected_games(tid, exclude=()):
-    """Games, die ein Streamer durch andere bezahlte Bestellungen oder Beta-Status behalten muss."""
+    """Games, die durch andere bezahlte Bestellungen geschützt bleiben (Beta zählt nicht als Kauf)."""
     keep = set()
-    for k, o in (db.reference("shop/orders").get() or {}).items():
-        if isinstance(o, dict) and o.get("tid") == tid and o.get("status") == "paid" and k not in exclude:
-            keep |= set(o.get("games", []))
-    b = db.reference(f"shop/beta/{tid}").get()
-    return keep | set(b.get("games", [])) if isinstance(b, dict) else keep
+    orders = db.reference("shop/orders").get() or {}
+    for order_id, order in orders.items() if isinstance(orders, dict) else ():
+        if (isinstance(order, dict) and str(order.get("tid") or "") == str(tid)
+                and order.get("status") == "paid" and order_id not in exclude):
+            keep |= set(order.get("games", []))
+    return keep
 
 
 def set_beta(tid, name, games, scope, note):
-    old = db.reference(f"shop/beta/{tid}/games").get() or []
-    for g in games:
-        db.reference(f"game_flags/streamers/{tid}/{g}").set(True)
-    db.reference(f"shop/beta/{tid}").set({"name": name, "games": games, "scope": scope, "note": note, "ts": {".sv": "timestamp"}})
-    for g in set(old) - set(games) - protected_games(tid):
-        db.reference(f"game_flags/streamers/{tid}/{g}").delete()
+    """Speichert nur den Beta-Tester-Status. Beta verleiht keine Shop-/Game-Lizenz."""
+    db.reference(f"shop/beta/{tid}").set({
+        "name": name, "games": list(games), "scope": scope, "note": note,
+        "ts": {".sv": "timestamp"},
+    })
 
 
 def remove_beta(tid):
-    old = db.reference(f"shop/beta/{tid}/games").get() or []
+    """Entfernt nur den Beta-Status; bezahlte Lizenzen bleiben davon unberührt."""
     db.reference(f"shop/beta/{tid}").delete()
-    for g in set(old) - protected_games(tid):
-        db.reference(f"game_flags/streamers/{tid}/{g}").delete()
 
 
 def admin_beta_panel(games, rows):
     migrate_all_legacy_paid_orders()
     st.subheader("🧪 Beta-Tester")
-    st.caption("Beta-Tester bekommen Games ohne Kauf freigeschaltet. Beim Entfernen verschwinden nur die Beta-Freigaben, Gekauftes bleibt. "
-               "„Alles“ gilt für die aktuell vorhandenen Games. Bei neuen Games den Status erneut setzen.")
+    st.caption("Der Beta-Status steuert ausschließlich den Zugang zu Beta-Builds und Tests. Er verleiht in v6.0.0 keine Shop- oder Game-Lizenzen. "
+               "Game-Funktionen werden ausschließlich durch bezahlte Lizenzen oder eine aktive Free Week freigeschaltet.")
     names = {r["tid"]: r["name"] for r in rows}
     with st.form("beta"):
         sel = st.multiselect("Streamer (mehrere möglich)", list(names), format_func=names.get)
