@@ -1,4 +1,6 @@
 """Erweiterbarer Produktkatalog für die StreamDex OS-Verwaltung."""
+import time
+
 import streamlit as st
 from firebase_admin import db
 
@@ -51,22 +53,32 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _online(value, now_ms):
+    try:
+        seen = int(value.get("last_seen") or 0)
+        return value.get("status") == "online" and seen > 0 and 0 <= now_ms - seen <= 150_000
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _catalog_counts():
     try:
         presence = _dict(db.reference("presence").get())
         lurk = _dict(db.reference("lurk/presence").get())
         events = _dict(db.reference("streamdex_events").get())
+        now_ms = int(time.time() * 1000)
         core = {key: value for key, value in presence.items() if not str(key).startswith("mod_") and isinstance(value, dict)}
         mod = {key: value for key, value in presence.items() if str(key).startswith("mod_") and isinstance(value, dict)}
+        lurk = {key: value for key, value in lurk.items() if isinstance(value, dict)}
         return {
             "connected": True,
             "streamdex": len(core),
-            "streamdex_online": sum(1 for value in core.values() if value.get("status") == "online"),
+            "streamdex_online": sum(1 for value in core.values() if _online(value, now_ms)),
             "lurk": len(lurk),
-            "lurk_online": sum(1 for value in lurk.values() if isinstance(value, dict) and value.get("status") == "online"),
+            "lurk_online": sum(1 for value in lurk.values() if _online(value, now_ms)),
             "mod_control": len(mod),
-            "mod_online": sum(1 for value in mod.values() if isinstance(value, dict) and value.get("status") == "online"),
+            "mod_online": sum(1 for value in mod.values() if _online(value, now_ms)),
             "events": len(events),
             "events_open": sum(1 for value in events.values() if isinstance(value, dict) and value.get("status", "open") == "open"),
         }
