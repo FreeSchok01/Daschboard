@@ -6,6 +6,7 @@ import re
 import secrets
 import time
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from urllib.parse import urlencode, urlparse
 
@@ -315,29 +316,35 @@ def duration_price(item, months):
 
 
 def ensure_catalog_items(games):
-    """Add v6 products without overwriting configured prices or other admin values."""
-    stored = db.reference("shop/items").get() or {}
+    """Add v6 products without replacing the whole catalogue or clobbering concurrent admin edits."""
+    root = db.reference("shop/items")
+    stored = root.get() or {}
     stored = dict(stored) if isinstance(stored, dict) else {}
     for item_id, fresh in default_items(games).items():
         current = stored.get(item_id)
         if not isinstance(current, dict):
+            root.child(item_id).set(fresh)
             stored[item_id] = fresh
             continue
-        current = dict(current)
-        for key in ("kind", "product_type", "name", "desc", "games", "features", "sort"):
-            current[key] = fresh[key]
+        patch = {
+            key: fresh[key]
+            for key in ("kind", "product_type", "name", "desc", "games", "features", "sort")
+        }
         if not isinstance(current.get("duration_prices"), dict):
-            current["duration_prices"] = {}
-        if not current["duration_prices"]:
-            current["active"] = False
-            current["pricing_required"] = True
+            patch["duration_prices"] = {}
+        if not (current.get("duration_prices") or {}):
+            patch["active"] = False
+            patch["pricing_required"] = True
+        root.child(item_id).update(patch)
+        current = dict(current)
+        current.update(patch)
         stored[item_id] = current
     for item_id, old in list(stored.items()):
-        if item_id not in PRODUCT_CATALOG and isinstance(old, dict):
+        if item_id not in PRODUCT_CATALOG and isinstance(old, dict) and old.get("active", True):
+            root.child(item_id).update({"active": False})
             old = dict(old)
             old["active"] = False
             stored[item_id] = old
-    db.reference("shop/items").set(stored)
     return stored
 
 
@@ -1654,17 +1661,18 @@ def admin_shop_panel(games):
             default=current_features,
             format_func=lambda key: FEATURE_LABELS[key],
         )
-        now_local = datetime.now().astimezone()
-        current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000).astimezone()
-        current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000).astimezone()
+        shop_tz = ZoneInfo("Europe/Berlin")
+        now_local = datetime.now(shop_tz)
+        current_start = datetime.fromtimestamp(int(free_cfg.get("starts_at_ms") or int(now_local.timestamp() * 1000)) / 1000, shop_tz)
+        current_end = datetime.fromtimestamp(int(free_cfg.get("ends_at_ms") or int((now_local + timedelta(days=7)).timestamp() * 1000)) / 1000, shop_tz)
         fw_start_date = st.date_input("Startdatum", value=current_start.date(), key="shop_fw_start_date")
         fw_start_time = st.time_input("Startzeit", value=current_start.time().replace(second=0, microsecond=0), key="shop_fw_start_time")
         fw_end_date = st.date_input("Enddatum", value=current_end.date(), key="shop_fw_end_date")
         fw_end_time = st.time_input("Endzeit", value=current_end.time().replace(second=0, microsecond=0), key="shop_fw_end_time")
         fw_saved = st.form_submit_button("Free Week speichern")
     if fw_saved:
-        start_dt = datetime.combine(fw_start_date, fw_start_time).astimezone()
-        end_dt = datetime.combine(fw_end_date, fw_end_time).astimezone()
+        start_dt = datetime.combine(fw_start_date, fw_start_time, tzinfo=ZoneInfo("Europe/Berlin"))
+        end_dt = datetime.combine(fw_end_date, fw_end_time, tzinfo=ZoneInfo("Europe/Berlin"))
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
         if not fw_features:
@@ -1672,11 +1680,13 @@ def admin_shop_panel(games):
         elif end_ms <= start_ms:
             st.error("Das Ende muss nach dem Start liegen.")
         else:
-            db.reference("shop/free_week").set({
+            free_week_payload = {
                 "enabled": bool(fw_enabled), "features": fw_features,
                 "starts_at_ms": start_ms, "ends_at_ms": end_ms,
                 "updated_at_ms": int(time.time() * 1000),
-            })
+            }
+            db.reference("shop/free_week").set(free_week_payload)
+            db.reference("game_flags/free_week").set(free_week_payload)
             st.success("Free Week gespeichert. Die Freigabe gilt für alle Nutzer nur innerhalb des gewählten Zeitfensters.")
             st.rerun()
 
@@ -1756,13 +1766,9 @@ def admin_shop_panel(games):
                             label = str(item.get("name", item_id))
                             kind = item.get("kind", "game")
                             kind_label = "🎁 PACK" if kind == "pack" else "🎮 EINZEL-GAME"
-                            link_ready = bool(_safe_download_url(item.get("download_url")))
-                            state_label = (
-                                "Link hinterlegt" if link_ready else "Download-Link fehlt"
-                            ) if kind == "game" else "Downloads der enthaltenen Games"
-                            state_class = "shop-admin-ready" if link_ready else "shop-admin-missing"
-                            if kind == "pack":
-                                state_class = "shop-admin-pill"
+                            configured_terms = len(item.get("duration_prices", {})) if isinstance(item.get("duration_prices"), dict) else 0
+                            state_label = f"{configured_terms}/5 Laufzeiten konfiguriert"
+                            state_class = "shop-admin-ready" if configured_terms == 5 else "shop-admin-missing"
                             st.markdown(
                                 f"<div style='display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap'>"
                                 f"<span class='shop-admin-pill'>{html.escape(kind_label)}</span>"
