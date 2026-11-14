@@ -636,13 +636,14 @@ def fulfill(code, manual=False, payment_id=None):
     if order.get("status") == "paid":
         try:
             _apply_order_license(order, order_code)
-        except Exception:
+        except Exception as exc:
+            print(f"[shop] Paid-order entitlement repair failed ({type(exc).__name__})")
             return False, "Die Zahlung ist bereits verbucht, aber die Lizenz konnte nicht vollständig aktualisiert werden. Bitte erneut prüfen oder den Support kontaktieren."
-        return True, f"Bereits verbucht: **{order['item_name']}** für {order['name']}."
+        return True, f"Bereits verbucht: **{order.get('item_name', order_code)}** für {order.get('name', '')}."
     tip_id = str(payment_id or "manuell") if manual else "manuell"
     if not manual:
         try:
-            tip = _find_tip(ref.key, order["price"])
+            tip = _find_tip(order_code, order["price"])
         except Exception as e:
             return False, f"StreamElements-Abfrage fehlgeschlagen: {e}"
         if not tip:
@@ -652,7 +653,7 @@ def fulfill(code, manual=False, payment_id=None):
         def use(cur):
             if cur:
                 raise _Skip()
-            return ref.key
+            return order_code
         try:
             db.reference(f"shop/used_tips/{tip_id}").transaction(use)
         except _Skip:
@@ -666,26 +667,31 @@ def fulfill(code, manual=False, payment_id=None):
         ref.transaction(claim)
     except _Skip:
         return False, "Die Bestellung wird gerade verarbeitet oder ist schon verbucht."
-    if order.get("item") == "tourskip":        # Rundgang-Überspringen: Freigabe für die App (tour_skip/{tid})
-        db.reference(f"tour_skip/{order['tid']}").set({"order": ref.key, "ts": {".sv": "timestamp"}})
+    if order.get("item") == "tourskip":
+        db.reference(f"tour_skip/{order['tid']}").set({"order": order_code, "ts": {".sv": "timestamp"}})
         return True, f"✅ Zahlung erhalten! Danke für deine Spende. Das Überspringen ist für **{order['name']}** freigeschaltet. Klicke in der App auf „Ich habe bezahlt – prüfen“."
     try:
-        _apply_order_license(order, ref.key)
-    except Exception:
+        _apply_order_license(order, order_code)
+    except Exception as exc:
+        print(f"[shop] Entitlement write failed ({type(exc).__name__})")
         return False, "Zahlung erhalten, aber die Lizenz konnte nicht vollständig geschrieben werden. Bitte erneut prüfen oder den Support kontaktieren."
-    if "gift_from" in order:      # Geschenk: Nachricht für den Streamer (wird in der App angezeigt)
+    if "gift_from" in order:
         try:
-            db.reference(f"gifts/{order['tid']}/{ref.key}").set({"from": order.get("gift_from", ""), "msg": order.get("gift_msg", ""),
-                                                                 "items": order.get("item_name", ""), "ts": {".sv": "timestamp"}})
+            db.reference(f"gifts/{order['tid']}/{order_code}").set({
+                "from": order.get("gift_from", ""), "msg": order.get("gift_msg", ""),
+                "items": order.get("item_name", ""), "ts": {".sv": "timestamp"},
+            })
         except Exception:
             pass
     if order.get("coupon"):
         try:
             db.reference(f"shop/coupons/{order['coupon']}").transaction(
-                lambda c: dict(c, uses=int(c.get("uses") or 0) + 1, revenue=round(float(c.get("revenue") or 0) + float(order["price"]), 2)) if c else c)
+                lambda c: dict(c, uses=int(c.get("uses") or 0) + 1,
+                               revenue=round(float(c.get("revenue") or 0) + float(order["price"]), 2)) if c else c
+            )
         except Exception:
             pass
-    return True, f"✅ Zahlung erhalten! **{order['item_name']}** ist für **{order['name']}** freigeschaltet (in der App nach ca. 1 Minute aktiv)."
+    return True, f"✅ Zahlung erhalten! **{order.get('item_name', order_code)}** ist für **{order.get('name', '')}** freigeschaltet (in der App nach ca. 1 Minute aktiv)."
 
 
 CSS = """<style>
