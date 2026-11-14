@@ -22,6 +22,7 @@ from feedback_inbox import feedback_panel, new_count
 from creator_profile import render_public_profile
 from events import render_public_events, render_public_event
 from lurk import lurk_panel
+from mod_control_admin import render_mod_control_admin
 from shop import (FEATURE_LABELS, active_features, admin_beta_panel, admin_coupon_panel, admin_free_week_panel, admin_shop_panel, handle_paypal_return, handle_tebex_return, migrate_all_legacy_paid_orders, render_shop, render_tour_skip)
 from stats_panel import stats_panel
 from streamer_dashboard import handle_twitch_oauth_callback, has_active_streamer_login, render_streamer_dashboard
@@ -50,7 +51,7 @@ GAMES = {
     "race": "🏎️ Sim Racing",
 }
 # Streamdex OS: Tools der oberen Leiste (weitere Tools hier ergänzen)
-TOOLS = {"streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk"}
+TOOLS = {"streamdex": "⚡ StreamDex", "lurk": "👁️ Lurk", "mod_control": "🛡️ StreamDex Mod Control"}
 
 OPT_DEFAULT = "➖ wie global"
 OPT_ON = "✅ frei"
@@ -684,6 +685,9 @@ def main():
 
     with st.container(key="os_nav"):
         tool = st.radio("Tool", list(TOOLS), format_func=TOOLS.get, horizontal=True, label_visibility="collapsed", key="os_tool")
+    if tool == "mod_control":
+        render_mod_control_admin()
+        return
     if tool == "lurk":
         lurk_panel(
             load_streamers=load_streamers,
