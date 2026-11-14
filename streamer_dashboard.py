@@ -1694,7 +1694,7 @@ STREAMER_DASHBOARD_CSS = """<style>
 .st-key-sd_main_nav [data-baseweb="tab-list"],
 .st-key-sd_main_nav [role="tablist"]{
   display:grid!important;
-  grid-template-columns:repeat(3,minmax(0,1fr))!important;
+  grid-template-columns:repeat(5,minmax(0,1fr))!important;
   gap:12px!important;
   width:100%!important;
   overflow:visible!important;
@@ -1704,6 +1704,9 @@ STREAMER_DASHBOARD_CSS = """<style>
 }
 .st-key-sd_main_nav [data-baseweb="tab-list"]::-webkit-scrollbar,
 .st-key-sd_main_nav [role="tablist"]::-webkit-scrollbar{display:none!important}
+/* Nicht mehr angebotene Bereiche bleiben intern erhalten, sind aber keine Hauptnavigation. */
+.st-key-sd_main_nav [data-baseweb="tab-list"]>button:nth-child(n+6),
+.st-key-sd_main_nav [role="tablist"]>button:nth-child(n+6){display:none!important}
 .st-key-sd_main_nav button[data-baseweb="tab"],
 .st-key-sd_main_nav button[role="tab"]{
   display:flex!important;
@@ -2047,26 +2050,64 @@ def render_streamer_dashboard(games):
         render_event_manager(authed_tid, twitch_username)
         return
 
-    # Große Kachel-Navigation statt kleiner Reiter
+    # Klare Hauptnavigation: nur die drei Produkte, Statistiken und Support sind sichtbar.
+    # Bestehende Unterfunktionen bleiben intern erhalten, werden aber nicht mehr als Hauptreiter angeboten.
     with st.container(key="sd_main_nav"):
-        t_over, t_games, t_radar, t_legacy, t_clips, t_feedback, t_suite, t_stats, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_support, t_acct = st.tabs([
-            "🏠 Übersicht",
+        t_over, t_mod, t_arcaid, t_stats, t_support, t_games, t_radar, t_legacy, t_clips, t_feedback, t_suite, t_hist, t_gw, t_events, t_planner, t_profile, t_downloads, t_acct = st.tabs([
+            "⚡ StreamDex",
+            "🛡️ Mod Control",
+            "🗃️ Arcaid",
+            "📊 Statistiken",
+            "💬 Support",
             "🎮 Freigeschaltete Games",
             "📊 StreamDex Insight",
             "📜 Legacy – Chronik",
             "🎬 Clips",
             "💬 Feedback",
             "🧩 Ideas & Tools",
-            "📈 Kanal-Statistiken",
             "📅 Verlauf",
             "🎁 Giveaways",
             "🤝 Community & Events",
             "▣ Planner",
             "♙ Profil",
             "📥 Downloads & Beta",
-            "💬 Support-Chat",
             "🧾 Konto & Datenschutz",
         ])
+
+    # --- Produktbereich: StreamDex Mod Control ---
+    with t_mod:
+        from public_products import load_public_products
+        _mod = next((p for p in load_public_products() if p.get("key") == "mod_control"), {})
+        st.markdown(
+            '<div class="sd-section-heading"><div class="sd-section-kicker">STREAMDEX ECOSYSTEM / DESKTOP APP</div>'
+            '<h2>🛡️ StreamDex Mod Control</h2>'
+            '<p>Dein Moderations-Center für einen klaren Überblick über Team, Moderation und wichtige Kanalaktionen.</p></div>',
+            unsafe_allow_html=True,
+        )
+        with st.container(border=True):
+            st.markdown("### " + str(_mod.get("name") or "StreamDex Mod Control"))
+            st.write(_mod.get("description") or "Moderation und Teamverwaltung in einer zentralen Desktop-Anwendung.")
+            st.caption("Status: " + str(_mod.get("status") or "Verfügbar"))
+            if _mod.get("button_url"):
+                st.link_button(str(_mod.get("button_label") or "Download starten"), _mod["button_url"], type="primary")
+            else:
+                st.info("Der Download-Link wird derzeit vorbereitet. Sobald er im Admin-Produktportfolio hinterlegt ist, erscheint hier der Download.")
+
+    # --- Produktbereich: StreamDex Arcaid ---
+    with t_arcaid:
+        from public_products import load_public_products
+        _arcaid = next((p for p in load_public_products() if p.get("key") == "arcaid"), {})
+        st.markdown(
+            '<div class="sd-section-heading"><div class="sd-section-kicker">STREAMDEX ECOSYSTEM / IN ENTWICKLUNG</div>'
+            '<h2>🗃️ StreamDex Arcaid</h2>'
+            '<p>Ein kommender Bereich des StreamDex-Universums. Hier findest du später Neuigkeiten und den Start des Produkts.</p></div>',
+            unsafe_allow_html=True,
+        )
+        with st.container(border=True):
+            st.markdown("### " + str(_arcaid.get("name") or "StreamDex Arcaid"))
+            st.write(_arcaid.get("description") or "StreamDex Arcaid befindet sich in Entwicklung.")
+            st.warning(str(_arcaid.get("status") or "Coming Soon"))
+            st.caption("Weitere Informationen und Funktionen werden zum Produktstart veröffentlicht.")
 
     # --- StreamDex Radar ---
     with t_radar:
