@@ -723,12 +723,6 @@ def main():
     init_firebase()
     apply_theme()
 
-    top_l, top_r = st.columns([6, 1], vertical_alignment="center")
-    top_l.markdown(header_html("ADMIN"), unsafe_allow_html=True)
-    if top_r.button("Abmelden"):
-        st.session_state.clear()
-        st.rerun()
-
     page = st.session_state.get("admin_page", "overview")
     with st.sidebar:
         st.markdown("## ⚡ STREAMDEX OS")
