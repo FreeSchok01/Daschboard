@@ -62,6 +62,10 @@ def _snapshot():
     bans_hwid = _read("bans/hwid")
     supporters = _read("supporters")
     usage = _read("streamdex_tool_usage")
+    try:
+        audit_root = db.reference("admin_audit").order_by_key().limit_to_last(8).get() or {}
+    except Exception:
+        audit_root = {}
 
     def online_count(items):
         return sum(1 for value in items.values() if isinstance(value, dict) and _online(value, now_ms))
@@ -117,6 +121,20 @@ def _snapshot():
             })
     recent_feedback.sort(key=lambda row: row["_ts"], reverse=True)
 
+    recent_admin_actions = []
+    if isinstance(audit_root, dict):
+        for key, record in audit_root.items():
+            if not isinstance(record, dict):
+                continue
+            recent_admin_actions.append({
+                "Zeitpunkt": _time(record.get("created_ms") or record.get("ts")),
+                "Bereich": str(record.get("area") or "Allgemein"),
+                "Aktion": str(record.get("action") or "Änderung"),
+                "Ziel": str(record.get("target") or "—"),
+                "_key": str(key),
+            })
+    recent_admin_actions.sort(key=lambda row: row["_key"], reverse=True)
+
     return {
         "streamdex_total": len(streamdex_presence),
         "streamdex_online": online_count(streamdex_presence),
@@ -138,6 +156,7 @@ def _snapshot():
         "totals": totals,
         "tools": tool_totals,
         "recent_feedback": recent_feedback[:8],
+        "recent_admin_actions": recent_admin_actions[:8],
         "refreshed": now_ms,
     }
 
@@ -232,3 +251,14 @@ def render_admin_overview():
         st.dataframe(frame, hide_index=True, use_container_width=True)
     else:
         st.info("Noch keine Rückmeldungen eingegangen.")
+
+    st.divider()
+    st.markdown("### 🧾 Letzte Admin-Aktionen")
+    if data.get("recent_admin_actions"):
+        audit_frame = pd.DataFrame([
+            {key: value for key, value in row.items() if key != "_key"}
+            for row in data["recent_admin_actions"]
+        ])
+        st.dataframe(audit_frame, hide_index=True, use_container_width=True)
+    else:
+        st.info("Noch keine protokollierten Admin-Aktionen.")
