@@ -242,7 +242,10 @@ def _presence_rows(ns="", product="StreamDex OS"):
     for key, payload in presence.items():
         if not isinstance(payload, dict):
             continue
-        tid = str(payload.get("twitch_id") or (str(key)[4:] if str(key).startswith("mod_") else key))
+        # mod_<twitch-id> is a separate product presence, not a second StreamDex OS login.
+        if not ns and str(key).startswith("mod_"):
+            continue
+        tid = str(payload.get("twitch_id") or key)
         if not tid.isdigit():
             continue
         seen = int(payload.get("last_seen") or 0)
@@ -366,7 +369,7 @@ def streamer_list(search, only_online, ns=""):
     for r in shown:
         icon = "🚫" if r["banned"] else "⚠️" if r["hw_banned"] else "🟢" if r["online"] else "⚪"
         badge = " 🔴" if r["unread"] else ""
-        products = ", ".join(r.get("apps", {}).keys()) if r.get("apps") else r.get("product", "StreamDex Lurk")
+        products = ", ".join(f"{product} v{app['version']}" for product, app in r.get("apps", {}).items()) if r.get("apps") else f"{r.get('product', 'StreamDex Lurk')} v{r['version']}"
         label = f"{icon} {r['name']}{badge} · {products} · {fmt_ago(r['age'])}"
         selected = st.session_state.get(sel_key) == r["tid"]
         if st.button(label, key=f"sel_{ns}_{r['tid']}", use_container_width=True, type="primary" if selected else "secondary"):
