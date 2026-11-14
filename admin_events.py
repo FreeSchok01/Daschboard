@@ -16,6 +16,13 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _int(value, default=0):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _fmt_ts(value):
     try:
         stamp = int(value or 0)
@@ -40,7 +47,7 @@ def _load_events():
         event["id"] = str(event_id)
         event["participants"] = _dict(event.get("participants"))
         rows.append(event)
-    rows.sort(key=lambda row: int(row.get("created_ts") or 0), reverse=True)
+    rows.sort(key=lambda row: _int(row.get("created_ts")), reverse=True)
     return rows
 
 
@@ -88,7 +95,7 @@ def render_admin_events():
         event_id = event["id"]
         participants = event["participants"]
         is_open = event.get("status", "open") == "open"
-        cap = int(event.get("capacity") or 0)
+        cap = max(0, _int(event.get("capacity")))
         count = len(participants)
         owner = str(event.get("owner_name") or "Unbekannt")
         title = str(event.get("title") or "Event ohne Titel")
