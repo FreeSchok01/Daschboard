@@ -112,9 +112,14 @@ def _product_card(product, index):
     )
     label = html.escape(str(product.get("button_label") or "Mehr erfahren"))
     coming = status_key == "coming_soon"
+    product_key = str(product.get("key") or "")
+    if url.startswith("https://") and product_key and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", product_key):
+        action_url = f"/?download_track={product_key}"
+    else:
+        action_url = url
     action = (
         f'<span class="sd-product-soon">{label}</span>' if coming or not url
-        else f'<a class="sd-product-action" href="{html.escape(url, quote=True)}">{label} <span>↗</span></a>'
+        else f'<a class="sd-product-action" href="{html.escape(action_url, quote=True)}">{label} <span>↗</span></a>'
     )
     return (
         f'<article class="sd-product-card accent-{accent}">'
