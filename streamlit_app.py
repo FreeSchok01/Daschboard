@@ -448,13 +448,55 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
         with messages_area:
             chat_messages(tid, ns)
 
-    if allow_actions and not apps:
-        with st.expander("⚙️ Aktionen"):
-            st.caption("Setzt die Geräte-Bindung des Streamers zurück.")
-            confirm = st.checkbox("Ja, Bindung wirklich zurücksetzen", key=f"confirm_{ns}_{tid}")
-            if st.button("🔓 Geräte-Bindung zurücksetzen", disabled=not confirm, key=f"reset_{ns}_{tid}"):
-                db.reference(f"{_p(ns)}presence/{tid}/uid").delete()
-                st.success("Zurückgesetzt.")
+    if allow_actions:
+        with st.expander("🛠️ Geräte & Verbindung verwalten"):
+            st.caption(
+                "Hardware Reset erneuert ausschließlich die Gerätebindung der ausgewählten StreamDex-App. "
+                "Twitch-Konto, Support-Nachrichten, Statistiken, Käufe und Hardware-Sperren bleiben erhalten. "
+                "Das Tool muss anschließend erneut gestartet und gegebenenfalls mit Twitch angemeldet werden."
+            )
+            reset_targets = []
+            for product, app in apps.items():
+                presence_key = str(app.get("presence_key") or "")
+                app_ns = str(app.get("namespace") or "")
+                if app_ns not in ("", "lurk") or not (presence_key == tid or presence_key == f"mod_{tid}"):
+                    continue
+                reset_targets.append((product, app_ns, presence_key))
+            if not reset_targets and not apps:
+                presence_key = tid
+                if ns in ("", "lurk"):
+                    reset_targets.append((product or "StreamDex", ns, presence_key))
+            if reset_targets:
+                target_labels = {
+                    f"{product} · {'Lurk' if app_ns == 'lurk' else 'StreamDex'}": (product, app_ns, presence_key)
+                    for product, app_ns, presence_key in reset_targets
+                }
+                selected_label = st.selectbox(
+                    "Gerät / Produkt auswählen",
+                    list(target_labels),
+                    key=f"hardware_reset_target_{ns}_{tid}",
+                )
+                selected_product, selected_ns, selected_key = target_labels[selected_label]
+                confirm = st.checkbox(
+                    f"Ja, Gerätebindung für {selected_product} wirklich erneuern",
+                    key=f"confirm_hardware_reset_{selected_ns}_{tid}_{selected_product}",
+                )
+                if st.button(
+                    "🔧 Hardware Reset durchführen",
+                    disabled=not confirm,
+                    type="primary",
+                    key=f"hardware_reset_{selected_ns}_{tid}_{selected_product}",
+                ):
+                    try:
+                        db.reference(f"{_p(selected_ns)}presence/{selected_key}/uid").delete()
+                        st.success(
+                            f"Gerätebindung für {selected_product} zurückgesetzt. "
+                            "Das Tool kann jetzt eine neue Verbindung aufbauen."
+                        )
+                    except Exception:
+                        st.error("Hardware Reset fehlgeschlagen. Die Firebase-Verbindung konnte nicht aktualisiert werden.")
+            else:
+                st.info("Für dieses Konto wurde kein sicher zuordenbarer Geräte-Eintrag gefunden.")
 
 
 def games_panel(allow_free_week=False):
