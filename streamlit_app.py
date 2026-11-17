@@ -489,6 +489,11 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
                 ):
                     try:
                         db.reference(f"{_p(selected_ns)}presence/{selected_key}/uid").delete()
+                        write_admin_audit(
+                            "Hardware Reset durchgeführt",
+                            selected_product,
+                            f"{name} ({tid}) · Presence {selected_ns or 'StreamDex'}/{selected_key}",
+                        )
                         st.success(
                             f"Gerätebindung für {selected_product} zurückgesetzt. "
                             "Das Tool kann jetzt eine neue Verbindung aufbauen."
