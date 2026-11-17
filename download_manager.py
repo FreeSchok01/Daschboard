@@ -202,6 +202,11 @@ def render_download_manager():
         if selected_product == "Alle Produkte"
         or str(event.get("product_name") or event.get("product_key") or "Unbekannt") == selected_product
     ]
+    filtered_month_events = [
+        (event, stamp) for event, stamp in month_events
+        if selected_product == "Alle Produkte"
+        or str(event.get("product_name") or event.get("product_key") or "Unbekannt") == selected_product
+    ]
     if filtered_events:
         recent_rows = [
             {
@@ -218,9 +223,9 @@ def render_download_manager():
     else:
         st.info("Für diesen Filter liegen noch keine Download-Ereignisse vor.")
 
-    if month_events:
+    if filtered_month_events:
         counts = {}
-        for event, _stamp in month_events:
+        for event, _stamp in filtered_month_events:
             label = str(event.get("product_name") or event.get("product_key") or "Unbekannt")
             counts[label] = counts.get(label, 0) + 1
         st.markdown("**Downloads nach Produkt · letzte 30 Tage**")
@@ -230,7 +235,7 @@ def render_download_manager():
             use_container_width=True,
         )
         daily = {}
-        for _event, stamp in month_events:
+        for _event, stamp in filtered_month_events:
             day = datetime.fromtimestamp(stamp / 1000, tz=local_tz).date()
             daily[day] = daily.get(day, 0) + 1
         daily_rows = [
@@ -239,7 +244,7 @@ def render_download_manager():
         ]
         st.bar_chart(pd.DataFrame(daily_rows).set_index("Tag"))
     else:
-        st.info("Noch keine öffentlichen Download-Klicks erfasst. Neue Klicks erscheinen hier, sobald die aktualisierte Seite live ist.")
+        st.info("Für den gewählten Zeitraum bzw. Produktfilter liegen keine öffentlichen Download-Klicks vor.")
     st.caption("Hinweis: Das Tracking zählt das Öffnen des Download-Weiterleitungslinks, nicht den erfolgreichen Abschluss oder die Installation der Datei.")
 
     if st.button("🔄 Download- und Release-Daten aktualisieren", key="download_manager_refresh"):
