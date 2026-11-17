@@ -1,5 +1,4 @@
 """Erfasst öffentliche Download-Aufrufe und leitet anschließend zum Ziel weiter."""
-import html
 from urllib.parse import urlparse
 
 import streamlit as st
