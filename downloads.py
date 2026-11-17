@@ -40,8 +40,22 @@ def latest_release(repo):
         page = str(d.get("html_url") or "")
         if not page.startswith("https://github.com/"):
             page = f"https://github.com/{repo}/releases/latest"
-        return {"tag": str(d.get("tag_name") or ""), "page": page,
-                "file": pick["browser_download_url"] if pick else None}
+        return {
+            "tag": str(d.get("tag_name") or ""),
+            "page": page,
+            "file": pick["browser_download_url"] if pick else None,
+            "assets": [
+                {
+                    "name": str(asset.get("name") or ""),
+                    "download_count": int(asset.get("download_count") or 0),
+                    "size": int(asset.get("size") or 0),
+                    "url": str(asset.get("browser_download_url") or ""),
+                }
+                for asset in assets
+            ],
+            "download_count": sum(int(asset.get("download_count") or 0) for asset in assets),
+            "published_at": str(d.get("published_at") or ""),
+        }
     except Exception:
         return None
 
