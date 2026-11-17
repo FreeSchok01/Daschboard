@@ -132,6 +132,45 @@ def render_download_manager():
             "Sie zeigen keine eindeutigen Nutzer und keine Installationen. Eigene externe Links "
             "und Firebase-Link-Klicks werden derzeit nicht gezählt."
         )
+    st.divider()
+    st.markdown("### 📈 StreamDex-Download-Tracking")
+    st.caption("Hier siehst du Aufrufe der öffentlichen Download-Buttons. Es werden keine IP-Adressen, Twitch-IDs oder Gerätekennungen gespeichert.")
+    try:
+        tracked = db.reference("download_analytics/events").order_by_child("ts").limit_to_last(5000).get() or {}
+        events = [event for event in tracked.values() if isinstance(event, dict)]
+    except Exception:
+        events = []
+        st.warning("Die Download-Ereignisse konnten gerade nicht geladen werden.")
+    now_ms = int(__import__("time").time() * 1000)
+    today_start = now_ms - (now_ms % 86400000)
+    last_30_start = now_ms - 30 * 86400000
+    today_events = [event for event in events if int(event.get("ts") or 0) >= today_start]
+    month_events = [event for event in events if int(event.get("ts") or 0) >= last_30_start]
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Download-Klicks heute", len(today_events))
+    a2.metric("Download-Klicks (30 Tage)", len(month_events))
+    a3.metric("Erfasste Ereignisse", len(events))
+    if month_events:
+        counts = {}
+        for event in month_events:
+            label = str(event.get("product_name") or event.get("product_key") or "Unbekannt")
+            counts[label] = counts.get(label, 0) + 1
+        st.markdown("**Downloads nach Produkt · letzte 30 Tage**")
+        st.dataframe(
+            pd.DataFrame([{"Produkt": key, "Klicks": value} for key, value in sorted(counts.items(), key=lambda item: item[1], reverse=True)]),
+            hide_index=True,
+            use_container_width=True,
+        )
+        daily = {}
+        for event in month_events:
+            stamp = int(event.get("ts") or 0)
+            day = __import__("datetime").datetime.fromtimestamp(stamp / 1000).strftime("%d.%m.")
+            daily[day] = daily.get(day, 0) + 1
+        st.bar_chart(pd.DataFrame([{"Tag": key, "Klicks": value} for key, value in daily.items()]).set_index("Tag"))
+    else:
+        st.info("Noch keine öffentlichen Download-Klicks erfasst. Neue Klicks erscheinen hier, sobald die aktualisierte Seite live ist.")
+    st.caption("Hinweis: Das Tracking zählt das Öffnen des Download-Weiterleitungslinks, nicht den erfolgreichen Abschluss oder die Installation der Datei.")
+
     if st.button("🔄 Download- und Release-Daten aktualisieren", key="download_manager_refresh"):
         latest_release.clear()
         st.rerun()
