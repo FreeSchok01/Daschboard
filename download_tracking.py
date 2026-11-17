@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import streamlit as st
 from firebase_admin import db
 
-from downloads import latest_release, public_link, lurk_link, settings as download_settings
+from downloads import public_link, lurk_link, settings as download_settings
 from public_products import load_public_products
 
 EVENTS_PATH = "download_analytics/events"
@@ -38,7 +38,6 @@ def render_download_redirect(key):
     """Log one click intent, then navigate to the configured HTTPS target."""
     target, name, version = resolve_download(key)
     if not target:
-        st.set_page_config(page_title="Download nicht verfügbar", page_icon="📥")
         st.error("Dieser Download ist momentan nicht verfügbar.")
         st.info("Bitte gehe zurück zur StreamDex-Seite oder versuche es später erneut.")
         return
@@ -53,6 +52,5 @@ def render_download_redirect(key):
     except Exception:
         # The download must remain usable even if analytics storage is unavailable.
         pass
-    st.set_page_config(page_title="Download bereit", page_icon="📥")
     st.success("Der Download-Link wurde erfasst und ist bereit.")
     st.link_button("⬇️ Download jetzt öffnen", target, type="primary", use_container_width=True)
