@@ -53,10 +53,6 @@ def render_download_redirect(key):
     except Exception:
         # The download must remain usable even if analytics storage is unavailable.
         pass
-    safe_target = html.escape(target, quote=True)
-    st.set_page_config(page_title="Download wird geöffnet", page_icon="📥")
-    st.markdown("Dein Download wird geöffnet …")
-    st.components.v1.html(
-        f'<script>window.top.location.replace("{safe_target}");</script>',
-        height=0,
-    )
+    st.set_page_config(page_title="Download bereit", page_icon="📥")
+    st.success("Der Download-Link wurde erfasst und ist bereit.")
+    st.link_button("⬇️ Download jetzt öffnen", target, type="primary", use_container_width=True)
