@@ -25,6 +25,7 @@ from admin_registry import render_admin_registry, render_arcaid_admin
 from admin_system import render_admin_system_status
 from device_manager import render_device_manager
 from download_manager import render_download_manager
+from download_tracking import render_download_redirect
 from admin_operations import render_release_center, render_security_center
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
@@ -852,6 +853,12 @@ def main():
             st.query_params.clear()
             st.query_params["dashboard"] = "1"
             st.rerun()
+        return
+
+    if "download_track" in st.query_params:
+        st.set_page_config(page_title="StreamDex Download", page_icon="📥", layout="centered")
+        init_firebase()
+        render_download_redirect(str(st.query_params.get("download_track", "")))
         return
 
     if "profile" in st.query_params and str(st.query_params.get("profile", "")) != "1":
