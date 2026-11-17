@@ -449,6 +449,66 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
             chat_messages(tid, ns)
 
     if allow_actions:
+        with st.expander("🌐 Globaler Hardware Reset – alle Streamer"):
+            st.caption(
+                "Setzt die Gerätebindung für alle sicher erkannten StreamDex-Installationen zurück. "
+                "Es werden ausschließlich die jeweiligen Presence-UIDs gelöscht. "
+                "Twitch-Konten, Statistiken, Support-Chats, Käufe und Hardware-Sperren bleiben erhalten. "
+                "Die Desktop-Tools müssen danach neu gestartet werden, damit sie sich erneut verbinden."
+            )
+            bulk_targets = {}
+            for bulk_tid, bulk_info in rows_by_tid.items():
+                bulk_apps = bulk_info.get("apps", {}) if isinstance(bulk_info, dict) else {}
+                for bulk_product, bulk_app in bulk_apps.items():
+                    if not isinstance(bulk_app, dict):
+                        continue
+                    bulk_key = str(bulk_app.get("presence_key") or "")
+                    bulk_ns = str(bulk_app.get("namespace") or "")
+                    if bulk_ns not in ("", "lurk") or bulk_key not in (str(bulk_tid), f"mod_{bulk_tid}"):
+                        continue
+                    bulk_path = f"{_p(bulk_ns)}presence/{bulk_key}/uid"
+                    bulk_targets[bulk_path] = {
+                        "tid": str(bulk_tid),
+                        "name": bulk_info.get("name", str(bulk_tid)),
+                        "product": str(bulk_product),
+                        "namespace": bulk_ns,
+                    }
+            st.metric("Erkannte Gerätebindungen", len(bulk_targets))
+            bulk_confirm = st.checkbox(
+                f"Ja, ich möchte alle {len(bulk_targets)} erkannten Gerätebindungen zurücksetzen.",
+                key="confirm_global_hardware_reset",
+                disabled=not bulk_targets,
+            )
+            if st.button(
+                "⚠️ Hardware Reset für ALLE durchführen",
+                type="primary",
+                disabled=not bulk_targets or not bulk_confirm,
+                key="global_hardware_reset",
+            ):
+                reset_count = 0
+                failed_count = 0
+                for bulk_path, target in bulk_targets.items():
+                    try:
+                        db.reference(bulk_path).delete()
+                        reset_count += 1
+                    except Exception:
+                        failed_count += 1
+                try:
+                    write_admin_audit(
+                        "Globaler Hardware Reset durchgeführt",
+                        "Alle StreamDex-Produkte",
+                        f"{reset_count} Gerätebindungen zurückgesetzt; {failed_count} fehlgeschlagen.",
+                    )
+                except Exception:
+                    pass
+                if failed_count:
+                    st.warning(
+                        f"{reset_count} Gerätebindungen zurückgesetzt, {failed_count} konnten nicht zurückgesetzt werden."
+                    )
+                else:
+                    st.success(f"Globaler Hardware Reset abgeschlossen: {reset_count} Gerätebindungen zurückgesetzt.")
+                st.info("Die betroffenen Desktop-Tools müssen neu gestartet werden, um ihre Verbindung erneut aufzubauen.")
+
         with st.expander("🛠️ Geräte & Verbindung verwalten"):
             st.caption(
                 "Hardware Reset erneuert ausschließlich die Gerätebindung der ausgewählten StreamDex-App. "
