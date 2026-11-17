@@ -34,6 +34,20 @@ def _save_audit(action, target, detail):
         pass
 
 
+def _format_bytes(value):
+    try:
+        size = max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return "—"
+    if size >= 1024 ** 3:
+        return f"{size / (1024 ** 3):.2f} GB"
+    if size >= 1024 ** 2:
+        return f"{size / (1024 ** 2):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
+
+
 def _release_stats(repo, product):
     release = latest_release(repo)
     if not release:
@@ -41,16 +55,27 @@ def _release_stats(repo, product):
             "Produkt": product, "Repository": repo, "Version": "Nicht erreichbar",
             "Assets": 0, "Downloads laut GitHub": "—", "Veröffentlicht": "—",
             "Download-Link": "Nicht verfügbar",
-        }
-    return {
+        }, []
+    rows = []
+    for asset in release.get("assets") or []:
+        rows.append({
+            "Produkt": product,
+            "Version": release.get("tag") or "—",
+            "Datei": str(asset.get("name") or "Unbenannt"),
+            "Downloads": int(asset.get("download_count") or 0),
+            "Größe": _format_bytes(asset.get("size")),
+            "Download": str(asset.get("url") or ""),
+        })
+    summary = {
         "Produkt": product,
         "Repository": repo,
         "Version": release.get("tag") or "—",
-        "Assets": len(release.get("assets") or []),
+        "Assets": len(rows),
         "Downloads laut GitHub": int(release.get("download_count") or 0),
         "Veröffentlicht": str(release.get("published_at") or "—")[:10],
         "Download-Link": "Release vorhanden" if release.get("file") else "Kein EXE-/ZIP-Asset",
     }
+    return summary, rows
 
 
 def render_download_manager():
@@ -61,8 +86,18 @@ def render_download_manager():
     )
 
     cfg = _dict(download_settings())
-    products = load_public_products()
-    shop_items = _dict(db.reference("shop/items").get())
+    try:
+        products = load_public_products()
+    except Exception:
+        products = []
+        st.warning("Der öffentliche Produktkatalog konnte gerade nicht geladen werden.")
+    try:
+        shop_items = _dict(db.reference("shop/items").get())
+        shop_read_ok = True
+    except Exception:
+        shop_items = {}
+        shop_read_ok = False
+        st.warning("Die Shop-Artikel konnten gerade nicht aus Firebase geladen werden. Shop-Änderungen sind vorübergehend deaktiviert.")
 
     # Live-Übersicht: echte GitHub-Release-Asset-Zähler, keine erfundenen Klickzahlen.
     st.markdown("### 📊 Release- und Download-Übersicht")
@@ -74,7 +109,9 @@ def render_download_manager():
     for repo, label in repositories:
         if REPO_RE.fullmatch(repo):
             unique_repos[repo] = label
-    release_rows = [_release_stats(repo, label) for repo, label in unique_repos.items()]
+    release_results = [_release_stats(repo, label) for repo, label in unique_repos.items()]
+    release_rows = [item[0] for item in release_results]
+    asset_rows = [asset for item in release_results for asset in item[1]]
     if release_rows:
         total_downloads = sum(
             int(row["Downloads laut GitHub"]) for row in release_rows
@@ -84,11 +121,16 @@ def render_download_manager():
         m1, m2, m3 = st.columns(3)
         m1.metric("GitHub-Downloads (aktuelle Releases)", total_downloads)
         m2.metric("Release-Dateien", total_assets)
-        m3.metric("Verwaltete Shop-Artikel", len(shop_items))
+        m3.metric("Verwaltete Shop-Artikel", len(shop_items) if shop_read_ok else "—")
         st.dataframe(pd.DataFrame(release_rows), hide_index=True, use_container_width=True)
+        if asset_rows:
+            with st.expander("📄 Einzelne Dateien und Download-Zahlen", expanded=True):
+                st.dataframe(pd.DataFrame(asset_rows), hide_index=True, use_container_width=True,
+                             column_config={"Download": st.column_config.LinkColumn("Download-Link", display_text="Öffnen")})
         st.caption(
             "GitHub-Zähler stammen aus den Asset-Downloads der jeweils neuesten Releases. "
-            "Eigene externe Links und Firebase-Link-Klicks werden derzeit nicht gezählt."
+            "Sie zeigen keine eindeutigen Nutzer und keine Installationen. Eigene externe Links "
+            "und Firebase-Link-Klicks werden derzeit nicht gezählt."
         )
     if st.button("🔄 Download- und Release-Daten aktualisieren", key="download_manager_refresh"):
         latest_release.clear()
@@ -243,7 +285,7 @@ def render_download_manager():
                 "Aktiv": "Ja" if item.get("active", True) else "Nein",
             })
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-        choices = [key for key, item in shop_items.items() if isinstance(item, dict) and item.get("kind", "game") == "game"]
+        choices = [key for key, item in shop_items.items() if isinstance(item, dict) and item.get("kind", "game") == "game"] if shop_read_ok else []
         if choices:
             item_id = st.selectbox(
                 "Einzel-Game auswählen",
