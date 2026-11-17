@@ -166,6 +166,27 @@ def render_download_manager():
     a1.metric("Download-Klicks heute", len(today_events))
     a2.metric("Download-Klicks (30 Tage)", len(month_events))
     a3.metric("Erfasste Ereignisse", len(valid_events))
+
+    export_rows = []
+    for event, stamp in sorted(valid_events, key=lambda item: item[1], reverse=True):
+        export_rows.append({
+            "Zeit (Europe/Berlin)": datetime.fromtimestamp(stamp / 1000, tz=local_tz).strftime("%Y-%m-%d %H:%M:%S"),
+            "Produkt": str(event.get("product_name") or event.get("product_key") or "Unbekannt"),
+            "Produkt-Key": str(event.get("product_key") or ""),
+            "Version": str(event.get("version") or ""),
+            "Quelle": str(event.get("source") or ""),
+        })
+    if export_rows:
+        export_csv = pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "📄 Tracking-Daten als CSV exportieren",
+            data=export_csv,
+            file_name="streamdex-download-statistik.csv",
+            mime="text/csv",
+            key="download_tracking_export",
+        )
+    st.caption("Der Export enthält maximal die letzten 5.000 gespeicherten Ereignisse und keine IP-, Twitch- oder Gerätekennungen.")
+
     if month_events:
         counts = {}
         for event, _stamp in month_events:
