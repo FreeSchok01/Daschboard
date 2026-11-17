@@ -465,7 +465,7 @@ def chat_panel(rows_by_tid, sender_name=ADMIN_NAME, allow_actions=True, ns=""):
             if not reset_targets and not apps:
                 presence_key = tid
                 if ns in ("", "lurk"):
-                    reset_targets.append((product or "StreamDex", ns, presence_key))
+                    reset_targets.append((info.get("product") or "StreamDex", ns, presence_key))
             if reset_targets:
                 target_labels = {
                     f"{product} · {'Lurk' if app_ns == 'lurk' else 'StreamDex'}": (product, app_ns, presence_key)
