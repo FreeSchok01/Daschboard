@@ -1,6 +1,8 @@
 """Zentrale Download-Verwaltung für StreamDex-Produkte."""
 import re
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -141,18 +143,32 @@ def render_download_manager():
     except Exception:
         events = []
         st.warning("Die Download-Ereignisse konnten gerade nicht geladen werden.")
-    now_ms = int(__import__("time").time() * 1000)
-    today_start = now_ms - (now_ms % 86400000)
-    last_30_start = now_ms - 30 * 86400000
-    today_events = [event for event in events if int(event.get("ts") or 0) >= today_start]
-    month_events = [event for event in events if int(event.get("ts") or 0) >= last_30_start]
+    # Firebase-Server-Timestamps sind Millisekunden seit Unix-Epoch.
+    # Die Tagesgrenzen und Diagramm-Tage werden bewusst in deutscher Ortszeit berechnet.
+    local_tz = ZoneInfo("Europe/Berlin")
+    now_local = datetime.now(local_tz)
+    today_start_ms = int(now_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+    last_30_start_ms = int((now_local - timedelta(days=30)).timestamp() * 1000)
+
+    valid_events = []
+    for event in events:
+        try:
+            stamp = int(event.get("ts"))
+            if stamp > 0:
+                valid_events.append((event, stamp))
+        except (TypeError, ValueError, OverflowError):
+            # Beschädigte oder unvollständige Firebase-Einträge überspringen.
+            continue
+
+    today_events = [(event, stamp) for event, stamp in valid_events if stamp >= today_start_ms]
+    month_events = [(event, stamp) for event, stamp in valid_events if stamp >= last_30_start_ms]
     a1, a2, a3 = st.columns(3)
     a1.metric("Download-Klicks heute", len(today_events))
     a2.metric("Download-Klicks (30 Tage)", len(month_events))
-    a3.metric("Erfasste Ereignisse", len(events))
+    a3.metric("Erfasste Ereignisse", len(valid_events))
     if month_events:
         counts = {}
-        for event in month_events:
+        for event, _stamp in month_events:
             label = str(event.get("product_name") or event.get("product_key") or "Unbekannt")
             counts[label] = counts.get(label, 0) + 1
         st.markdown("**Downloads nach Produkt · letzte 30 Tage**")
@@ -162,11 +178,14 @@ def render_download_manager():
             use_container_width=True,
         )
         daily = {}
-        for event in month_events:
-            stamp = int(event.get("ts") or 0)
-            day = __import__("datetime").datetime.fromtimestamp(stamp / 1000).strftime("%d.%m.")
+        for _event, stamp in month_events:
+            day = datetime.fromtimestamp(stamp / 1000, tz=local_tz).date()
             daily[day] = daily.get(day, 0) + 1
-        st.bar_chart(pd.DataFrame([{"Tag": key, "Klicks": value} for key, value in daily.items()]).set_index("Tag"))
+        daily_rows = [
+            {"Tag": day.strftime("%d.%m."), "Klicks": daily[day]}
+            for day in sorted(daily)
+        ]
+        st.bar_chart(pd.DataFrame(daily_rows).set_index("Tag"))
     else:
         st.info("Noch keine öffentlichen Download-Klicks erfasst. Neue Klicks erscheinen hier, sobald die aktualisierte Seite live ist.")
     st.caption("Hinweis: Das Tracking zählt das Öffnen des Download-Weiterleitungslinks, nicht den erfolgreichen Abschluss oder die Installation der Datei.")
