@@ -118,11 +118,15 @@ def render_device_manager():
         if st.button("🔧 Gerätebindung zurücksetzen", disabled=not confirmed, type="primary", key="device_reset_one"):
             try:
                 db.reference(f"{selected['path']}/uid").delete()
-                write_admin_audit("Gerätebindung zurückgesetzt", selected["product"], f"{selected['name']} ({selected['tid']}) · {selected['path']}")
+            except Exception:
+                st.error("Reset fehlgeschlagen: Die Gerätebindung konnte in Firebase nicht gelöscht werden.")
+            else:
+                try:
+                    write_admin_audit("Gerätebindung zurückgesetzt", selected["product"], f"{selected['name']} ({selected['tid']}) · {selected['path']}")
+                except Exception:
+                    pass
                 st.success("Gerätebindung zurückgesetzt. Das Desktop-Tool muss sich erneut verbinden.")
                 st.rerun()
-            except Exception:
-                st.error("Reset fehlgeschlagen. Bitte Firebase-Verbindung und Admin-Protokoll prüfen.")
     with right:
         label_value = st.text_input("Interner Gerätename (nur Admin)", value=selected["device_label"], placeholder="z. B. Gaming-PC", key=f"device_label_{selected['namespace']}_{selected['presence_key']}")
         if st.button("Gerätenamen speichern", key="device_label_save"):
