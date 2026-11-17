@@ -187,6 +187,37 @@ def render_download_manager():
         )
     st.caption("Der Export enthält maximal die letzten 5.000 gespeicherten Ereignisse und keine IP-, Twitch- oder Gerätekennungen.")
 
+    # Interaktive Detailansicht: Produktfilter wirkt auf Tabelle und Produktvergleich.
+    known_products = sorted({
+        str(event.get("product_name") or event.get("product_key") or "Unbekannt")
+        for event, _stamp in valid_events
+    })
+    selected_product = st.selectbox(
+        "Statistik nach Produkt filtern",
+        ["Alle Produkte"] + known_products,
+        key="download_tracking_product_filter",
+    )
+    filtered_events = [
+        (event, stamp) for event, stamp in valid_events
+        if selected_product == "Alle Produkte"
+        or str(event.get("product_name") or event.get("product_key") or "Unbekannt") == selected_product
+    ]
+    if filtered_events:
+        recent_rows = [
+            {
+                "Zeit": datetime.fromtimestamp(stamp / 1000, tz=local_tz).strftime("%d.%m.%Y %H:%M:%S"),
+                "Produkt": str(event.get("product_name") or event.get("product_key") or "Unbekannt"),
+                "Version": str(event.get("version") or "—"),
+                "Quelle": str(event.get("source") or "—"),
+            }
+            for event, stamp in sorted(filtered_events, key=lambda item: item[1], reverse=True)[:100]
+        ]
+        st.markdown("**Letzte Tracking-Ereignisse**")
+        st.dataframe(pd.DataFrame(recent_rows), hide_index=True, use_container_width=True)
+        st.caption("Anzeige der letzten 100 Ereignisse für den gewählten Filter. Insgesamt werden maximal 5.000 aktuelle Ereignisse geladen.")
+    else:
+        st.info("Für diesen Filter liegen noch keine Download-Ereignisse vor.")
+
     if month_events:
         counts = {}
         for event, _stamp in month_events:
