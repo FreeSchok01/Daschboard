@@ -23,6 +23,7 @@ from admin_search import render_admin_search
 from admin_events import render_admin_events
 from admin_registry import render_admin_registry, render_arcaid_admin
 from admin_system import render_admin_system_status
+from device_manager import render_device_manager
 from admin_operations import render_release_center, render_security_center
 from beta_apply import admin_beta_applications, render_beta_apply
 from feedback_inbox import feedback_panel, new_count
@@ -62,6 +63,7 @@ ADMIN_NAV_GROUPS = [
     ("START", [("overview", "🏠 Control Center"), ("apps", "🧩 Produktportfolio"), ("public_products", "🌐 Öffentliche Produktseite")]),
     ("PRODUKTE", [
         ("support", "💬 StreamDex Live-Support"),
+        ("devices", "🖥️ Geräteverwaltung"),
         ("lurk", "👁️ StreamDex Lurk"),
         ("mod_control", "🛡️ StreamDex Mod Control"),
         ("arcaid", "🗃️ StreamDex Arcaid"),
@@ -87,6 +89,7 @@ ADMIN_PAGE_TITLES = {
     "apps": "Produktportfolio",
     "public_products": "Öffentliche Produktseite",
     "support": "StreamDex Live-Support",
+    "devices": "Geräte- und Verbindungsverwaltung",
     "lurk": "StreamDex Lurk",
     "mod_control": "StreamDex Mod Control",
     "arcaid": "StreamDex Arcaid",
@@ -995,6 +998,9 @@ def main():
         )
         return
 
+    if page == "devices":
+        render_device_manager()
+        return
     if page == "support":
         try:
             vacation_panel(ADMIN_NAME)
