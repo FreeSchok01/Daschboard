@@ -98,7 +98,8 @@ def render_public_downloads(cfg=None):
     """Öffentlicher Download-Button (für alle sichtbar): StreamDex."""
     cfg = cfg if cfg is not None else settings()
     url, ver = public_link(cfg)
-    st.link_button(f"⬇️ StreamDex herunterladen{f' ({ver})' if ver else ''}", url, type="primary", use_container_width=True)
+    tracked_url = "/?download_track=streamdex" if _https(url) else url
+    st.link_button(f"⬇️ StreamDex herunterladen{f' ({ver})' if ver else ''}", tracked_url, type="primary", use_container_width=True)
     st.caption("Öffentliche Version")
 
 
