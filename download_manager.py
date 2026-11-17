@@ -252,6 +252,78 @@ def render_download_manager():
         st.rerun()
 
     st.divider()
+    st.markdown("### 🔎 Download-Link-Prüfung")
+    st.caption(
+        "Prüft die Konfiguration aller öffentlichen und Shop-Downloads sowie die GitHub-Releases. "
+        "Eigene externe URLs werden aus Sicherheitsgründen nicht automatisch aufgerufen."
+    )
+    if st.button("🧪 Alle Download-Einträge prüfen", key="download_manager_link_check"):
+        latest_release.clear()
+        check_rows = []
+
+        def add_url_check(product_name, raw_url, required=False):
+            safe_url = _https(raw_url)
+            if safe_url is None:
+                status = "❌ Ungültige URL (nur HTTPS erlaubt)"
+            elif not safe_url:
+                status = "⚠️ Kein Link hinterlegt" if required else "➖ Nicht konfiguriert"
+            else:
+                status = "✅ HTTPS-Link syntaktisch gültig"
+            check_rows.append({"Eintrag": product_name, "Prüfung": status})
+
+        add_url_check("StreamDex öffentlicher Download", cfg.get("public_url"))
+        add_url_check("StreamDex Beta", cfg.get("download_url"))
+        add_url_check("StreamDex Lurk direkter Link", cfg.get("lurk_url"))
+        for product in products:
+            if product.get("key") == "streamdex":
+                continue
+            label = str(product.get("name") or product.get("key") or "Produkt")
+            add_url_check(label, product.get("button_url"),
+                          required=product.get("status_key") != "coming_soon")
+        for item_id, item in shop_items.items():
+            if isinstance(item, dict):
+                label = str(item.get("name") or item_id)
+                add_url_check(f"Shop: {label}", item.get("download_url"),
+                              required=bool(item.get("active", True)))
+
+        repo_checks = [
+            (GITHUB_REPO, "StreamDex OS GitHub-Release"),
+            (str(cfg.get("lurk_repo") or LURK_REPO), "StreamDex Lurk GitHub-Release"),
+        ]
+        seen_repos = set()
+        for repo, label in repo_checks:
+            if repo in seen_repos:
+                continue
+            seen_repos.add(repo)
+            if not REPO_RE.fullmatch(repo):
+                check_rows.append({"Eintrag": label, "Prüfung": "❌ Repository-Format ungültig"})
+                continue
+            release = latest_release(repo)
+            if not release:
+                check_rows.append({"Eintrag": label, "Prüfung": "❌ Kein aktuelles Release abrufbar"})
+            elif not release.get("assets"):
+                check_rows.append({"Eintrag": label, "Prüfung": f"⚠️ Release {release.get('tag') or 'vorhanden'}, aber keine Dateien"})
+            else:
+                check_rows.append({
+                    "Eintrag": label,
+                    "Prüfung": f"✅ Release {release.get('tag') or 'ohne Tag'} · {len(release.get('assets') or [])} Datei(en)",
+                })
+        st.session_state["download_manager_link_check_results"] = check_rows
+        _save_audit("Download-Prüfung ausgeführt", "Download-Verwaltung",
+                    f"{len(check_rows)} Download- und Release-Einträge geprüft.")
+    check_results = st.session_state.get("download_manager_link_check_results", [])
+    if check_results:
+        check_df = pd.DataFrame(check_results)
+        ok_count = sum(str(row["Prüfung"]).startswith("✅") for row in check_results)
+        bad_count = sum(str(row["Prüfung"]).startswith("❌") for row in check_results)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Einträge geprüft", len(check_results))
+        c2.metric("In Ordnung", ok_count)
+        c3.metric("Fehler", bad_count)
+        st.dataframe(check_df, hide_index=True, use_container_width=True)
+        st.caption("Wichtig: Bei frei konfigurierten HTTPS-Links wird nur das Format geprüft, nicht ob der fremde Server erreichbar ist oder die Datei tatsächlich heruntergeladen werden kann.")
+
+    st.divider()
     st.markdown("### ⚡ StreamDex OS & Beta")
     st.caption("Diese Einstellungen verwenden weiterhin die bestehenden Firebase-Pfade beta/settings.")
     with st.form("download_manager_core_form"):
